@@ -1,5 +1,5 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
-import { getActiveDoc, getSelectionBounds, readDocument, placeResult } from "./photoshop-bridge";
+import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
 import { encodePng, decodeImage, toRGBA, resampleRGBA, applyAlphaMask } from "./image-codec";
 import { generateEdit } from "./gemini";
 import { pickReferenceImages, RefImage } from "./references";
@@ -100,9 +100,17 @@ async function onGenerate(): Promise<void> {
     const sel = await getSelectionBounds();
     const isRegion = !!sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1;
 
-    setStatus(isRegion ? "Reading image + selection…" : "Reading image…");
-    const { image, mask } = await readDocument(docId, docW, docH, isRegion);
-    const basePng = encodePng(image.data, image.width, image.height, image.components);
+    // Region edit: crop to the selection (+ small padding for blending) so the
+    // model spends its full resolution on the detail. Else: whole document.
+    const region: Bounds = isRegion
+      ? padBounds(sel as Bounds, 0.06, docW, docH)
+      : { left: 0, top: 0, right: docW, bottom: docH };
+    const cropW = region.right - region.left;
+    const cropH = region.bottom - region.top;
+
+    setStatus(isRegion ? "Reading selected region…" : "Reading image…");
+    const read = await readRegion(docId, region, isRegion);
+    const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
 
     setStatus(`Generating with ${model}…  (this can take 10–40s)`);
     const result = await generateEdit({
@@ -117,14 +125,24 @@ async function onGenerate(): Promise<void> {
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    rgba = resampleRGBA(rgba, decoded.width, decoded.height, docW, docH);
-    if (mask) applyAlphaMask(rgba, mask); // clip the edit to the selection
+    rgba = resampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
+    if (read.mask) applyAlphaMask(rgba, read.mask); // clip the edit to the selection
 
     setStatus("Placing result…");
-    await placeResult(docId, docW, docH, rgba, isRegion ? "Nano Banana Pro edit (masked)" : "Nano Banana Pro edit");
+    await placeResult(
+      docId,
+      region,
+      rgba,
+      cropW,
+      cropH,
+      isRegion ? "Nano Banana Pro edit (masked)" : "Nano Banana Pro edit"
+    );
 
+    console.log("[NBP]", read.debug);
     setStatus(
-      isRegion ? "Done — edit added as a masked layer." : "Done — edit added as a new layer.",
+      isRegion
+        ? "Done — edit clipped to your selection (new layer)."
+        : "Done — edit added as a new layer.",
       "ok"
     );
   } catch (err: any) {

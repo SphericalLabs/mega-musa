@@ -16,11 +16,12 @@ export interface ImageBuffer {
   components: number;
 }
 
-export interface DocumentRead {
+export interface RegionRead {
   image: ImageBuffer;
-  // Whole-document selection coverage (0..255), docW×docH, present for region
-  // edits. Used to set the result layer's alpha so the edit clips to the selection.
+  // Selection coverage (0..255) sized to the crop, present for region edits.
   mask?: Uint8Array;
+  // Human-readable diagnostics about what was actually read (dims, sel bounds).
+  debug: string;
 }
 
 export function getActiveDoc(): any {
@@ -29,8 +30,6 @@ export function getActiveDoc(): any {
   return doc;
 }
 
-// Returns the bounding box of the current selection, or null if nothing is
-// selected. Used only to decide whether this is a region (masked) edit.
 export async function getSelectionBounds(): Promise<Bounds | null> {
   const result = await action.batchPlay(
     [
@@ -56,15 +55,31 @@ export async function getSelectionBounds(): Promise<Bounds | null> {
   };
 }
 
-// Modal step 1: read the whole flattened document, and (for region edits) the
-// whole-document selection mask. Both are docW×docH so they align exactly.
-export async function readDocument(
+export function padBounds(b: Bounds, padFrac: number, docW: number, docH: number): Bounds {
+  const px = Math.round((b.right - b.left) * padFrac);
+  const py = Math.round((b.bottom - b.top) * padFrac);
+  return {
+    left: Math.max(0, b.left - px),
+    top: Math.max(0, b.top - py),
+    right: Math.min(docW, b.right + px),
+    bottom: Math.min(docH, b.bottom + py),
+  };
+}
+
+function boundVal(u: any): number {
+  return typeof u === "number" ? u : u?._value ?? 0;
+}
+
+// Modal step 1: read the flattened pixels inside `bounds`, plus (for region
+// edits) the selection coverage mask, resampled and positioned to line up with
+// the crop exactly — using getSelection's own returned sourceBounds.
+export async function readRegion(
   docId: number,
-  docW: number,
-  docH: number,
+  bounds: Bounds,
   withMask: boolean
-): Promise<DocumentRead> {
-  const bounds: Bounds = { left: 0, top: 0, right: docW, bottom: docH };
+): Promise<RegionRead> {
+  const cropW = bounds.right - bounds.left;
+  const cropH = bounds.bottom - bounds.top;
   return await core.executeAsModal(
     async () => {
       const { imageData } = await imaging.getPixels({
@@ -74,48 +89,78 @@ export async function readDocument(
         applyAlpha: false,
       });
       const raw = await imageData.getData({ chunky: true });
-      const data = new Uint8Array(raw); // copy out before disposing the source
+      const data = new Uint8Array(raw);
       const components = imageData.components || 4;
       imageData.dispose();
 
+      let debug = `crop ${cropW}x${cropH} c${components}`;
       let mask: Uint8Array | undefined;
+
       if (withMask) {
         try {
           const sel = await imaging.getSelection({ documentID: docId, sourceBounds: bounds });
-          const sw = sel.imageData.width;
-          const sh = sel.imageData.height;
-          const sc = sel.imageData.components || 1;
+          const mw = sel.imageData.width;
+          const mh = sel.imageData.height;
+          const mc = sel.imageData.components || 1;
           const mraw = await sel.imageData.getData({ chunky: true });
           let gray: Uint8Array;
-          if (sc === 1) {
+          if (mc === 1) {
             gray = new Uint8Array(mraw);
           } else {
-            gray = new Uint8Array(sw * sh);
-            for (let i = 0; i < sw * sh; i++) gray[i] = mraw[i * sc];
+            gray = new Uint8Array(mw * mh);
+            for (let i = 0; i < mw * mh; i++) gray[i] = mraw[i * mc];
           }
           sel.imageData.dispose();
-          // Normalize to document dimensions (safety net if dims ever differ).
-          mask = sw === docW && sh === docH ? gray : resampleGray(gray, sw, sh, docW, docH);
-        } catch {
-          // If the selection can't be read, fall back to an unmasked full-image edit.
+
+          // Region the returned mask actually covers, in document pixels.
+          const sb = (sel as any).sourceBounds;
+          const sbL = sb ? boundVal(sb.left) : bounds.left;
+          const sbT = sb ? boundVal(sb.top) : bounds.top;
+          const sbR = sb ? boundVal(sb.right) : bounds.right;
+          const sbB = sb ? boundVal(sb.bottom) : bounds.bottom;
+          const regW = Math.max(1, sbR - sbL);
+          const regH = Math.max(1, sbB - sbT);
+
+          // Resample the mask to its region's pixel size, then drop it into a
+          // crop-sized buffer at the right offset (unselected stays 0).
+          const regMask = mw === regW && mh === regH ? gray : resampleGray(gray, mw, mh, regW, regH);
+          mask = new Uint8Array(cropW * cropH);
+          const offX = sbL - bounds.left;
+          const offY = sbT - bounds.top;
+          for (let y = 0; y < regH; y++) {
+            const ty = y + offY;
+            if (ty < 0 || ty >= cropH) continue;
+            for (let x = 0; x < regW; x++) {
+              const tx = x + offX;
+              if (tx < 0 || tx >= cropW) continue;
+              mask[ty * cropW + tx] = regMask[y * regW + x];
+            }
+          }
+
+          let covered = 0;
+          for (let i = 0; i < mask.length; i++) if (mask[i] > 127) covered++;
+          const pct = Math.round((100 * covered) / mask.length);
+          debug += ` | sel raw ${mw}x${mh} sb[${sbL},${sbT},${sbR},${sbB}] cover ${pct}%`;
+        } catch (e: any) {
           mask = undefined;
+          debug += ` | getSelection FAILED: ${e?.message || e}`;
         }
       }
 
-      return { image: { data, width: docW, height: docH, components }, mask };
+      return { image: { data, width: cropW, height: cropH, components }, mask, debug };
     },
-    { commandName: "Nano Banana Pro: read" }
+    { commandName: "Nano Banana Pro: read region" }
   );
 }
 
-// Modal step 2: create a new layer and write the edited RGBA over the whole
-// document. The alpha of `rgba` already encodes the selection (applyAlphaMask),
-// so the layer is simply transparent where unselected — no layer mask needed.
+// Modal step 2: create a new layer and write the edited RGBA into `bounds`.
+// Alpha already encodes the selection, so no layer mask is needed.
 export async function placeResult(
   docId: number,
-  docW: number,
-  docH: number,
+  bounds: Bounds,
   rgba: Uint8Array,
+  width: number,
+  height: number,
   layerName: string
 ): Promise<void> {
   await core.executeAsModal(
@@ -139,8 +184,8 @@ export async function placeResult(
       );
 
       const imageData = await imaging.createImageDataFromBuffer(rgba, {
-        width: docW,
-        height: docH,
+        width,
+        height,
         components: 4,
         componentSize: 8,
         colorSpace: "RGB",
@@ -149,7 +194,7 @@ export async function placeResult(
       await imaging.putPixels({
         documentID: docId,
         layerID: layerId,
-        targetBounds: { left: 0, top: 0, right: docW, bottom: docH },
+        targetBounds: bounds,
         imageData,
       });
       imageData.dispose();
