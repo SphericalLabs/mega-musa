@@ -41,15 +41,19 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
     body.generationConfig = { imageConfig };
   }
 
-  const res = await fetch(`${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, {
+  // Build the request init without a `signal` key unless one is provided —
+  // UXP's fetch throws on `signal: undefined` (it calls addEventListener on it).
+  const requestInit: any = {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": opts.apiKey,
     },
     body: JSON.stringify(body),
-    signal: opts.signal,
-  });
+  };
+  if (opts.signal) requestInit.signal = opts.signal;
+
+  const res = await fetch(`${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, requestInit);
 
   const json: any = await res.json().catch(() => null);
   if (!res.ok) {

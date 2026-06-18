@@ -1,3 +1,4 @@
+import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
 import { encodePng, decodePng, toRGBA, resampleRGBA } from "./image-codec";
 import { generateEdit } from "./gemini";
@@ -18,13 +19,19 @@ function $(id: string): any {
 
 function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): void {
   const el = $("status");
+  if (!el) return;
   el.textContent = message;
   el.className = kind === "info" ? "" : kind;
 }
 
+// UXP's DOM does not support setting innerHTML — clear by removing children.
+function clearChildren(el: any): void {
+  while (el && el.firstChild) el.removeChild(el.firstChild);
+}
+
 function renderThumbs(): void {
   const wrap = $("thumbs");
-  wrap.innerHTML = "";
+  clearChildren(wrap);
   refs.forEach((ref, index) => {
     const cell = document.createElement("div");
     cell.className = "thumb";
@@ -65,6 +72,7 @@ async function onAddRefs(): Promise<void> {
 
 async function onGenerate(): Promise<void> {
   if (running) return;
+  setStatus("Starting…"); // immediate feedback that the click was received
 
   const apiKey = ($("apiKey").value || "").trim();
   const prompt = ($("prompt").value || "").trim();
@@ -156,24 +164,45 @@ function persistSettingsHooks(): void {
 }
 
 function init(): void {
-  // Register the panel entrypoint declared in manifest.json.
-  entrypoints.setup({ panels: { nbpEditorPanel: { show() {} } } });
+  try {
+    // Register the panel entrypoint declared in manifest.json.
+    entrypoints.setup({ panels: { nbpEditorPanel: { show() {} } } });
 
-  $("saveKey").addEventListener("click", () => {
-    saveApiKey(($("apiKey").value || "").trim());
-    setStatus("API key saved.", "ok");
-  });
-  $("addRefs").addEventListener("click", onAddRefs);
-  $("clearRefs").addEventListener("click", () => {
-    refs = [];
+    $("saveKey").addEventListener("click", () => {
+      saveApiKey(($("apiKey").value || "").trim());
+      setStatus("API key saved.", "ok");
+    });
+    $("addRefs").addEventListener("click", onAddRefs);
+    $("clearRefs").addEventListener("click", () => {
+      refs = [];
+      renderThumbs();
+    });
+    $("generate").addEventListener("click", onGenerate);
+
+    restoreSettings();
+    persistSettingsHooks();
     renderThumbs();
-  });
-  $("generate").addEventListener("click", onGenerate);
-
-  restoreSettings();
-  persistSettingsHooks();
-  renderThumbs();
-  setStatus("Ready. Select a region (optional), add references, write a prompt.");
+    setStatus("Ready. Select a region (optional), add references, write a prompt.");
+  } catch (err: any) {
+    setStatus("Init error: " + (err?.message || String(err)), "error");
+  }
 }
 
-init();
+// Surface otherwise-silent errors directly in the panel.
+try {
+  const g: any = globalThis as any;
+  g.addEventListener?.("unhandledrejection", (e: any) =>
+    setStatus("Async error: " + (e?.reason?.message || e?.reason || "unknown"), "error")
+  );
+  g.addEventListener?.("error", (e: any) =>
+    setStatus("Script error: " + (e?.message || "unknown"), "error")
+  );
+} catch {
+  /* no global event target in this runtime */
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
