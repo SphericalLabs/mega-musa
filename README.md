@@ -177,9 +177,10 @@ own key.
     for it. 429 = rate/quota limit on your key.
 *   **"No image returned (…)"** The model returned text or was blocked (safety).  
     The message includes the reason; rephrase the prompt.
-*   **"Model returned image/jpeg…"** This build decodes PNG only. Keep Resolution  
-    and Aspect on **Auto** and retry; if you need JPEG/WebP, add a decoder (e.g.  
-    `jpeg-js`) in `image-codec.ts`.
+*   **"Unsupported image type from model: image/webp…"** The plugin decodes PNG  
+    and JPEG (the model returns one of these). WebP would need a decoder added in  
+    `image-codec.ts`; in practice keeping Resolution/Aspect on **Auto** returns  
+    PNG/JPEG.
 *   **Result looks offset or wrong size.** The model can return a different  
     resolution/aspect than the crop; the plugin resamples to fit. Keeping  
     Aspect/Resolution on Auto minimizes reframing.

@@ -1,4 +1,5 @@
 import { encode, decode } from "fast-png";
+import { decode as jpegDecode } from "jpeg-js";
 
 // --- base64 <-> bytes (UXP provides global btoa/atob) -----------------------
 
@@ -35,6 +36,19 @@ export function decodePng(bytes: Uint8Array): DecodedImage {
   const img = decode(bytes);
   const data = img.data instanceof Uint8Array ? img.data : Uint8Array.from(img.data as ArrayLike<number>);
   return { data, width: img.width, height: img.height, channels: img.channels };
+}
+
+export function decodeJpeg(bytes: Uint8Array): DecodedImage {
+  const img = jpegDecode(bytes, { useTArray: true, formatAsRGBA: true });
+  const data = img.data instanceof Uint8Array ? img.data : Uint8Array.from(img.data as ArrayLike<number>);
+  return { data, width: img.width, height: img.height, channels: 4 };
+}
+
+// Decode a model image response (PNG or JPEG) to pixels.
+export function decodeImage(mimeType: string, bytes: Uint8Array): DecodedImage {
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return decodeJpeg(bytes);
+  if (mimeType === "image/png") return decodePng(bytes);
+  throw new Error(`Unsupported image type from model: ${mimeType} (supported: PNG, JPEG).`);
 }
 
 // --- pixel helpers ----------------------------------------------------------

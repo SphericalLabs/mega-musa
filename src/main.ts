@@ -1,6 +1,6 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
-import { encodePng, decodePng, toRGBA, resampleRGBA } from "./image-codec";
+import { encodePng, decodeImage, toRGBA, resampleRGBA } from "./image-codec";
 import { generateEdit } from "./gemini";
 import { pickReferenceImages, RefImage } from "./references";
 import { loadApiKey, saveApiKey, loadSetting, saveSetting } from "./storage";
@@ -120,14 +120,7 @@ async function onGenerate(): Promise<void> {
       imageSize: resolution === "auto" ? undefined : resolution,
     });
 
-    if (result.mimeType !== "image/png") {
-      throw new Error(
-        `Model returned ${result.mimeType}; this build decodes PNG only. Try again, ` +
-          `or keep Resolution/Aspect on Auto.`
-      );
-    }
-
-    const decoded = decodePng(result.bytes);
+    const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
     rgba = resampleRGBA(rgba, decoded.width, decoded.height, px.width, px.height);
 
