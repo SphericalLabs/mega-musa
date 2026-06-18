@@ -1,0 +1,87 @@
+import { encode, decode } from "fast-png";
+
+// --- base64 <-> bytes (UXP provides global btoa/atob) -----------------------
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000; // stay within String.fromCharCode.apply arg limits
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += (String.fromCharCode as any).apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+// --- PNG encode / decode ----------------------------------------------------
+
+export function encodePng(data: Uint8Array, width: number, height: number, channels: number): Uint8Array {
+  return encode({ width, height, data, channels, depth: 8 }) as Uint8Array;
+}
+
+export interface DecodedImage {
+  data: Uint8Array;
+  width: number;
+  height: number;
+  channels: number;
+}
+
+export function decodePng(bytes: Uint8Array): DecodedImage {
+  const img = decode(bytes);
+  const data = img.data instanceof Uint8Array ? img.data : Uint8Array.from(img.data as ArrayLike<number>);
+  return { data, width: img.width, height: img.height, channels: img.channels };
+}
+
+// --- pixel helpers ----------------------------------------------------------
+
+// Normalize any channel count to packed RGBA.
+export function toRGBA(src: Uint8Array, width: number, height: number, channels: number): Uint8Array {
+  if (channels === 4) return src;
+  const count = width * height;
+  const out = new Uint8Array(count * 4);
+  for (let i = 0, p = 0, q = 0; i < count; i++) {
+    if (channels === 1) {
+      out[q++] = src[p]; out[q++] = src[p]; out[q++] = src[p]; out[q++] = 255;
+    } else {
+      out[q++] = src[p]; out[q++] = src[p + 1]; out[q++] = src[p + 2]; out[q++] = 255;
+    }
+    p += channels;
+  }
+  return out;
+}
+
+// Bilinear resample of packed RGBA from (sw,sh) to (dw,dh).
+export function resampleRGBA(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
+  if (sw === dw && sh === dh) return src;
+  const out = new Uint8Array(dw * dh * 4);
+  const xRatio = sw / dw;
+  const yRatio = sh / dh;
+  for (let y = 0; y < dh; y++) {
+    const sy = Math.min(sh - 1, Math.max(0, (y + 0.5) * yRatio - 0.5));
+    const y0 = Math.floor(sy);
+    const y1 = Math.min(sh - 1, y0 + 1);
+    const fy = sy - y0;
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(sw - 1, Math.max(0, (x + 0.5) * xRatio - 0.5));
+      const x0 = Math.floor(sx);
+      const x1 = Math.min(sw - 1, x0 + 1);
+      const fx = sx - x0;
+      const i00 = (y0 * sw + x0) * 4;
+      const i01 = (y0 * sw + x1) * 4;
+      const i10 = (y1 * sw + x0) * 4;
+      const i11 = (y1 * sw + x1) * 4;
+      const o = (y * dw + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        const top = src[i00 + c] * (1 - fx) + src[i01 + c] * fx;
+        const bot = src[i10 + c] * (1 - fx) + src[i11 + c] * fx;
+        out[o + c] = Math.round(top * (1 - fy) + bot * fy);
+      }
+    }
+  }
+  return out;
+}

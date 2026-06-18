@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { margin: 0; padding: 8px 10px 14px; font-size: 12px; }
+    h3 { margin: 4px 0 2px; font-size: 12px; font-weight: 700; }
+    .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+    .row.spread { justify-content: space-between; }
+    .grow { flex: 1; }
+    .field { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+    .label { font-size: 11px; opacity: 0.8; }
+    sp-divider { margin: 10px 0; }
+    #prompt { width: 100%; min-height: 64px; }
+    #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+    .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
+             border-radius: 4px; overflow: hidden; background: rgba(128,128,128,0.15); }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb sp-action-button { position: absolute; top: 1px; right: 1px; min-width: 16px; }
+    .muted { opacity: 0.7; font-size: 11px; }
+    #status { margin-top: 10px; font-size: 11px; line-height: 1.4; min-height: 28px;
+              padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }
+    #status.error { background: rgba(226,75,74,0.18); }
+    #status.ok    { background: rgba(29,158,117,0.18); }
+  </style>
+</head>
+<body>
+  <h3>API key</h3>
+  <div class="row">
+    <sp-textfield id="apiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
+    <sp-button id="saveKey" variant="secondary" size="s">Save</sp-button>
+  </div>
+  <div class="muted">Stored locally on this machine only. Get a key at aistudio.google.com.</div>
+
+  <sp-divider size="s"></sp-divider>
+
+  <div class="field">
+    <span class="label">Prompt</span>
+    <sp-textfield id="prompt" multiline placeholder="Describe the edit, e.g. 'replace the sky with a stormy sunset'"></sp-textfield>
+  </div>
+
+  <h3>Reference images</h3>
+  <div class="row spread">
+    <sp-button id="addRefs" variant="secondary" size="s">Add references…</sp-button>
+    <div class="row">
+      <span id="refCount" class="muted">0/10</span>
+      <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
+    </div>
+  </div>
+  <div id="thumbs"></div>
+
+  <sp-divider size="s"></sp-divider>
+
+  <div class="field">
+    <span class="label">Model</span>
+    <sp-picker id="model" size="s">
+      <sp-menu slot="options">
+        <sp-menu-item value="gemini-3-pro-image" selected>Nano Banana Pro (best)</sp-menu-item>
+        <sp-menu-item value="gemini-2.5-flash-image">Nano Banana (fast / cheap)</sp-menu-item>
+      </sp-menu>
+    </sp-picker>
+  </div>
+
+  <div class="row">
+    <div class="field grow">
+      <span class="label">Resolution</span>
+      <sp-picker id="resolution" size="s">
+        <sp-menu slot="options">
+          <sp-menu-item value="auto" selected>Auto</sp-menu-item>
+          <sp-menu-item value="1K">1K</sp-menu-item>
+          <sp-menu-item value="2K">2K</sp-menu-item>
+          <sp-menu-item value="4K">4K</sp-menu-item>
+        </sp-menu>
+      </sp-picker>
+    </div>
+    <div class="field grow">
+      <span class="label">Aspect</span>
+      <sp-picker id="aspect" size="s">
+        <sp-menu slot="options">
+          <sp-menu-item value="auto" selected>Auto</sp-menu-item>
+          <sp-menu-item value="1:1">1:1</sp-menu-item>
+          <sp-menu-item value="2:3">2:3</sp-menu-item>
+          <sp-menu-item value="3:2">3:2</sp-menu-item>
+          <sp-menu-item value="3:4">3:4</sp-menu-item>
+          <sp-menu-item value="4:3">4:3</sp-menu-item>
+          <sp-menu-item value="16:9">16:9</sp-menu-item>
+          <sp-menu-item value="9:16">9:16</sp-menu-item>
+          <sp-menu-item value="21:9">21:9</sp-menu-item>
+        </sp-menu>
+      </sp-picker>
+    </div>
+  </div>
+
+  <div class="field">
+    <sp-slider id="padding" min="0" max="50" value="15" step="1" label="Context padding %"></sp-slider>
+    <span class="muted">Extra area around the selection sent for context (region edits only).</span>
+  </div>
+
+  <sp-divider size="s"></sp-divider>
+
+  <sp-button id="generate" variant="cta" style="width:100%">Generate edit</sp-button>
+  <div id="status">Loading…</div>
+
+  <script src="index.js"></script>
+</body>
+</html>
