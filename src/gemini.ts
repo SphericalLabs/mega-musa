@@ -2,6 +2,44 @@ import { bytesToBase64, base64ToBytes } from "./image-codec";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
+// Official Gemini image aspect ratios (ai.google.dev/gemini-api image
+// generation → "Aspect ratios and image size"). The model only frames to one of
+// these; we snap the request to the nearest of them.
+//   1K / 2K / 4K example pixel sizes per ratio (width×height):
+//   1:1  1024² / 2048² / 4096²      2:3  848×1264  / 1696×2528 / 3392×5056
+//   3:2  1264×848 / 2528×1696 ...   3:4  896×1200  / 1792×2400 / 3584×4800
+//   4:3  1200×896 / ...             4:5  928×1152  / 1856×2304 / 3712×4608
+//   5:4  1152×928 / ...             9:16 768×1376  / 1536×2752 / 3072×5504
+//   16:9 1376×768 / ...             21:9 1584×672  / 3168×1344 / 6336×2688
+export const SUPPORTED_ASPECT_RATIOS: ReadonlyArray<{ label: string; ratio: number }> = [
+  { label: "1:1", ratio: 1 },
+  { label: "2:3", ratio: 2 / 3 },
+  { label: "3:2", ratio: 3 / 2 },
+  { label: "3:4", ratio: 3 / 4 },
+  { label: "4:3", ratio: 4 / 3 },
+  { label: "4:5", ratio: 4 / 5 },
+  { label: "5:4", ratio: 5 / 4 },
+  { label: "9:16", ratio: 9 / 16 },
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "21:9", ratio: 21 / 9 },
+];
+
+// Nearest supported aspect ratio to a width/height, compared in log space so
+// e.g. 2:1 is equidistant from 1:1 and 4:1.
+export function nearestSupportedAspectRatio(width: number, height: number): string {
+  const target = Math.log((width || 1) / (height || 1));
+  let best = SUPPORTED_ASPECT_RATIOS[0];
+  let bestDist = Infinity;
+  for (const ar of SUPPORTED_ASPECT_RATIOS) {
+    const d = Math.abs(Math.log(ar.ratio) - target);
+    if (d < bestDist) {
+      bestDist = d;
+      best = ar;
+    }
+  }
+  return best.label;
+}
+
 export interface RefImage {
   mimeType: string;
   base64: string;

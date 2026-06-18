@@ -1,14 +1,14 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
-import { encodePng, decodeImage, toRGBA, resampleRGBA, applyAlphaMask } from "./image-codec";
-import { generateEdit } from "./gemini";
+import { encodePng, decodeImage, toRGBA, coverResampleRGBA, applyAlphaMask } from "./image-codec";
+import { generateEdit, nearestSupportedAspectRatio } from "./gemini";
 import { pickReferenceImages, RefImage } from "./references";
 import { loadApiKey, saveApiKey, loadSetting, saveSetting } from "./storage";
 
 const { entrypoints } = require("uxp");
 
 const MAX_REFS = 10;
-const PICKERS = ["model", "resolution", "aspect"];
+const PICKERS = ["model", "resolution"];
 
 let refs: RefImage[] = [];
 let running = false;
@@ -87,7 +87,6 @@ async function onGenerate(): Promise<void> {
 
   const model = $("model").value || "gemini-3-pro-image";
   const resolution = $("resolution").value || "auto";
-  const aspect = $("aspect").value || "auto";
 
   running = true;
   $("generate").disabled = true;
@@ -107,25 +106,31 @@ async function onGenerate(): Promise<void> {
       : { left: 0, top: 0, right: docW, bottom: docH };
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
+    // Always match the request to the crop's shape (nearest official ratio), so
+    // the model frames close to the selection and cover-fit trims little.
+    const aspectRatio = nearestSupportedAspectRatio(cropW, cropH);
 
     setStatus(isRegion ? "Reading selected region…" : "Reading image…");
     const read = await readRegion(docId, region, isRegion);
     const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
 
-    setStatus(`Generating with ${model}…  (this can take 10–40s)`);
+    setStatus(
+      `Generating ${aspectRatio} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–40s)`
+    );
     const result = await generateEdit({
       apiKey,
       model,
       prompt,
       baseImagePng: basePng,
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
-      aspectRatio: aspect === "auto" ? undefined : aspect,
+      aspectRatio,
       imageSize: resolution === "auto" ? undefined : resolution,
     });
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    rgba = resampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
+    // Cover-fit (preserve aspect, center-trim) the result into the crop box.
+    rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
     if (read.mask) applyAlphaMask(rgba, read.mask); // clip the edit to the selection
 
     setStatus("Placing result…");

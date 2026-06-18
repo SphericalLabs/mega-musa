@@ -61,35 +61,18 @@
     </sp-picker>
   </div>
 
-  <div class="row">
-    <div class="field grow">
-      <span class="label">Resolution</span>
-      <sp-picker id="resolution" size="s">
-        <sp-menu slot="options">
-          <sp-menu-item value="auto" selected>Auto</sp-menu-item>
-          <sp-menu-item value="1K">1K</sp-menu-item>
-          <sp-menu-item value="2K">2K</sp-menu-item>
-          <sp-menu-item value="4K">4K</sp-menu-item>
-        </sp-menu>
-      </sp-picker>
-    </div>
-    <div class="field grow">
-      <span class="label">Aspect</span>
-      <sp-picker id="aspect" size="s">
-        <sp-menu slot="options">
-          <sp-menu-item value="auto" selected>Auto</sp-menu-item>
-          <sp-menu-item value="1:1">1:1</sp-menu-item>
-          <sp-menu-item value="2:3">2:3</sp-menu-item>
-          <sp-menu-item value="3:2">3:2</sp-menu-item>
-          <sp-menu-item value="3:4">3:4</sp-menu-item>
-          <sp-menu-item value="4:3">4:3</sp-menu-item>
-          <sp-menu-item value="16:9">16:9</sp-menu-item>
-          <sp-menu-item value="9:16">9:16</sp-menu-item>
-          <sp-menu-item value="21:9">21:9</sp-menu-item>
-        </sp-menu>
-      </sp-picker>
-    </div>
+  <div class="field">
+    <span class="label">Resolution</span>
+    <sp-picker id="resolution" size="s">
+      <sp-menu slot="options">
+        <sp-menu-item value="auto">Auto</sp-menu-item>
+        <sp-menu-item value="1K">1K</sp-menu-item>
+        <sp-menu-item value="2K" selected>2K</sp-menu-item>
+        <sp-menu-item value="4K">4K</sp-menu-item>
+      </sp-menu>
+    </sp-picker>
   </div>
+  <div class="muted">Aspect ratio is auto-matched to your selection's shape (cover-fit, no distortion).</div>
 
   <div class="muted">With a selection active, only that area changes; otherwise the whole image is edited.</div>
 
