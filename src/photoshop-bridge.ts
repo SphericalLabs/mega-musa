@@ -30,6 +30,38 @@ export function getActiveDoc(): any {
   return doc;
 }
 
+// Activate the Rectangular Marquee tool and set its Style to Fixed Ratio at
+// width:height (or Normal when null), so the user drags selections already
+// matching a supported output ratio. NOTE: the marquee-style tokens below are
+// best-effort; if Photoshop rejects them the panel surfaces the error and they
+// can be corrected in one place.
+// Replace the current selection with an exact rectangle (document pixels).
+// Used to snap a freely-drawn selection to a chosen aspect ratio.
+export async function setRectSelection(b: Bounds): Promise<void> {
+  await core.executeAsModal(
+    async () => {
+      await action.batchPlay(
+        [
+          {
+            _obj: "set",
+            _target: [{ _ref: "channel", _property: "selection" }],
+            to: {
+              _obj: "rectangle",
+              top: { _unit: "pixelsUnit", _value: b.top },
+              left: { _unit: "pixelsUnit", _value: b.left },
+              bottom: { _unit: "pixelsUnit", _value: b.bottom },
+              right: { _unit: "pixelsUnit", _value: b.right },
+            },
+            _options: { dialogOptions: "dontDisplay" },
+          },
+        ],
+        {}
+      );
+    },
+    { commandName: "Nano Banana Pro: snap selection" }
+  );
+}
+
 export async function getSelectionBounds(): Promise<Bounds | null> {
   const result = await action.batchPlay(
     [

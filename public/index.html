@@ -25,7 +25,7 @@
   </style>
 </head>
 <body>
-  <h3>API key</h3>
+  <h3>API Key</h3>
   <div class="row">
     <sp-textfield id="apiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
     <sp-button id="saveKey" variant="secondary" size="s">Save</sp-button>
@@ -35,13 +35,38 @@
   <sp-divider size="s"></sp-divider>
 
   <div class="field">
+    <span class="label">Aspect Ratio</span>
+    <div class="row">
+      <sp-picker id="selRatio" size="s" class="grow">
+        <sp-menu slot="options">
+          <sp-menu-item value="1:1" selected>1:1</sp-menu-item>
+          <sp-menu-item value="2:3">2:3</sp-menu-item>
+          <sp-menu-item value="3:2">3:2</sp-menu-item>
+          <sp-menu-item value="3:4">3:4</sp-menu-item>
+          <sp-menu-item value="4:3">4:3</sp-menu-item>
+          <sp-menu-item value="4:5">4:5</sp-menu-item>
+          <sp-menu-item value="5:4">5:4</sp-menu-item>
+          <sp-menu-item value="9:16">9:16</sp-menu-item>
+          <sp-menu-item value="16:9">16:9</sp-menu-item>
+          <sp-menu-item value="21:9">21:9</sp-menu-item>
+        </sp-menu>
+      </sp-picker>
+      <sp-button id="fitSelection" variant="secondary" size="s">Fit Selection</sp-button>
+    </div>
+    <sp-button id="fitNearest" variant="secondary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
+  </div>
+  <div class="muted">Draw a selection, then <b>Generate</b> &mdash; it auto-fits to the nearest official ratio (offset-free). <b>Fit Selection</b> reshapes to the ratio chosen above; <b>Fit to Nearest Aspect Ratio</b> picks the closest ratio, updates the menu, and grows the selection to match.</div>
+
+  <sp-divider size="s"></sp-divider>
+
+  <div class="field">
     <span class="label">Prompt</span>
     <sp-textfield id="prompt" multiline placeholder="Describe the edit, e.g. 'replace the sky with a stormy sunset'"></sp-textfield>
   </div>
 
-  <h3>Reference images</h3>
+  <h3>Reference Images</h3>
   <div class="row spread">
-    <sp-button id="addRefs" variant="secondary" size="s">Add references…</sp-button>
+    <sp-button id="addRefs" variant="secondary" size="s">Add References…</sp-button>
     <div class="row">
       <span id="refCount" class="muted">0/10</span>
       <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
@@ -78,7 +103,7 @@
 
   <sp-divider size="s"></sp-divider>
 
-  <sp-button id="generate" variant="cta" style="width:100%">Generate edit</sp-button>
+  <sp-button id="generate" variant="cta" style="width:100%">Generate Edit</sp-button>
   <div id="status">Loading…</div>
 
   <script src="index.js"></script>

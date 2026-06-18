@@ -24,9 +24,10 @@ export const SUPPORTED_ASPECT_RATIOS: ReadonlyArray<{ label: string; ratio: numb
   { label: "21:9", ratio: 21 / 9 },
 ];
 
-// Nearest supported aspect ratio to a width/height, compared in log space so
-// e.g. 2:1 is equidistant from 1:1 and 4:1.
-export function nearestSupportedAspectRatio(width: number, height: number): string {
+// Nearest supported aspect ratio to a width/height, with the log-space distance
+// (so e.g. 2:1 is equidistant from 1:1 and 4:1). logDistance ~0 means the shape
+// already matches an official ratio.
+export function aspectRatioInfo(width: number, height: number): { label: string; logDistance: number } {
   const target = Math.log((width || 1) / (height || 1));
   let best = SUPPORTED_ASPECT_RATIOS[0];
   let bestDist = Infinity;
@@ -37,7 +38,11 @@ export function nearestSupportedAspectRatio(width: number, height: number): stri
       best = ar;
     }
   }
-  return best.label;
+  return { label: best.label, logDistance: bestDist };
+}
+
+export function nearestSupportedAspectRatio(width: number, height: number): string {
+  return aspectRatioInfo(width, height).label;
 }
 
 export interface RefImage {

@@ -1,14 +1,22 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
-import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
+import {
+  getActiveDoc,
+  getSelectionBounds,
+  padBounds,
+  readRegion,
+  placeResult,
+  setRectSelection,
+  Bounds,
+} from "./photoshop-bridge";
 import { encodePng, decodeImage, toRGBA, coverResampleRGBA, applyAlphaMask } from "./image-codec";
-import { generateEdit, nearestSupportedAspectRatio } from "./gemini";
+import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
 import { pickReferenceImages, RefImage } from "./references";
 import { loadApiKey, saveApiKey, loadSetting, saveSetting } from "./storage";
 
 const { entrypoints } = require("uxp");
 
 const MAX_REFS = 10;
-const PICKERS = ["model", "resolution"];
+const PICKERS = ["model", "resolution", "selRatio"];
 
 let refs: RefImage[] = [];
 let running = false;
@@ -96,7 +104,21 @@ async function onGenerate(): Promise<void> {
     const docW: number = doc.width;
     const docH: number = doc.height;
 
-    const sel = await getSelectionBounds();
+    let sel = await getSelectionBounds();
+    // If the selection isn't already an official ratio, fit it to the nearest one
+    // (and reflect that in the dropdown) so the crop matches a supported output
+    // ratio exactly. A selection already on-ratio (e.g. via Fit selection) is
+    // kept as-is, so an explicit ratio choice is honored.
+    if (sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1) {
+      const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
+      if (info.logDistance > 0.015) {
+        setPickerSafe($("selRatio"), info.label);
+        saveSetting("selRatio", info.label);
+        const [rw, rh] = info.label.split(":").map(Number);
+        sel = ratioRect(sel, rw / rh, docW, docH);
+        await setRectSelection(sel);
+      }
+    }
     const isRegion = !!sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1;
 
     // Region edit: crop to the selection (+ small padding for blending) so the
@@ -190,6 +212,70 @@ function setPickerSafe(picker: any, v: string): void {
   }
 }
 
+// Grow `sel` outward around its center to exactly `targetAR` (w/h), clamped to
+// the canvas. Growing (not shrinking) keeps all originally-selected content.
+function ratioRect(sel: Bounds, targetAR: number, docW: number, docH: number): Bounds {
+  const w = sel.right - sel.left;
+  const h = sel.bottom - sel.top;
+  const cx = (sel.left + sel.right) / 2;
+  const cy = (sel.top + sel.bottom) / 2;
+  let nw = w;
+  let nh = h;
+  if (targetAR > w / h) nw = h * targetAR;
+  else nh = w / targetAR;
+  nw = Math.min(nw, docW);
+  nh = Math.min(nh, docH);
+  let left = Math.round(cx - nw / 2);
+  let top = Math.round(cy - nh / 2);
+  let right = left + Math.round(nw);
+  let bottom = top + Math.round(nh);
+  if (left < 0) { right -= left; left = 0; }
+  if (top < 0) { bottom -= top; top = 0; }
+  if (right > docW) { left -= right - docW; right = docW; }
+  if (bottom > docH) { top -= bottom - docH; bottom = docH; }
+  return { left: Math.max(0, left), top: Math.max(0, top), right, bottom };
+}
+
+// Manual "Fit selection" — reshape the current selection to the chosen ratio
+// now, so the user can preview the shape. Generate also does this automatically.
+async function onFitSelection(): Promise<void> {
+  const v = $("selRatio").value || "1:1";
+  try {
+    const doc = getActiveDoc();
+    const sel = await getSelectionBounds();
+    if (!sel || sel.right - sel.left < 2 || sel.bottom - sel.top < 2) {
+      setStatus("Draw a selection first, then click Fit selection.", "error");
+      return;
+    }
+    const [rw, rh] = v.split(":").map(Number);
+    await setRectSelection(ratioRect(sel, rw / rh, doc.width, doc.height));
+    setStatus(`Selection fitted to ${v} — preview the shape, then Generate.`, "ok");
+  } catch (err: any) {
+    setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
+  }
+}
+
+// "Fit to nearest aspect ratio" — detect the closest official ratio to the
+// current selection, set it in the dropdown, and grow the selection to it.
+async function onFitNearest(): Promise<void> {
+  try {
+    const doc = getActiveDoc();
+    const sel = await getSelectionBounds();
+    if (!sel || sel.right - sel.left < 2 || sel.bottom - sel.top < 2) {
+      setStatus("Draw a selection first, then click Fit to nearest.", "error");
+      return;
+    }
+    const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
+    setPickerSafe($("selRatio"), info.label);
+    saveSetting("selRatio", info.label);
+    const [rw, rh] = info.label.split(":").map(Number);
+    await setRectSelection(ratioRect(sel, rw / rh, doc.width, doc.height));
+    setStatus(`Fitted to nearest ratio: ${info.label}.`, "ok");
+  } catch (err: any) {
+    setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
+  }
+}
+
 function restoreSettings(): void {
   setValueSafe($("apiKey"), loadApiKey());
   for (const id of PICKERS) {
@@ -219,6 +305,16 @@ function init(): void {
       renderThumbs();
     });
     $("generate").addEventListener("click", onGenerate);
+    $("fitSelection").addEventListener("click", onFitSelection);
+    $("fitNearest").addEventListener("click", onFitNearest);
+
+    // Cmd/Ctrl+Return in the prompt field fires Generate immediately.
+    $("prompt").addEventListener("keydown", (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.key === "Return")) {
+        e.preventDefault();
+        onGenerate();
+      }
+    });
 
     restoreSettings();
     persistSettingsHooks();
