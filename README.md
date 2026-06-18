@@ -12,7 +12,8 @@ A Photoshop panel that edits images with Google's **Nano Banana Pro**
 - **Up to 10 reference images** picked from disk, with thumbnail previews, sent
   alongside the prompt.
 - **Controls** for model, resolution (Auto/1K/2K/4K) and aspect ratio.
-- **Each user supplies their own Gemini API key**, stored locally. No server.
+- **Each user supplies their own Gemini API key**, stored in UXP secure storage.
+  No server.
 
 Built with TypeScript + Spectrum UXP widgets. It calls the Gemini REST API
 directly via `fetch` (more robust inside UXP than bundling the Node SDK), using
@@ -122,7 +123,8 @@ still each enter their own Gemini API key.
 | Resolution  | **Auto**, or force 1K/2K/4K. Higher res on a small selection = more preserved detail. |
 | Aspect      | **Auto** (recommended for edits — matches the input) or force a ratio. |
 
-Your key and these settings are remembered in the panel's local storage.
+Your key is remembered in UXP secure storage. These settings are remembered in
+the panel's local storage.
 
 ---
 
@@ -140,7 +142,7 @@ nbp-photoshop-plugin/
     photoshop-bridge.ts    # selection, imaging get/put, layer placement
     image-codec.ts         # base64, PNG/JPEG decode, RGBA, resample, alpha mask
     references.ts          # file picker + thumbnails
-    storage.ts             # local persistence of key + settings
+    storage.ts             # secure key storage + local setting persistence
     uxp.d.ts / jpeg-js.d.ts# ambient typings
   esbuild.config.mjs       # bundles src/ -> dist/ and copies public/
   scripts/make-icons.mjs   # (optional) generate placeholder icons

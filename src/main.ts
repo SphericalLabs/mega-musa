@@ -276,8 +276,8 @@ async function onFitNearest(): Promise<void> {
   }
 }
 
-function restoreSettings(): void {
-  setValueSafe($("apiKey"), loadApiKey());
+async function restoreSettings(): Promise<void> {
+  setValueSafe($("apiKey"), await loadApiKey());
   for (const id of PICKERS) {
     const v = loadSetting(id, "");
     if (v) setPickerSafe($(id), v);
@@ -290,14 +290,19 @@ function persistSettingsHooks(): void {
   }
 }
 
-function init(): void {
+async function init(): Promise<void> {
   try {
     // Register the panel entrypoint declared in manifest.json.
     entrypoints.setup({ panels: { nbpEditorPanel: { show() {} } } });
 
-    $("saveKey").addEventListener("click", () => {
-      saveApiKey(($("apiKey").value || "").trim());
-      setStatus("API key saved.", "ok");
+    $("saveKey").addEventListener("click", async () => {
+      const apiKey = ($("apiKey").value || "").trim();
+      try {
+        await saveApiKey(apiKey);
+        setStatus(apiKey ? "API key saved securely." : "API key cleared.", "ok");
+      } catch (err: any) {
+        setStatus("Could not save API key: " + (err?.message || String(err)), "error");
+      }
     });
     $("addRefs").addEventListener("click", onAddRefs);
     $("clearRefs").addEventListener("click", () => {
@@ -316,7 +321,7 @@ function init(): void {
       }
     });
 
-    restoreSettings();
+    await restoreSettings();
     persistSettingsHooks();
     renderThumbs();
     setStatus("Ready. Select a region (optional), add references, write a prompt.");

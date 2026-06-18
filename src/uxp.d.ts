@@ -37,6 +37,11 @@ interface UxpModule {
         types?: string[];
       }): Promise<any>;
     };
+    secureStorage: {
+      getItem(key: string): Promise<Uint8Array>;
+      setItem(key: string, value: string | ArrayBuffer | Uint8Array): Promise<void>;
+      removeItem(key: string): Promise<void>;
+    };
     formats: { binary: any; utf8: any };
   };
   entrypoints: {

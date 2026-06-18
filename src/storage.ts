@@ -1,11 +1,12 @@
-// Lightweight persistence via the panel's localStorage (per-plugin, persistent).
-// The API key is the student's own key on their own machine, so local storage
-// is acceptable here; do not reuse this pattern for a shared/server key.
+// Lightweight persistence for panel settings. Keep ordinary UI preferences in
+// localStorage, but keep the API key in UXP secureStorage.
+
+const { storage } = require("uxp");
 
 const PREFIX = "nbp.";
 const KEY_API = PREFIX + "apiKey";
 
-export function loadApiKey(): string {
+function loadLegacyApiKey(): string {
   try {
     return localStorage.getItem(KEY_API) || "";
   } catch {
@@ -13,12 +14,53 @@ export function loadApiKey(): string {
   }
 }
 
-export function saveApiKey(value: string): void {
+function clearLegacyApiKey(): void {
   try {
-    localStorage.setItem(KEY_API, value);
+    localStorage.removeItem(KEY_API);
   } catch {
     /* ignore */
   }
+}
+
+function decodeSecureValue(value: Uint8Array | ArrayBuffer): string {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  return new TextDecoder().decode(bytes);
+}
+
+export async function loadApiKey(): Promise<string> {
+  try {
+    const stored = await storage.secureStorage.getItem(KEY_API);
+    const apiKey = decodeSecureValue(stored);
+    if (apiKey) {
+      clearLegacyApiKey();
+      return apiKey;
+    }
+  } catch {
+    /* missing secure item or unavailable storage */
+  }
+
+  const legacyKey = loadLegacyApiKey();
+  if (!legacyKey) return "";
+
+  await saveApiKey(legacyKey);
+  return legacyKey;
+}
+
+export async function saveApiKey(value: string): Promise<void> {
+  if (!storage.secureStorage) {
+    throw new Error("UXP secureStorage is not available in this Photoshop runtime.");
+  }
+
+  if (value) {
+    await storage.secureStorage.setItem(KEY_API, value);
+  } else {
+    try {
+      await storage.secureStorage.removeItem(KEY_API);
+    } catch {
+      /* ignore missing item */
+    }
+  }
+  clearLegacyApiKey();
 }
 
 export function loadSetting(name: string, fallback: string): string {
