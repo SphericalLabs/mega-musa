@@ -69,6 +69,39 @@ export function toRGBA(src: Uint8Array, width: number, height: number, channels:
   return out;
 }
 
+// Multiply a packed-RGBA image's alpha by a per-pixel coverage mask (0..255),
+// so the image becomes transparent where the mask is 0 (clips to a selection).
+export function applyAlphaMask(rgba: Uint8Array, mask: Uint8Array): void {
+  const count = Math.min(Math.floor(rgba.length / 4), mask.length);
+  for (let i = 0; i < count; i++) {
+    rgba[i * 4 + 3] = Math.round((rgba[i * 4 + 3] * mask[i]) / 255);
+  }
+}
+
+// Bilinear resample of a single-channel (grayscale) image.
+export function resampleGray(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
+  if (sw === dw && sh === dh) return src;
+  const out = new Uint8Array(dw * dh);
+  const xRatio = sw / dw;
+  const yRatio = sh / dh;
+  for (let y = 0; y < dh; y++) {
+    const sy = Math.min(sh - 1, Math.max(0, (y + 0.5) * yRatio - 0.5));
+    const y0 = Math.floor(sy);
+    const y1 = Math.min(sh - 1, y0 + 1);
+    const fy = sy - y0;
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(sw - 1, Math.max(0, (x + 0.5) * xRatio - 0.5));
+      const x0 = Math.floor(sx);
+      const x1 = Math.min(sw - 1, x0 + 1);
+      const fx = sx - x0;
+      const top = src[y0 * sw + x0] * (1 - fx) + src[y0 * sw + x1] * fx;
+      const bot = src[y1 * sw + x0] * (1 - fx) + src[y1 * sw + x1] * fx;
+      out[y * dw + x] = Math.round(top * (1 - fy) + bot * fy);
+    }
+  }
+  return out;
+}
+
 // Bilinear resample of packed RGBA from (sw,sh) to (dw,dh).
 export function resampleRGBA(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
   if (sw === dw && sh === dh) return src;

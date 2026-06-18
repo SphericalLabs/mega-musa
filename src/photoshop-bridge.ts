@@ -1,3 +1,5 @@
+import { resampleGray } from "./image-codec";
+
 const { app, action, core, imaging } = require("photoshop");
 
 export interface Bounds {
@@ -7,16 +9,19 @@ export interface Bounds {
   bottom: number;
 }
 
-export interface PixelRegion {
+export interface ImageBuffer {
   data: Uint8Array;
   width: number;
   height: number;
   components: number;
 }
 
-// Temporary alpha channel used to carry the (possibly non-rectangular, feathered)
-// selection from the read step to the masking step.
-const TMP_CHANNEL = "nbp_tmp_sel";
+export interface DocumentRead {
+  image: ImageBuffer;
+  // Whole-document selection coverage (0..255), docW×docH, present for region
+  // edits. Used to set the result layer's alpha so the edit clips to the selection.
+  mask?: Uint8Array;
+}
 
 export function getActiveDoc(): any {
   const doc = app.activeDocument;
@@ -25,7 +30,7 @@ export function getActiveDoc(): any {
 }
 
 // Returns the bounding box of the current selection, or null if nothing is
-// selected. Works for any selection shape (returns its bounds).
+// selected. Used only to decide whether this is a region (masked) edit.
 export async function getSelectionBounds(): Promise<Bounds | null> {
   const result = await action.batchPlay(
     [
@@ -51,42 +56,17 @@ export async function getSelectionBounds(): Promise<Bounds | null> {
   };
 }
 
-export function padBounds(b: Bounds, padFrac: number, docW: number, docH: number): Bounds {
-  const w = b.right - b.left;
-  const h = b.bottom - b.top;
-  const px = Math.round(w * padFrac);
-  const py = Math.round(h * padFrac);
-  return {
-    left: Math.max(0, b.left - px),
-    top: Math.max(0, b.top - py),
-    right: Math.min(docW, b.right + px),
-    bottom: Math.min(docH, b.bottom + py),
-  };
-}
-
-// Modal step 1: optionally save the selection to a temp channel, then read the
-// pixels inside `bounds` (flattened composite). Kept short so Photoshop's UI is
-// only blocked briefly — the long network call happens outside this scope.
-export async function readRegion(
+// Modal step 1: read the whole flattened document, and (for region edits) the
+// whole-document selection mask. Both are docW×docH so they align exactly.
+export async function readDocument(
   docId: number,
-  bounds: Bounds,
-  saveSelection: boolean
-): Promise<PixelRegion> {
+  docW: number,
+  docH: number,
+  withMask: boolean
+): Promise<DocumentRead> {
+  const bounds: Bounds = { left: 0, top: 0, right: docW, bottom: docH };
   return await core.executeAsModal(
     async () => {
-      if (saveSelection) {
-        await action.batchPlay(
-          [
-            {
-              _obj: "duplicate",
-              _target: [{ _ref: "channel", _property: "selection" }],
-              name: TMP_CHANNEL,
-              _options: { dialogOptions: "dontDisplay" },
-            },
-          ],
-          {}
-        );
-      }
       const { imageData } = await imaging.getPixels({
         documentID: docId,
         sourceBounds: bounds,
@@ -97,28 +77,46 @@ export async function readRegion(
       const data = new Uint8Array(raw); // copy out before disposing the source
       const components = imageData.components || 4;
       imageData.dispose();
-      return {
-        data,
-        width: bounds.right - bounds.left,
-        height: bounds.bottom - bounds.top,
-        components,
-      };
+
+      let mask: Uint8Array | undefined;
+      if (withMask) {
+        try {
+          const sel = await imaging.getSelection({ documentID: docId, sourceBounds: bounds });
+          const sw = sel.imageData.width;
+          const sh = sel.imageData.height;
+          const sc = sel.imageData.components || 1;
+          const mraw = await sel.imageData.getData({ chunky: true });
+          let gray: Uint8Array;
+          if (sc === 1) {
+            gray = new Uint8Array(mraw);
+          } else {
+            gray = new Uint8Array(sw * sh);
+            for (let i = 0; i < sw * sh; i++) gray[i] = mraw[i * sc];
+          }
+          sel.imageData.dispose();
+          // Normalize to document dimensions (safety net if dims ever differ).
+          mask = sw === docW && sh === docH ? gray : resampleGray(gray, sw, sh, docW, docH);
+        } catch {
+          // If the selection can't be read, fall back to an unmasked full-image edit.
+          mask = undefined;
+        }
+      }
+
+      return { image: { data, width: docW, height: docH, components }, mask };
     },
-    { commandName: "Nano Banana Pro: read region" }
+    { commandName: "Nano Banana Pro: read" }
   );
 }
 
-// Modal step 2: create a new layer, write the edited RGBA into `bounds`, and —
-// for region edits — mask it to the saved selection so only the selected area
-// changes (with the selection's feather giving a soft composite).
+// Modal step 2: create a new layer and write the edited RGBA over the whole
+// document. The alpha of `rgba` already encodes the selection (applyAlphaMask),
+// so the layer is simply transparent where unselected — no layer mask needed.
 export async function placeResult(
   docId: number,
-  bounds: Bounds,
+  docW: number,
+  docH: number,
   rgba: Uint8Array,
-  width: number,
-  height: number,
-  layerName: string,
-  useSelectionMask: boolean
+  layerName: string
 ): Promise<void> {
   await core.executeAsModal(
     async () => {
@@ -141,8 +139,8 @@ export async function placeResult(
       );
 
       const imageData = await imaging.createImageDataFromBuffer(rgba, {
-        width,
-        height,
+        width: docW,
+        height: docH,
         components: 4,
         componentSize: 8,
         colorSpace: "RGB",
@@ -151,41 +149,10 @@ export async function placeResult(
       await imaging.putPixels({
         documentID: docId,
         layerID: layerId,
-        targetBounds: bounds,
+        targetBounds: { left: 0, top: 0, right: docW, bottom: docH },
         imageData,
       });
       imageData.dispose();
-
-      if (useSelectionMask) {
-        await action.batchPlay(
-          [
-            {
-              _obj: "set",
-              _target: [{ _ref: "channel", _property: "selection" }],
-              to: { _ref: "channel", _name: TMP_CHANNEL },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-            {
-              _obj: "make",
-              _target: [{ _ref: "channel", _enum: "channel", _value: "mask" }],
-              using: { _enum: "userMaskEnabled", _value: "revealSelection" },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-            {
-              _obj: "delete",
-              _target: [{ _ref: "channel", _name: TMP_CHANNEL }],
-              _options: { dialogOptions: "dontDisplay" },
-            },
-            {
-              _obj: "set",
-              _target: [{ _ref: "channel", _property: "selection" }],
-              to: { _enum: "ordinal", _value: "none" },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-          ],
-          {}
-        );
-      }
     },
     { commandName: "Nano Banana Pro: place result" }
   );

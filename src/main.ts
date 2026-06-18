@@ -1,6 +1,6 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
-import { getActiveDoc, getSelectionBounds, padBounds, readRegion, placeResult, Bounds } from "./photoshop-bridge";
-import { encodePng, decodeImage, toRGBA, resampleRGBA } from "./image-codec";
+import { getActiveDoc, getSelectionBounds, readDocument, placeResult } from "./photoshop-bridge";
+import { encodePng, decodeImage, toRGBA, resampleRGBA, applyAlphaMask } from "./image-codec";
 import { generateEdit } from "./gemini";
 import { pickReferenceImages, RefImage } from "./references";
 import { loadApiKey, saveApiKey, loadSetting, saveSetting } from "./storage";
@@ -88,7 +88,6 @@ async function onGenerate(): Promise<void> {
   const model = $("model").value || "gemini-3-pro-image";
   const resolution = $("resolution").value || "auto";
   const aspect = $("aspect").value || "auto";
-  const padFrac = Number($("padding").value || 0) / 100;
 
   running = true;
   $("generate").disabled = true;
@@ -101,13 +100,9 @@ async function onGenerate(): Promise<void> {
     const sel = await getSelectionBounds();
     const isRegion = !!sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1;
 
-    const region: Bounds = isRegion
-      ? padBounds(sel as Bounds, padFrac, docW, docH)
-      : { left: 0, top: 0, right: docW, bottom: docH };
-
-    setStatus(isRegion ? "Reading selected region…" : "Reading whole image…");
-    const px = await readRegion(docId, region, isRegion);
-    const basePng = encodePng(px.data, px.width, px.height, px.components);
+    setStatus(isRegion ? "Reading image + selection…" : "Reading image…");
+    const { image, mask } = await readDocument(docId, docW, docH, isRegion);
+    const basePng = encodePng(image.data, image.width, image.height, image.components);
 
     setStatus(`Generating with ${model}…  (this can take 10–40s)`);
     const result = await generateEdit({
@@ -122,10 +117,11 @@ async function onGenerate(): Promise<void> {
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    rgba = resampleRGBA(rgba, decoded.width, decoded.height, px.width, px.height);
+    rgba = resampleRGBA(rgba, decoded.width, decoded.height, docW, docH);
+    if (mask) applyAlphaMask(rgba, mask); // clip the edit to the selection
 
     setStatus("Placing result…");
-    await placeResult(docId, region, rgba, px.width, px.height, "Nano Banana Pro edit", isRegion);
+    await placeResult(docId, docW, docH, rgba, isRegion ? "Nano Banana Pro edit (masked)" : "Nano Banana Pro edit");
 
     setStatus(
       isRegion ? "Done — edit added as a masked layer." : "Done — edit added as a new layer.",
@@ -139,21 +135,50 @@ async function onGenerate(): Promise<void> {
   }
 }
 
+// Some Spectrum widgets (sp-picker, sp-slider) expose `value` as a getter only,
+// so assigning to it throws. Set the property when allowed, else fall back to the
+// reflected attribute — and never throw out of settings restore.
+function setValueSafe(el: any, v: string): void {
+  if (!el) return;
+  try {
+    el.value = v;
+    return;
+  } catch {
+    /* getter-only property */
+  }
+  try {
+    el.setAttribute("value", v);
+  } catch {
+    /* ignore */
+  }
+}
+
+function setPickerSafe(picker: any, v: string): void {
+  if (!picker) return;
+  setValueSafe(picker, v);
+  // Ensure the matching menu item reflects as selected.
+  try {
+    picker.querySelectorAll("sp-menu-item").forEach((item: any) => {
+      if (item.getAttribute("value") === v) item.setAttribute("selected", "");
+      else item.removeAttribute("selected");
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 function restoreSettings(): void {
-  $("apiKey").value = loadApiKey();
+  setValueSafe($("apiKey"), loadApiKey());
   for (const id of PICKERS) {
     const v = loadSetting(id, "");
-    if (v) $(id).value = v;
+    if (v) setPickerSafe($(id), v);
   }
-  const pad = loadSetting("padding", "");
-  if (pad) $("padding").value = pad;
 }
 
 function persistSettingsHooks(): void {
   for (const id of PICKERS) {
     $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
   }
-  $("padding")?.addEventListener("change", () => saveSetting("padding", String($("padding").value)));
 }
 
 function init(): void {
