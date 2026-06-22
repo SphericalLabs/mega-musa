@@ -98,6 +98,38 @@ export function padBounds(b: Bounds, padFrac: number, docW: number, docH: number
   };
 }
 
+// Reshape `b` to exactly `targetRatio` (width / height), expanding within the
+// document when possible (so the whole selection stays covered) and shrinking
+// only if expansion would overflow the canvas. Stays centred on `b`. Used so the
+// crop's ratio equals the model's output ratio — then cover-fit adds no trim.
+export function fitRegionToRatio(b: Bounds, targetRatio: number, docW: number, docH: number): Bounds {
+  let w = b.right - b.left;
+  let h = b.bottom - b.top;
+  if (w < 1 || h < 1) return b;
+  const cx = (b.left + b.right) / 2;
+  const cy = (b.top + b.bottom) / 2;
+  if (w / h < targetRatio) {
+    const newW = Math.round(h * targetRatio);
+    if (newW <= docW) w = newW;
+    else {
+      w = docW;
+      h = Math.round(docW / targetRatio);
+    }
+  } else {
+    const newH = Math.round(w / targetRatio);
+    if (newH <= docH) h = newH;
+    else {
+      h = docH;
+      w = Math.round(docH * targetRatio);
+    }
+  }
+  let left = Math.round(cx - w / 2);
+  let top = Math.round(cy - h / 2);
+  left = Math.max(0, Math.min(left, docW - w));
+  top = Math.max(0, Math.min(top, docH - h));
+  return { left, top, right: left + w, bottom: top + h };
+}
+
 function boundVal(u: any): number {
   return typeof u === "number" ? u : u?._value ?? 0;
 }

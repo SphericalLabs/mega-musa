@@ -3,6 +3,7 @@ import {
   getActiveDoc,
   getSelectionBounds,
   padBounds,
+  fitRegionToRatio,
   readRegion,
   placeResult,
   setRectSelection,
@@ -10,7 +11,7 @@ import {
 } from "./photoshop-bridge";
 import { encodePng, decodeImage, toRGBA, coverResampleRGBA, applyAlphaMask } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
-import { generateOpenAIEdit, OPENAI_MODEL_PREFIX } from "./openai";
+import { generateOpenAIEdit, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
 import { pickReferenceImages, RefImage } from "./references";
 import {
   loadApiKey,
@@ -142,34 +143,69 @@ async function onGenerate(): Promise<void> {
 
     // Region edit: crop to the selection (+ small padding for blending) so the
     // model spends its full resolution on the detail. Else: whole document.
-    const region: Bounds = isRegion
+    const basePad: Bounds = isRegion
       ? padBounds(sel as Bounds, 0.06, docW, docH)
       : { left: 0, top: 0, right: docW, bottom: docH };
+    const padW = basePad.right - basePad.left;
+    const padH = basePad.bottom - basePad.top;
+
+    // Pick the exact ratio the model will output, then (for region edits) reshape
+    // the crop to match it, so the later cover-fit is a pure scale — no zoom,
+    // trim or shift. gpt-image-2 takes any size, so we request the crop's exact
+    // ratio; every other model is limited to fixed ratios, so we snap to the
+    // nearest one and reshape the crop to it. Whole-image edits keep the full
+    // canvas (no reshape) and accept the small residual fit.
+    let region = basePad;
+    let geminiAspect: string | undefined;
+    let openaiSize: string | undefined;
+    if (isOpenAIModel(model)) {
+      if (isGptImage2(model)) {
+        openaiSize = gptImage2Size(padW, padH, resolution === "auto" ? undefined : resolution);
+      } else {
+        const presets = [
+          { r: 1, size: "1024x1024" },
+          { r: 3 / 2, size: "1536x1024" },
+          { r: 2 / 3, size: "1024x1536" },
+        ];
+        const cr = padW / padH;
+        const best = presets.reduce((a, b) =>
+          Math.abs(Math.log(b.r) - Math.log(cr)) < Math.abs(Math.log(a.r) - Math.log(cr)) ? b : a
+        );
+        openaiSize = best.size;
+        if (isRegion) region = fitRegionToRatio(basePad, best.r, docW, docH);
+      }
+    } else {
+      geminiAspect = nearestSupportedAspectRatio(padW, padH);
+      if (isRegion) {
+        const [rw, rh] = geminiAspect.split(":").map(Number);
+        region = fitRegionToRatio(basePad, rw / rh, docW, docH);
+      }
+    }
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
-    // Always match the request to the crop's shape (nearest official ratio), so
-    // the model frames close to the selection and cover-fit trims little.
-    const aspectRatio = nearestSupportedAspectRatio(cropW, cropH);
 
     setStatus(isRegion ? "Reading selected region…" : "Reading image…");
     const read = await readRegion(docId, region, isRegion);
     const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
 
+    const sizeLabel = geminiAspect ?? openaiSize ?? "auto";
     setStatus(
-      `Generating ${aspectRatio} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–60s)`
+      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–60s)`
     );
-    const request = {
+    const baseReq = {
       apiKey,
       model,
       prompt,
       baseImagePng: basePng,
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
-      aspectRatio,
-      imageSize: resolution === "auto" ? undefined : resolution,
     };
     const result = isOpenAIModel(model)
-      ? await generateOpenAIEdit(request)
-      : await generateEdit(request);
+      ? await generateOpenAIEdit({ ...baseReq, size: openaiSize as string })
+      : await generateEdit({
+          ...baseReq,
+          aspectRatio: geminiAspect,
+          imageSize: resolution === "auto" ? undefined : resolution,
+        });
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);

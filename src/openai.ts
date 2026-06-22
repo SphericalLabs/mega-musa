@@ -11,41 +11,66 @@ export interface OpenAIGenerateOptions {
   prompt: string;
   baseImagePng: Uint8Array;
   references: RefImage[];
-  aspectRatio?: string;
-  imageSize?: string;
+  size: string; // exact OpenAI `size` value, e.g. "1024x1024" or "1456x1088"
   signal?: AbortSignal;
 }
 
-function parseAspectRatio(aspectRatio?: string): number {
-  const [w, h] = (aspectRatio || "1:1").split(":").map((v) => Number(v));
-  if (!w || !h || !Number.isFinite(w) || !Number.isFinite(h)) return 1;
-  return w / h;
+// gpt-image-2 size constraints (from the Images guide): edges are multiples of
+// 16, longest edge <= 3840, total pixels within [655_360, 8_294_400], and the
+// long:short ratio must be <= 3:1.
+const G2_MAX_EDGE = 3840;
+const G2_MIN_PX = 655360;
+const G2_MAX_PX = 8294400;
+
+function floor16(n: number): number {
+  return Math.max(16, Math.floor(n / 16) * 16);
 }
 
-function sizeForOpenAI(model: string, aspectRatio?: string, imageSize?: string): string {
-  if (!imageSize || imageSize === "auto") return "auto";
+function ceil16(n: number): number {
+  return Math.max(16, Math.ceil(n / 16) * 16);
+}
 
-  const ratio = parseAspectRatio(aspectRatio);
-  if (model === "gpt-image-2") {
-    if (imageSize === "4K") {
-      if (ratio > 1.18) return "3840x2160";
-      if (ratio < 0.85) return "2160x3840";
-      return "2048x2048";
-    }
-    if (imageSize === "2K") {
-      if (ratio > 1.18) return "2048x1152";
-      if (ratio < 0.85) return "1152x2048";
-      return "2048x2048";
-    }
+// Exact WxH (multiples of 16) at the crop's aspect ratio, sized to the requested
+// resolution tier and clamped to the constraints above. Because gpt-image-2 can
+// output any size, matching it to the crop ratio makes the later cover-fit a
+// pure scale — no zoom, trim or shift. `tier` is "1K"|"2K"|"4K" or undefined
+// (auto => match the source crop's own pixel count).
+export function gptImage2Size(cropW: number, cropH: number, tier?: string): string {
+  const ratio = Math.min(3, Math.max(1 / 3, cropW / cropH));
+  let targetPx: number;
+  if (tier === "4K") targetPx = G2_MAX_PX;
+  else if (tier === "2K") targetPx = 4194304;
+  else if (tier === "1K") targetPx = 1048576;
+  else targetPx = Math.min(G2_MAX_PX, Math.max(G2_MIN_PX, cropW * cropH));
+
+  let w = Math.sqrt(targetPx * ratio);
+  let h = Math.sqrt(targetPx / ratio);
+  const longest = Math.max(w, h);
+  if (longest > G2_MAX_EDGE) {
+    const k = G2_MAX_EDGE / longest;
+    w *= k;
+    h *= k;
   }
-
-  if (ratio > 1.18) return "1536x1024";
-  if (ratio < 0.85) return "1024x1536";
-  return "1024x1024";
+  // Floor to the 16px grid so we never exceed the edge / pixel ceilings…
+  w = floor16(w);
+  h = floor16(h);
+  if (w / h > 3) w = floor16(h * 3);
+  if (h / w > 3) h = floor16(w * 3);
+  // …then nudge back up if flooring dropped us under the pixel floor.
+  if (w * h < G2_MIN_PX) {
+    const k = Math.sqrt(G2_MIN_PX / (w * h));
+    w = Math.min(G2_MAX_EDGE, ceil16(w * k));
+    h = Math.min(G2_MAX_EDGE, ceil16(h * k));
+  }
+  return `${w}x${h}`;
 }
 
 function openAIModelId(model: string): string {
   return model.startsWith(OPENAI_MODEL_PREFIX) ? model.slice(OPENAI_MODEL_PREFIX.length) : model;
+}
+
+export function isGptImage2(model: string): boolean {
+  return openAIModelId(model) === "gpt-image-2";
 }
 
 function mimeExt(mimeType: string): string {
@@ -103,7 +128,7 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   pushField(parts, boundary, "n", "1");
   pushField(parts, boundary, "output_format", "png");
   pushField(parts, boundary, "quality", "auto");
-  pushField(parts, boundary, "size", sizeForOpenAI(model, opts.aspectRatio, opts.imageSize));
+  pushField(parts, boundary, "size", opts.size);
   pushFile(parts, boundary, "image[]", "selection.png", "image/png", opts.baseImagePng);
   opts.references.forEach((ref, index) => {
     pushFile(
