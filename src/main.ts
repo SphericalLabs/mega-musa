@@ -6,6 +6,7 @@ import {
   fitRegionToRatio,
   readRegion,
   placeResult,
+  scaleViaPhotoshop,
   setRectSelection,
   Bounds,
 } from "./photoshop-bridge";
@@ -124,20 +125,15 @@ async function onGenerate(): Promise<void> {
     const docW: number = doc.width;
     const docH: number = doc.height;
 
-    let sel = await getSelectionBounds();
-    // If the selection isn't already an official ratio, fit it to the nearest one
-    // (and reflect that in the dropdown) so the crop matches a supported output
-    // ratio exactly. A selection already on-ratio (e.g. via Fit selection) is
-    // kept as-is, so an explicit ratio choice is honored.
+    const sel = await getSelectionBounds();
+    // Reflect the selection's nearest supported ratio in the picker — display
+    // only. We deliberately never modify the selection here, so lasso / ellipse /
+    // feathered shapes survive to become the result's mask. The crop is framed to
+    // a supported ratio later (fitRegionToRatio) using only the bounding box.
     if (sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1) {
       const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
-      if (info.logDistance > 0.015) {
-        setPickerSafe($("selRatio"), info.label);
-        saveSetting("selRatio", info.label);
-        const [rw, rh] = info.label.split(":").map(Number);
-        sel = ratioRect(sel, rw / rh, docW, docH);
-        await setRectSelection(sel);
-      }
+      setPickerSafe($("selRatio"), info.label);
+      saveSetting("selRatio", info.label);
     }
     const isRegion = !!sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1;
 
@@ -209,8 +205,19 @@ async function onGenerate(): Promise<void> {
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    // Cover-fit (preserve aspect, center-trim) the result into the crop box.
-    rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
+    // Resample the result to the crop box. Hand it to Photoshop's Image Size
+    // engine (bicubic sharper for reductions, smoother for enlargements) — far
+    // better than a JS bilinear pass — and fall back to the JS resampler if the
+    // scratch-document plumbing fails, so a generation never dies here.
+    if (decoded.width !== cropW || decoded.height !== cropH) {
+      setStatus("Scaling result…");
+      try {
+        rgba = await scaleViaPhotoshop(rgba, decoded.width, decoded.height, cropW, cropH);
+      } catch (e: any) {
+        console.log("[NBP] Photoshop scale failed, using JS resample:", e?.message || e);
+        rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
+      }
+    }
     if (read.mask) applyAlphaMask(rgba, read.mask); // clip the edit to the selection
 
     setStatus("Placing result…");

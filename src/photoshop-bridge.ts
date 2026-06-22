@@ -266,3 +266,103 @@ export async function placeResult(
     { commandName: "Nano Banana Pro: place result" }
   );
 }
+
+// Resample `rgba` (srcW x srcH, RGBA) to dstW x dstH using Photoshop's own Image
+// Size engine, via a throwaway document: Bicubic Sharper for reductions, Bicubic
+// Smoother for enlargements — far better than a hand-rolled bilinear pass. The
+// scratch doc is always closed without saving. Throws on any failure so the
+// caller can fall back to a JS resampler.
+export async function scaleViaPhotoshop(
+  rgba: Uint8Array,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number
+): Promise<Uint8Array> {
+  const scratch = await app.createDocument({
+    width: srcW,
+    height: srcH,
+    resolution: 72,
+    fill: "transparent",
+    name: "nbp-scale",
+  });
+  if (!scratch) throw new Error("Could not create scratch document for scaling.");
+  try {
+    let out: Uint8Array | undefined;
+    await core.executeAsModal(
+      async () => {
+        const layerId = scratch.layers[0].id;
+        const srcData = await imaging.createImageDataFromBuffer(rgba, {
+          width: srcW,
+          height: srcH,
+          components: 4,
+          componentSize: 8,
+          colorSpace: "RGB",
+          chunky: true,
+        });
+        await imaging.putPixels({
+          documentID: scratch.id,
+          layerID: layerId,
+          targetBounds: { left: 0, top: 0, right: srcW, bottom: srcH },
+          imageData: srcData,
+        });
+        srcData.dispose();
+
+        // Reductions -> Bicubic Sharper, enlargements -> Bicubic Smoother.
+        const method =
+          dstW * dstH < srcW * srcH
+            ? "bicubicSharper"
+            : dstW * dstH > srcW * srcH
+              ? "bicubicSmoother"
+              : "bicubic";
+        await action.batchPlay(
+          [
+            {
+              _obj: "imageSize",
+              width: { _unit: "pixelsUnit", _value: dstW },
+              height: { _unit: "pixelsUnit", _value: dstH },
+              constrainProportions: false,
+              interpolation: { _enum: "interpolationType", _value: method },
+              _options: { dialogOptions: "dontDisplay" },
+            },
+          ],
+          {}
+        );
+
+        const { imageData } = await imaging.getPixels({
+          documentID: scratch.id,
+          sourceBounds: { left: 0, top: 0, right: dstW, bottom: dstH },
+          componentSize: 8,
+          applyAlpha: false,
+        });
+        const raw = await imageData.getData({ chunky: true });
+        const comps = imageData.components || 4;
+        imageData.dispose();
+
+        if (comps === 4) {
+          out = new Uint8Array(raw);
+        } else {
+          // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
+          const px = dstW * dstH;
+          const rgbaOut = new Uint8Array(px * 4);
+          for (let i = 0; i < px; i++) {
+            rgbaOut[i * 4] = raw[i * comps];
+            rgbaOut[i * 4 + 1] = raw[i * comps + 1];
+            rgbaOut[i * 4 + 2] = raw[i * comps + 2];
+            rgbaOut[i * 4 + 3] = 255;
+          }
+          out = rgbaOut;
+        }
+      },
+      { commandName: "Nano Banana Pro: scale result" }
+    );
+    if (!out) throw new Error("Scaling produced no pixels.");
+    return out;
+  } finally {
+    try {
+      await scratch.closeWithoutSaving();
+    } catch {
+      /* ignore close failures */
+    }
+  }
+}
