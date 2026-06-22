@@ -22,7 +22,25 @@
       "minimumSize": { "width": 230, "height": 320 },
       "maximumSize": { "width": 900, "height": 2000 },
       "preferredDockedSize": { "width": 320, "height": 600 },
-      "preferredFloatingSize": { "width": 360, "height": 660 }
+      "preferredFloatingSize": { "width": 360, "height": 660 },
+      "icons": [
+        {
+          "width": 24,
+          "height": 24,
+          "path": "icons/icon.png",
+          "scale": [1, 2],
+          "theme": ["darkest", "dark", "medium", "lightest", "light"]
+        }
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "width": 24,
+      "height": 24,
+      "path": "icons/icon.png",
+      "scale": [1, 2],
+      "theme": ["darkest", "dark", "medium", "lightest", "light"]
     }
   ]
 }

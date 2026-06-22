@@ -30,6 +30,7 @@ function makeIcon(size) {
 }
 
 mkdirSync("public/icons", { recursive: true });
-writeFileSync("public/icons/icon@1x.png", makeIcon(24));
+// UXP scale convention: base name = 1x, "@2x" suffix = 2x.
+writeFileSync("public/icons/icon.png", makeIcon(24));
 writeFileSync("public/icons/icon@2x.png", makeIcon(48));
 console.log("icons -> public/icons/");
