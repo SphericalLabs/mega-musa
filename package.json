@@ -1,6 +1,6 @@
 {
   "name": "nbp-photoshop-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Nano Banana Pro (Gemini 3 Pro Image) edit panel for Adobe Photoshop (UXP).",
   "scripts": {

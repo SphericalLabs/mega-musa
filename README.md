@@ -1,7 +1,8 @@
 # Nano Banana Pro Edit — Photoshop (UXP) plugin
 
 A Photoshop panel that edits images with Google's **Nano Banana Pro**
-(`gemini-3-pro-image`) and **Nano Banana** (`gemini-2.5-flash-image`) models.
+(`gemini-3-pro-image`) and **Nano Banana** (`gemini-2.5-flash-image`) models,
+plus OpenAI image models.
 
 - **Region editing** — make a selection; the plugin crops to it (plus a little
   padding), sends *only that region* to the model so it spends its full
@@ -12,8 +13,8 @@ A Photoshop panel that edits images with Google's **Nano Banana Pro**
 - **Up to 10 reference images** picked from disk, with thumbnail previews, sent
   alongside the prompt.
 - **Controls** for model, resolution (Auto/1K/2K/4K) and aspect ratio.
-- **Each user supplies their own Gemini API key**, stored in UXP secure storage.
-  No server.
+- **Each user supplies their own Gemini and/or OpenAI API key**, stored in UXP
+  secure storage. No server.
 
 Built with TypeScript + Spectrum UXP widgets. It calls the Gemini REST API
 directly via `fetch` (more robust inside UXP than bundling the Node SDK), using
@@ -54,6 +55,7 @@ text survive far better than editing the whole frame at once.
 3. **Adobe UXP Developer Tool** — free, from Creative Cloud Desktop
    (*Marketplace → search "UXP Developer Tool"*). Used to load the plugin.
 4. **A Gemini API key** — create one at <https://aistudio.google.com/apikey>.
+5. **Optional: an OpenAI API key** — create one at <https://platform.openai.com/api-keys>.
 
 ---
 
@@ -95,7 +97,7 @@ still each enter their own Gemini API key.
 
 ## Use
 
-1. **Paste your API key** at the top and click **Save** (once).
+1. **Paste your Gemini or OpenAI API key** at the top and click **Save** (once).
 2. Open an image.
 3. **Optional:** make a selection (any shape) for a localized edit. Feather it
    for soft edges. With no selection, the whole image is edited.
@@ -119,7 +121,7 @@ still each enter their own Gemini API key.
 
 | Control     | Notes |
 |-------------|-------|
-| Model       | `gemini-3-pro-image` (Pro, best) or `gemini-2.5-flash-image` (fast/cheap for iterating). |
+| Model       | `gemini-3-pro-image` (Pro, best), `gemini-2.5-flash-image` (fast/cheap for iterating), `chatgpt-image-latest`, `gpt-image-1.5`, `gpt-image-1` or `gpt-image-1-mini`. |
 | Resolution  | **Auto**, or force 1K/2K/4K. Higher res on a small selection = more preserved detail. |
 | Aspect      | **Auto** (recommended for edits — matches the input) or force a ratio. |
 
@@ -139,6 +141,7 @@ nbp-photoshop-plugin/
     main.ts                # UI wiring + orchestration
     polyfills.ts           # TextEncoder/TextDecoder for UXP (fast-png needs them)
     gemini.ts              # Gemini REST client (fetch)
+    openai.ts              # OpenAI Images edit client (fetch)
     photoshop-bridge.ts    # selection, imaging get/put, layer placement
     image-codec.ts         # base64, PNG/JPEG decode, RGBA, resample, alpha mask
     references.ts          # file picker + thumbnails
@@ -203,4 +206,4 @@ This plugin works around several UXP-runtime quirks discovered while building it
 
 Internal workshop tool. Uses [`fast-png`](https://github.com/image-js/fast-png)
 and [`jpeg-js`](https://github.com/jpeg-js/jpeg-js) (MIT) for image decode.
-Generated images may carry Google's invisible **SynthID** watermark.
+Generated images may carry provider watermarks or provenance metadata.

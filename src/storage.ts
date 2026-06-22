@@ -5,6 +5,7 @@ const { storage } = require("uxp");
 
 const PREFIX = "nbp.";
 const KEY_API = PREFIX + "apiKey";
+const KEY_OPENAI_API = PREFIX + "openaiApiKey";
 
 function loadLegacyApiKey(): string {
   try {
@@ -47,20 +48,41 @@ export async function loadApiKey(): Promise<string> {
 }
 
 export async function saveApiKey(value: string): Promise<void> {
+  await saveSecureString(KEY_API, value);
+  clearLegacyApiKey();
+}
+
+export async function loadOpenAIApiKey(): Promise<string> {
+  return loadSecureString(KEY_OPENAI_API);
+}
+
+export async function saveOpenAIApiKey(value: string): Promise<void> {
+  await saveSecureString(KEY_OPENAI_API, value);
+}
+
+async function loadSecureString(key: string): Promise<string> {
+  try {
+    const stored = await storage.secureStorage.getItem(key);
+    return decodeSecureValue(stored);
+  } catch {
+    return "";
+  }
+}
+
+async function saveSecureString(key: string, value: string): Promise<void> {
   if (!storage.secureStorage) {
     throw new Error("UXP secureStorage is not available in this Photoshop runtime.");
   }
 
   if (value) {
-    await storage.secureStorage.setItem(KEY_API, value);
+    await storage.secureStorage.setItem(key, value);
   } else {
     try {
-      await storage.secureStorage.removeItem(KEY_API);
+      await storage.secureStorage.removeItem(key);
     } catch {
       /* ignore missing item */
     }
   }
-  clearLegacyApiKey();
 }
 
 export function loadSetting(name: string, fallback: string): string {

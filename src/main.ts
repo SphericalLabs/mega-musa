@@ -10,8 +10,16 @@ import {
 } from "./photoshop-bridge";
 import { encodePng, decodeImage, toRGBA, coverResampleRGBA, applyAlphaMask } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
+import { generateOpenAIEdit, OPENAI_MODEL_PREFIX } from "./openai";
 import { pickReferenceImages, RefImage } from "./references";
-import { loadApiKey, saveApiKey, loadSetting, saveSetting } from "./storage";
+import {
+  loadApiKey,
+  saveApiKey,
+  loadOpenAIApiKey,
+  saveOpenAIApiKey,
+  loadSetting,
+  saveSetting,
+} from "./storage";
 
 const { entrypoints } = require("uxp");
 
@@ -30,6 +38,14 @@ function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): voi
   if (!el) return;
   el.textContent = message;
   el.className = kind === "info" ? "" : kind;
+}
+
+function isOpenAIModel(model: string): boolean {
+  return model.startsWith(OPENAI_MODEL_PREFIX);
+}
+
+function modelProviderLabel(model: string): string {
+  return isOpenAIModel(model) ? "OpenAI" : "Gemini";
 }
 
 // UXP's DOM does not support setting innerHTML — clear by removing children.
@@ -82,10 +98,14 @@ async function onGenerate(): Promise<void> {
   if (running) return;
   setStatus("Starting…"); // immediate feedback that the click was received
 
-  const apiKey = ($("apiKey").value || "").trim();
   const prompt = ($("prompt").value || "").trim();
+  const model = $("model").value || "gemini-3-pro-image";
+  const provider = modelProviderLabel(model);
+  const apiKey = (
+    isOpenAIModel(model) ? $("openaiApiKey").value || "" : $("geminiApiKey").value || ""
+  ).trim();
   if (!apiKey) {
-    setStatus("Enter your Gemini API key and press Save.", "error");
+    setStatus(`Enter your ${provider} API key and press Save.`, "error");
     return;
   }
   if (!prompt) {
@@ -93,7 +113,6 @@ async function onGenerate(): Promise<void> {
     return;
   }
 
-  const model = $("model").value || "gemini-3-pro-image";
   const resolution = $("resolution").value || "auto";
 
   running = true;
@@ -137,9 +156,9 @@ async function onGenerate(): Promise<void> {
     const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
 
     setStatus(
-      `Generating ${aspectRatio} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–40s)`
+      `Generating ${aspectRatio} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–60s)`
     );
-    const result = await generateEdit({
+    const request = {
       apiKey,
       model,
       prompt,
@@ -147,7 +166,10 @@ async function onGenerate(): Promise<void> {
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
       aspectRatio,
       imageSize: resolution === "auto" ? undefined : resolution,
-    });
+    };
+    const result = isOpenAIModel(model)
+      ? await generateOpenAIEdit(request)
+      : await generateEdit(request);
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
@@ -162,7 +184,7 @@ async function onGenerate(): Promise<void> {
       rgba,
       cropW,
       cropH,
-      isRegion ? "Nano Banana Pro edit (masked)" : "Nano Banana Pro edit"
+      isRegion ? `${provider} edit (masked)` : `${provider} edit`
     );
 
     console.log("[NBP]", read.debug);
@@ -277,7 +299,8 @@ async function onFitNearest(): Promise<void> {
 }
 
 async function restoreSettings(): Promise<void> {
-  setValueSafe($("apiKey"), await loadApiKey());
+  setValueSafe($("geminiApiKey"), await loadApiKey());
+  setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
   for (const id of PICKERS) {
     const v = loadSetting(id, "");
     if (v) setPickerSafe($(id), v);
@@ -295,13 +318,22 @@ async function init(): Promise<void> {
     // Register the panel entrypoint declared in manifest.json.
     entrypoints.setup({ panels: { nbpEditorPanel: { show() {} } } });
 
-    $("saveKey").addEventListener("click", async () => {
-      const apiKey = ($("apiKey").value || "").trim();
+    $("saveGeminiKey").addEventListener("click", async () => {
+      const apiKey = ($("geminiApiKey").value || "").trim();
       try {
         await saveApiKey(apiKey);
-        setStatus(apiKey ? "API key saved securely." : "API key cleared.", "ok");
+        setStatus(apiKey ? "Gemini API key saved securely." : "Gemini API key cleared.", "ok");
       } catch (err: any) {
-        setStatus("Could not save API key: " + (err?.message || String(err)), "error");
+        setStatus("Could not save Gemini API key: " + (err?.message || String(err)), "error");
+      }
+    });
+    $("saveOpenAIKey").addEventListener("click", async () => {
+      const apiKey = ($("openaiApiKey").value || "").trim();
+      try {
+        await saveOpenAIApiKey(apiKey);
+        setStatus(apiKey ? "OpenAI API key saved securely." : "OpenAI API key cleared.", "ok");
+      } catch (err: any) {
+        setStatus("Could not save OpenAI API key: " + (err?.message || String(err)), "error");
       }
     });
     $("addRefs").addEventListener("click", onAddRefs);

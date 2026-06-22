@@ -25,12 +25,16 @@
   </style>
 </head>
 <body>
-  <h3>API Key</h3>
+  <h3>API Keys</h3>
   <div class="row">
-    <sp-textfield id="apiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
-    <sp-button id="saveKey" variant="secondary" size="s">Save</sp-button>
+    <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
+    <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
   </div>
-  <div class="muted">Stored securely on this machine only. Get a key at aistudio.google.com.</div>
+  <div class="row">
+    <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
+    <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+  </div>
+  <div class="muted">Stored securely on this machine only. Gemini keys come from aistudio.google.com, OpenAI keys from platform.openai.com.</div>
 
   <sp-divider size="s"></sp-divider>
 
@@ -82,6 +86,11 @@
       <sp-menu slot="options">
         <sp-menu-item value="gemini-3-pro-image" selected>Nano Banana Pro (best)</sp-menu-item>
         <sp-menu-item value="gemini-2.5-flash-image">Nano Banana (fast / cheap)</sp-menu-item>
+        <sp-menu-item value="openai:gpt-image-2">OpenAI GPT Image 2</sp-menu-item>
+        <sp-menu-item value="openai:chatgpt-image-latest">OpenAI ChatGPT Image latest</sp-menu-item>
+        <sp-menu-item value="openai:gpt-image-1.5">OpenAI GPT Image 1.5</sp-menu-item>
+        <sp-menu-item value="openai:gpt-image-1">OpenAI GPT Image 1</sp-menu-item>
+        <sp-menu-item value="openai:gpt-image-1-mini">OpenAI GPT Image 1 mini</sp-menu-item>
       </sp-menu>
     </sp-picker>
   </div>
