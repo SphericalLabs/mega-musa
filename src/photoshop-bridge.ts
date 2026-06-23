@@ -331,7 +331,7 @@ export async function scaleViaPhotoshop(
         // Reductions -> Bicubic Sharper, enlargements -> Bicubic Smoother.
         const method =
           dstW * dstH < srcW * srcH
-            ? "bicubicSharper"
+            ? "bicubicSmoother"
             : dstW * dstH > srcW * srcH
               ? "bicubicSmoother"
               : "bicubic";
