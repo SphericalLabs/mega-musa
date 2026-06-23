@@ -217,15 +217,17 @@ export async function readRegion(
   );
 }
 
-// Modal step 2: create a new layer and write the edited RGBA into `bounds`.
-// Alpha already encodes the selection, so no layer mask is needed.
+// Modal step 2: create a new layer, write the edited RGBA into `bounds`, and (for
+// region edits) add a layer mask that reveals the live selection — so Photoshop
+// itself clips the result to the exact selection shape, feather and all.
 export async function placeResult(
   docId: number,
   bounds: Bounds,
   rgba: Uint8Array,
   width: number,
   height: number,
-  layerName: string
+  layerName: string,
+  maskToSelection: boolean
 ): Promise<void> {
   await core.executeAsModal(
     async () => {
@@ -262,6 +264,24 @@ export async function placeResult(
         imageData,
       });
       imageData.dispose();
+
+      // Clip to the selection with a real layer mask. The user's selection is
+      // still live (we never altered it), so "reveal selection" reproduces any
+      // lasso / ellipse / feather exactly, rendered by Photoshop.
+      if (maskToSelection) {
+        await action.batchPlay(
+          [
+            {
+              _obj: "make",
+              new: { _class: "channel" },
+              at: { _ref: "channel", _enum: "channel", _value: "mask" },
+              using: { _enum: "userMaskEnabled", _value: "revealSelection" },
+              _options: { dialogOptions: "dontDisplay" },
+            },
+          ],
+          {}
+        );
+      }
     },
     { commandName: "Nano Banana Pro: place result" }
   );

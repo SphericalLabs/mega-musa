@@ -10,7 +10,7 @@ import {
   setRectSelection,
   Bounds,
 } from "./photoshop-bridge";
-import { encodePng, decodeImage, toRGBA, coverResampleRGBA, applyAlphaMask } from "./image-codec";
+import { encodePng, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
 import { generateOpenAIEdit, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
 import { pickReferenceImages, RefImage } from "./references";
@@ -181,7 +181,9 @@ async function onGenerate(): Promise<void> {
     const cropH = region.bottom - region.top;
 
     setStatus(isRegion ? "Reading selected region…" : "Reading image…");
-    const read = await readRegion(docId, region, isRegion);
+    // withMask=false: the selection shape is applied later as a Photoshop layer
+    // mask, so we don't read/resample it here (and leave the selection untouched).
+    const read = await readRegion(docId, region, false);
     const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
 
     const sizeLabel = geminiAspect ?? openaiSize ?? "auto";
@@ -218,7 +220,6 @@ async function onGenerate(): Promise<void> {
         rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
       }
     }
-    if (read.mask) applyAlphaMask(rgba, read.mask); // clip the edit to the selection
 
     setStatus("Placing result…");
     await placeResult(
@@ -227,7 +228,8 @@ async function onGenerate(): Promise<void> {
       rgba,
       cropW,
       cropH,
-      isRegion ? `${provider} edit (masked)` : `${provider} edit`
+      isRegion ? `${provider} edit (masked)` : `${provider} edit`,
+      isRegion
     );
 
     console.log("[NBP]", read.debug);
