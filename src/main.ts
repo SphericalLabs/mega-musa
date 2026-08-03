@@ -12,7 +12,7 @@ import {
 } from "./photoshop-bridge";
 import { encodePng, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
-import { generateOpenAIEdit, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
+import { generateOpenAIImage, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
 import { pickReferenceImages, RefImage } from "./references";
 import {
   loadApiKey,
@@ -40,6 +40,15 @@ function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): voi
   if (!el) return;
   el.textContent = message;
   el.className = kind === "info" ? "" : kind;
+}
+
+// A second, persistent line under the status box. Status text is replaced on
+// every step of a run; the note survives so framing decisions the plugin made on
+// the user's behalf stay readable while the request is in flight and afterwards.
+function setNote(message: string): void {
+  const el = $("note");
+  if (!el) return;
+  el.textContent = message;
 }
 
 function isOpenAIModel(model: string): boolean {
@@ -99,6 +108,7 @@ async function onAddRefs(): Promise<void> {
 async function onGenerate(): Promise<void> {
   if (running) return;
   setStatus("Starting…"); // immediate feedback that the click was received
+  setNote(""); // drop the previous run's framing note
 
   const prompt = ($("prompt").value || "").trim();
   const model = $("model").value || "gemini-3-pro-image";
@@ -116,6 +126,10 @@ async function onGenerate(): Promise<void> {
   }
 
   const resolution = $("resolution").value || "auto";
+  // Unticked: the canvas contributes nothing to the request. With no reference
+  // images either, that makes this a plain text-to-image generation which is
+  // still placed into the selection's area and shape.
+  const includeSelection = isChecked($("includeSelection"));
 
   running = true;
   $("generate").disabled = true;
@@ -127,9 +141,10 @@ async function onGenerate(): Promise<void> {
 
     const sel = await getSelectionBounds();
     // Reflect the selection's nearest supported ratio in the picker — display
-    // only. We deliberately never modify the selection here, so lasso / ellipse /
+    // only. An existing selection is never modified, so lasso / ellipse /
     // feathered shapes survive to become the result's mask. The crop is framed to
     // a supported ratio later (fitRegionToRatio) using only the bounding box.
+    // (When there is no selection we do set one — see the !isRegion block below.)
     if (sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1) {
       const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
       setPickerSafe($("selRatio"), info.label);
@@ -145,50 +160,96 @@ async function onGenerate(): Promise<void> {
     const padW = basePad.right - basePad.left;
     const padH = basePad.bottom - basePad.top;
 
-    // Pick the exact ratio the model will output, then (for region edits) reshape
-    // the crop to match it, so the later cover-fit is a pure scale — no zoom,
-    // trim or shift. gpt-image-2 takes any size, so we request the crop's exact
-    // ratio; every other model is limited to fixed ratios, so we snap to the
-    // nearest one and reshape the crop to it. Whole-image edits keep the full
-    // canvas (no reshape) and accept the small residual fit.
+    // Pick the exact ratio the model will output, then reshape the crop to match
+    // it, so the later cover-fit is a pure scale — no zoom, trim or shift. This
+    // applies to whole-image edits too: framing the canvas to the ratio the model
+    // actually returns is what keeps the result from coming back stretched.
+    // gpt-image-2 is the exception — it takes any size, so we request the crop's
+    // own ratio and leave the crop alone.
     let region = basePad;
     let geminiAspect: string | undefined;
     let openaiSize: string | undefined;
+    let ratioLabel = ""; // "" => the model matched the crop's own shape
     if (isOpenAIModel(model)) {
       if (isGptImage2(model)) {
         openaiSize = gptImage2Size(padW, padH, resolution === "auto" ? undefined : resolution);
       } else {
         const presets = [
-          { r: 1, size: "1024x1024" },
-          { r: 3 / 2, size: "1536x1024" },
-          { r: 2 / 3, size: "1024x1536" },
+          { r: 1, size: "1024x1024", label: "1:1" },
+          { r: 3 / 2, size: "1536x1024", label: "3:2" },
+          { r: 2 / 3, size: "1024x1536", label: "2:3" },
         ];
         const cr = padW / padH;
         const best = presets.reduce((a, b) =>
           Math.abs(Math.log(b.r) - Math.log(cr)) < Math.abs(Math.log(a.r) - Math.log(cr)) ? b : a
         );
         openaiSize = best.size;
-        if (isRegion) region = fitRegionToRatio(basePad, best.r, docW, docH);
+        ratioLabel = best.label;
+        region = fitRegionToRatio(basePad, best.r, docW, docH);
       }
     } else {
       geminiAspect = nearestSupportedAspectRatio(padW, padH);
-      if (isRegion) {
-        const [rw, rh] = geminiAspect.split(":").map(Number);
-        region = fitRegionToRatio(basePad, rw / rh, docW, docH);
-      }
+      ratioLabel = geminiAspect;
+      const [rw, rh] = geminiAspect.split(":").map(Number);
+      region = fitRegionToRatio(basePad, rw / rh, docW, docH);
     }
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
 
-    setStatus(isRegion ? "Reading selected region…" : "Reading image…");
-    // withMask=false: the selection shape is applied later as a Photoshop layer
-    // mask, so we don't read/resample it here (and leave the selection untouched).
-    const read = await readRegion(docId, region, false);
-    const basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
+    // Nothing was selected: treat the whole document as the target, framed to the
+    // ratio the model will return, and make that framing the live selection so
+    // the user can see exactly which area is in play.
+    const notes: string[] = [];
+    if (!isRegion) {
+      await setRectSelection(region);
+      if (ratioLabel) {
+        setPickerSafe($("selRatio"), ratioLabel);
+        saveSetting("selRatio", ratioLabel);
+      }
+      const cropped = cropW !== docW || cropH !== docH;
+      const what = includeSelection ? "what was sent" : "where the result lands";
+      if (!ratioLabel) {
+        notes.push(`No selection — used the full image (${docW}×${docH}); this model matches its shape.`);
+      } else if (cropped) {
+        const trimmed =
+          cropW !== docW ? `${docW - cropW}px off the width` : `${docH - cropH}px off the height`;
+        notes.push(
+          `No selection — selected the full image and fit it to ${ratioLabel}: ` +
+            `${cropW}×${cropH} of ${docW}×${docH} (${trimmed}). The selection shows ${what}.`
+        );
+      } else {
+        notes.push(
+          `No selection — selected the full image (${docW}×${docH}), already ${ratioLabel}, so nothing was cropped.`
+        );
+      }
+    }
+    if (!includeSelection) {
+      notes.push(
+        refs.length
+          ? `“Include Photoshop selection” is off — generating from the prompt and ${refs.length} reference image${refs.length === 1 ? "" : "s"} only.`
+          : "“Include Photoshop selection” is off and there are no references — plain text-to-image from the prompt."
+      );
+    }
+    setNote(notes.join(" "));
+
+    let basePng: Uint8Array | undefined;
+    if (includeSelection) {
+      setStatus(isRegion ? "Reading selected region…" : "Reading full image…");
+      // withMask=false: the selection shape is applied later as a Photoshop layer
+      // mask, so we don't read/resample it here (and leave the selection untouched).
+      const read = await readRegion(docId, region, false);
+      basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
+      console.log("[NBP]", read.debug);
+    }
 
     const sizeLabel = geminiAspect ?? openaiSize ?? "auto";
+    const modeLabel = includeSelection
+      ? "editing the canvas"
+      : refs.length
+        ? "from references"
+        : "text-to-image";
     setStatus(
-      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution} with ${model}…  (10–60s)`
+      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution} with ${model} — ${modeLabel}…  (10–60s)`
     );
     const baseReq = {
       apiKey,
@@ -198,7 +259,7 @@ async function onGenerate(): Promise<void> {
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
     };
     const result = isOpenAIModel(model)
-      ? await generateOpenAIEdit({ ...baseReq, size: openaiSize as string })
+      ? await generateOpenAIImage({ ...baseReq, size: openaiSize as string })
       : await generateEdit({
           ...baseReq,
           aspectRatio: geminiAspect,
@@ -222,21 +283,21 @@ async function onGenerate(): Promise<void> {
     }
 
     setStatus("Placing result…");
+    const kind = includeSelection ? "edit" : "image";
     await placeResult(
       docId,
       region,
       rgba,
       cropW,
       cropH,
-      isRegion ? `${provider} edit (masked)` : `${provider} edit`,
+      isRegion ? `${provider} ${kind} (masked)` : `${provider} ${kind}`,
       isRegion
     );
 
-    console.log("[NBP]", read.debug);
     setStatus(
       isRegion
-        ? "Done — edit clipped to your selection (new layer)."
-        : "Done — edit added as a new layer.",
+        ? "Done — result clipped to your selection (new layer)."
+        : "Done — full-image result added as a new layer.",
       "ok"
     );
   } catch (err: any) {
@@ -260,6 +321,34 @@ function setValueSafe(el: any, v: string): void {
   }
   try {
     el.setAttribute("value", v);
+  } catch {
+    /* ignore */
+  }
+}
+
+// sp-checkbox exposes `checked` as a property, but fall back to the reflected
+// attribute (and default to on) so a runtime quirk can never silently turn the
+// canvas input off.
+function isChecked(el: any): boolean {
+  if (!el) return true;
+  if (typeof el.checked === "boolean") return el.checked;
+  try {
+    return el.hasAttribute("checked");
+  } catch {
+    return true;
+  }
+}
+
+function setCheckedSafe(el: any, on: boolean): void {
+  if (!el) return;
+  try {
+    el.checked = on;
+  } catch {
+    /* getter-only property */
+  }
+  try {
+    if (on) el.setAttribute("checked", "");
+    else el.removeAttribute("checked");
   } catch {
     /* ignore */
   }
@@ -350,12 +439,17 @@ async function restoreSettings(): Promise<void> {
     const v = loadSetting(id, "");
     if (v) setPickerSafe($(id), v);
   }
+  // Defaults to on — only an explicit "0" from a previous session turns it off.
+  setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
 }
 
 function persistSettingsHooks(): void {
   for (const id of PICKERS) {
     $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
   }
+  $("includeSelection")?.addEventListener("change", () =>
+    saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0")
+  );
 }
 
 async function init(): Promise<void> {

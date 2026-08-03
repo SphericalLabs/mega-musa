@@ -22,6 +22,8 @@
               padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }
     #status.error { background: rgba(226,75,74,0.18); }
     #status.ok    { background: rgba(29,158,117,0.18); }
+    #note { margin-top: 6px; font-size: 11px; line-height: 1.4; opacity: 0.8; }
+    #note:empty { display: none; }
   </style>
 </head>
 <body>
@@ -108,12 +110,18 @@
   </div>
   <div class="muted">Aspect ratio is auto-matched to your selection's shape (cover-fit, no distortion).</div>
 
-  <div class="muted">With a selection active, only that area changes; otherwise the whole image is edited.</div>
+  <div class="row" style="margin-top:10px">
+    <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
+  </div>
+  <div class="muted">On: the selected pixels are sent as the image to edit. Off: nothing from the canvas is sent &mdash; with no reference images that is plain text-to-image, rendered into the same area and shape.</div>
+
+  <div class="muted">With a selection active, only that area changes. Without one, the full image is selected for you and framed to the nearest supported ratio &mdash; the panel says what it did.</div>
 
   <sp-divider size="s"></sp-divider>
 
   <sp-button id="generate" variant="cta" style="width:100%">Generate Edit</sp-button>
   <div id="status">Loading…</div>
+  <div id="note"></div>
 
   <script src="index.js"></script>
 </body>

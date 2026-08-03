@@ -54,7 +54,7 @@ export interface GenerateOptions {
   apiKey: string;
   model: string;
   prompt: string;
-  baseImagePng: Uint8Array;
+  baseImagePng?: Uint8Array; // omitted => generate from the prompt (+ references) alone
   references: RefImage[];
   aspectRatio?: string; // undefined => let the model match the input
   imageSize?: string; // undefined => let the model match the input
@@ -68,10 +68,13 @@ export interface GenerateResult {
 
 // Calls the Gemini generateContent REST endpoint with an image-in / image-out
 // request. Mirrors the request shape validated in generate_images.py, using the
-// JSON (camelCase) field names the REST API expects.
+// JSON (camelCase) field names the REST API expects. With no base image and no
+// references the same endpoint is a plain text-to-image call.
 export async function generateEdit(opts: GenerateOptions): Promise<GenerateResult> {
   const parts: any[] = [{ text: opts.prompt }];
-  parts.push({ inlineData: { mimeType: "image/png", data: bytesToBase64(opts.baseImagePng) } });
+  if (opts.baseImagePng) {
+    parts.push({ inlineData: { mimeType: "image/png", data: bytesToBase64(opts.baseImagePng) } });
+  }
   for (const ref of opts.references) {
     parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.base64 } });
   }

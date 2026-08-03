@@ -1,7 +1,8 @@
 import { base64ToBytes } from "./image-codec";
 import { RefImage, GenerateResult } from "./gemini";
 
-const ENDPOINT = "https://api.openai.com/v1/images/edits";
+const EDITS_ENDPOINT = "https://api.openai.com/v1/images/edits";
+const GENERATIONS_ENDPOINT = "https://api.openai.com/v1/images/generations";
 
 export const OPENAI_MODEL_PREFIX = "openai:";
 
@@ -9,7 +10,7 @@ export interface OpenAIGenerateOptions {
   apiKey: string;
   model: string;
   prompt: string;
-  baseImagePng: Uint8Array;
+  baseImagePng?: Uint8Array; // omitted => generate from the prompt (+ references) alone
   references: RefImage[];
   size: string; // exact OpenAI `size` value, e.g. "1024x1024" or "1456x1088"
   signal?: AbortSignal;
@@ -129,7 +130,9 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   pushField(parts, boundary, "output_format", "png");
   pushField(parts, boundary, "quality", "auto");
   pushField(parts, boundary, "size", opts.size);
-  pushFile(parts, boundary, "image[]", "selection.png", "image/png", opts.baseImagePng);
+  if (opts.baseImagePng) {
+    pushFile(parts, boundary, "image[]", "selection.png", "image/png", opts.baseImagePng);
+  }
   opts.references.forEach((ref, index) => {
     pushFile(
       parts,
@@ -148,25 +151,38 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   };
 }
 
-// Calls OpenAI's Images edit endpoint with the cropped Photoshop region and any
-// references as multipart image[] parts. The response is base64 image data.
-export async function generateOpenAIEdit(opts: OpenAIGenerateOptions): Promise<GenerateResult> {
+// Calls OpenAI's Images API with the cropped Photoshop region and any references
+// as multipart image[] parts. With no input images at all the edits endpoint is
+// not usable (it requires image[]), so we fall back to /images/generations — a
+// plain JSON text-to-image call. Either way the response is base64 image data.
+export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<GenerateResult> {
   const model = openAIModelId(opts.model);
-  const multipart = multipartBody(opts, model);
+  const textOnly = !opts.baseImagePng && opts.references.length === 0;
 
   const requestInit: any = {
     method: "POST",
-    headers: {
-      "Content-Type": multipart.contentType,
-      Authorization: `Bearer ${opts.apiKey}`,
-    },
-    body: multipart.body,
+    headers: { Authorization: `Bearer ${opts.apiKey}` },
   };
+  if (textOnly) {
+    requestInit.headers["Content-Type"] = "application/json";
+    requestInit.body = JSON.stringify({
+      model,
+      prompt: opts.prompt,
+      n: 1,
+      output_format: "png",
+      quality: "auto",
+      size: opts.size,
+    });
+  } else {
+    const multipart = multipartBody(opts, model);
+    requestInit.headers["Content-Type"] = multipart.contentType;
+    requestInit.body = multipart.body;
+  }
   if (opts.signal) requestInit.signal = opts.signal;
 
   let res: Response;
   try {
-    res = await fetch(ENDPOINT, requestInit);
+    res = await fetch(textOnly ? GENERATIONS_ENDPOINT : EDITS_ENDPOINT, requestInit);
   } catch (err: any) {
     throw new Error(`OpenAI network request failed before an HTTP response: ${err?.message || err}`);
   }
