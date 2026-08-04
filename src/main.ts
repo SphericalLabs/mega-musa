@@ -20,6 +20,8 @@ import {
   DEFAULT_MODEL,
   modelSpec,
   resolutionLabel,
+  resolutionMenuLabel,
+  estimatedCHF,
   nearestImageSize,
   nearestRatioLabel,
 } from "./models";
@@ -31,6 +33,7 @@ import {
   loadSetting,
   saveSetting,
 } from "./storage";
+import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
 
 const { entrypoints } = require("uxp");
 
@@ -44,11 +47,56 @@ function $(id: string): any {
   return document.getElementById(id);
 }
 
+let statusKind: "info" | "error" | "ok" = "info";
+let pulseTimer: any = null;
+let pulseStep = 0;
+let pulseDir = 1;
+const PULSE_STEPS = 15; // must match the #status.pulseN rules in index.html
+// 28 frames per breath (up and back down), so this sets the period: 1.68s.
+const PULSE_MS = 60;
+
+// The status box's class carries the kind (which picks the gray / green / red
+// tint) and, while a request is in flight, the current step of the pulse. Deriving
+// it in one place means a status update mid-run cannot knock the pulse out.
+function applyStatusClass(): void {
+  const el = $("status");
+  if (!el) return;
+  // Only the neutral gray breathes — a finished run's green or red sits still.
+  if (statusKind === "info") {
+    el.className = pulseTimer === null ? "" : `pulse${pulseStep}`;
+    return;
+  }
+  el.className = statusKind;
+}
+
+// Breathe the status box's background while a request is in flight, so a 10-60s
+// wait doesn't look frozen. UXP supports no CSS animations or transitions, so the
+// pulse is a timer walking the #status.pulseN classes up and back down. Only the
+// background moves; the text is never dimmed or faded.
+function setBusy(on: boolean): void {
+  if (on === (pulseTimer !== null)) return;
+  if (on) {
+    pulseStep = 0;
+    pulseDir = 1;
+    pulseTimer = setInterval(() => {
+      pulseStep += pulseDir;
+      if (pulseStep >= PULSE_STEPS - 1) pulseDir = -1;
+      else if (pulseStep <= 0) pulseDir = 1;
+      applyStatusClass();
+    }, PULSE_MS);
+  } else {
+    clearInterval(pulseTimer);
+    pulseTimer = null;
+  }
+  applyStatusClass();
+}
+
 function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): void {
   const el = $("status");
   if (!el) return;
   el.textContent = message;
-  el.className = kind === "info" ? "" : kind;
+  statusKind = kind;
+  applyStatusClass();
 }
 
 // A second, persistent line under the status box. Status text is replaced on
@@ -58,6 +106,11 @@ function setNote(message: string): void {
   const el = $("note");
   if (!el) return;
   el.textContent = message;
+}
+
+function renderBudget(b?: Budget): void {
+  const el = $("budget");
+  if (el) el.textContent = budgetText(b || loadBudget());
 }
 
 function isOpenAIModel(model: string): boolean {
@@ -181,6 +234,7 @@ async function onGenerate(): Promise<void> {
 
   running = true;
   $("generate").disabled = true;
+  setBusy(true);
   try {
     const doc = getActiveDoc();
     const docId: number = doc.id;
@@ -315,6 +369,10 @@ async function onGenerate(): Promise<void> {
           imageSize: resolution === "auto" ? undefined : resolution,
         });
 
+    // Charged the moment the image comes back, not once it lands on the canvas —
+    // a failure in the scaling or placing below still costs money.
+    renderBudget(addToBudget(estimatedCHF(spec, resolution)));
+
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
     // Resample the result to the crop box. Hand it to Photoshop's Image Size
@@ -354,6 +412,8 @@ async function onGenerate(): Promise<void> {
   } finally {
     running = false;
     $("generate").disabled = false;
+    // After the catch above, so the resting colour is the run's final ok/error tint.
+    setBusy(false);
   }
 }
 
@@ -453,8 +513,8 @@ function applyModelCapabilities(modelId: string, preferRatio?: string, preferSiz
   const size = nearestImageSize(wantSize, spec);
   buildMenu(
     "resolution",
-    [{ value: "auto", label: "Auto" }].concat(
-      spec.imageSizes.map((s) => ({ value: s, label: resolutionLabel(s) }))
+    [{ value: "auto", label: resolutionMenuLabel("auto", spec) }].concat(
+      spec.imageSizes.map((s) => ({ value: s, label: resolutionMenuLabel(s, spec) }))
     ),
     size
   );
@@ -624,6 +684,10 @@ async function init(): Promise<void> {
     $("generate").addEventListener("click", onGenerate);
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
+    $("resetBudget").addEventListener("click", () => {
+      renderBudget(resetBudget());
+      setStatus("Budget counter reset — counting from today.", "ok");
+    });
 
     // Cmd/Ctrl+Return in the prompt field fires Generate immediately.
     $("prompt").addEventListener("keydown", (e: KeyboardEvent) => {
@@ -646,6 +710,7 @@ async function init(): Promise<void> {
     await restoreSettings();
     persistSettingsHooks();
     renderThumbs();
+    renderBudget();
     setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
   } catch (err: any) {
     setStatus("Init error: " + (err?.message || String(err)), "error");

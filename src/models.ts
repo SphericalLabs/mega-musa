@@ -15,7 +15,18 @@ export interface ModelSpec {
   aspectRatios: string[];
   // OpenAI models with a fixed menu of output sizes: the ratio picks the size.
   fixedSizes?: { ratio: number; size: string; label: string }[];
+  // USD for one OUTPUT image, keyed by imageSize token — the prompt and any input
+  // images (the canvas crop, reference photos) are billed on top of this. A
+  // [min, max] pair because for the OpenAI models the published price also
+  // depends on things the resolution menu does not pick. Omit a key to show no
+  // price for that tier; "auto" is only listed where the default is documented.
+  prices?: Record<string, [number, number]>;
 }
+
+// Published prices are USD. ECB reference rate of 2026-08-03 via frankfurter.dev
+// — the francs in the menu move with this one constant, so bump it if the rate
+// drifts far enough to matter.
+const USD_CHF = 0.808;
 
 // Every Gemini image model frames to the same ten ratios — that part does not
 // vary by model, only the resolution tiers do.
@@ -36,6 +47,14 @@ export const MODELS: ModelSpec[] = [
     label: "Nano Banana Pro (2025)",
     imageSizes: ["1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
+    // 1120 output tokens for both 1K and 2K, 2000 for 4K, at $120/1M — so 2K is
+    // free extra resolution here. Gemini defaults to 1K when no size is sent.
+    prices: {
+      auto: [0.134, 0.134],
+      "1K": [0.134, 0.134],
+      "2K": [0.134, 0.134],
+      "4K": [0.24, 0.24],
+    },
   },
   {
     id: "gemini-3.1-flash-image",
@@ -43,12 +62,22 @@ export const MODELS: ModelSpec[] = [
     // The only model with the 512px tier.
     imageSizes: ["512px", "1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
+    // 747 / 1120 / 1680 / 2520 output tokens at $60/1M.
+    prices: {
+      auto: [0.067, 0.067],
+      "512px": [0.045, 0.045],
+      "1K": [0.067, 0.067],
+      "2K": [0.101, 0.101],
+      "4K": [0.151, 0.151],
+    },
   },
   {
     id: "gemini-2.5-flash-image",
     label: "Nano Banana (2025)",
     imageSizes: ["1K"],
     aspectRatios: GEMINI_RATIOS,
+    // 1290 output tokens at $30/1M.
+    prices: { auto: [0.039, 0.039], "1K": [0.039, 0.039] },
   },
   {
     id: "openai:gpt-image-2",
@@ -57,6 +86,13 @@ export const MODELS: ModelSpec[] = [
     label: "OpenAI GPT Image 2 (2026)",
     imageSizes: ["1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
+    // OpenAI publishes per-image prices for three legacy sizes only, and states
+    // that gpt-image-2 supports "thousands of valid resolutions" without giving a
+    // formula — its token count does not even rise monotonically with pixels. So
+    // only the 1K tier gets a price: $0.165 (3:2) to $0.211 (1:1) at high
+    // quality, which is what "auto" is assumed to pick. 2K and 4K cost more by an
+    // amount OpenAI does not publish, so they show no figure rather than a guess.
+    prices: { "1K": [0.165, 0.211] },
   },
   {
     id: "openai:gpt-image-1.5",
@@ -64,6 +100,8 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
+    // High quality, 1024² up to 1536×1024 — the ratio picker moves within this.
+    prices: { auto: [0.133, 0.2] },
   },
   {
     id: "openai:gpt-image-1",
@@ -71,6 +109,7 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
+    prices: { auto: [0.167, 0.25] },
   },
   {
     id: "openai:gpt-image-1-mini",
@@ -78,6 +117,7 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
+    prices: { auto: [0.036, 0.052] },
   },
 ];
 
@@ -93,6 +133,35 @@ export function resolutionLabel(token: string): string {
   if (token === "auto") return "Auto";
   if (token === "512px") return "512 px (0.5K)";
   return token;
+}
+
+// CHF for one output image. Where the published price spans a range this menu
+// cannot pick between — for the OpenAI models the aspect ratio, plus the quality
+// tier they choose themselves — take the middle of it and mark it "~".
+export function estimatedCHF(spec: ModelSpec, token: string): number | null {
+  const range = spec.prices && spec.prices[token];
+  if (!range) return null;
+  return ((range[0] + range[1]) / 2) * USD_CHF;
+}
+
+function priceLabel(spec: ModelSpec, token: string): string {
+  const chf = estimatedCHF(spec, token);
+  if (chf === null) return "";
+  const range = spec.prices![token];
+  return `${range[0] === range[1] ? "" : "~"}CHF ${chf.toFixed(2)}`;
+}
+
+// What the resolution picker shows: the tier plus what one output image costs, so
+// the price is visible at the moment you pick the resolution.
+export function resolutionMenuLabel(token: string, spec: ModelSpec): string {
+  const label = resolutionLabel(token);
+  // Auto hands the choice to the model, so a figure beside it would read as a
+  // promise. Price it only where Auto is the entire menu (the fixed-size OpenAI
+  // models) and no tier row is there to carry the number. The table still knows
+  // what Auto costs — the budget counter uses it.
+  if (token === "auto" && spec.imageSizes.length) return label;
+  const price = priceLabel(spec, token);
+  return price ? `${label} / ${price}` : label;
 }
 
 // Closest ratio in `options` to `want`, compared in log space so e.g. 2:1 sits
