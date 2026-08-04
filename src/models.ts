@@ -137,7 +137,7 @@ export function resolutionLabel(token: string): string {
 
 // CHF for one output image. Where the published price spans a range this menu
 // cannot pick between — for the OpenAI models the aspect ratio, plus the quality
-// tier they choose themselves — take the middle of it and mark it "~".
+// tier they choose themselves — take the middle of it and mark it "ca.".
 export function estimatedCHF(spec: ModelSpec, token: string): number | null {
   const range = spec.prices && spec.prices[token];
   if (!range) return null;
@@ -148,7 +148,7 @@ function priceLabel(spec: ModelSpec, token: string): string {
   const chf = estimatedCHF(spec, token);
   if (chf === null) return "";
   const range = spec.prices![token];
-  return `${range[0] === range[1] ? "" : "~"}CHF ${chf.toFixed(2)}`;
+  return `${range[0] === range[1] ? "" : "ca. "}CHF ${chf.toFixed(2)}`;
 }
 
 // What the resolution picker shows: the tier plus what one output image costs, so

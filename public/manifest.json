@@ -30,8 +30,8 @@
       "label": { "default": "Nano Banana Pro Edit" },
       "minimumSize": { "width": 270, "height": 320 },
       "maximumSize": { "width": 900, "height": 2000 },
-      "preferredDockedSize": { "width": 340, "height": 720 },
-      "preferredFloatingSize": { "width": 380, "height": 800 },
+      "preferredDockedSize": { "width": 340, "height": 900 },
+      "preferredFloatingSize": { "width": 380, "height": 900 },
       "icons": [
         {
           "width": 32,

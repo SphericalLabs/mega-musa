@@ -80,5 +80,5 @@ export function formatDate(iso: string): string {
 
 export function budgetText(b: Budget): string {
   const counts = b.unpriced ? `${b.images} images, ${b.unpriced} unpriced` : `${b.images} images`;
-  return `Budget spent since ${formatDate(b.since)}: ~CHF ${b.chf.toFixed(2)} (${counts})`;
+  return `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)} (${counts})`;
 }

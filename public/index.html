@@ -11,18 +11,21 @@
        few px as the panel crosses the height where scrolling begins. */
     #scroll { position: absolute; top: 0; left: 0; right: 0; bottom: 0;
               overflow-y: auto; padding: 8px 10px 14px; }
-    h3 { margin: 4px 0 2px; font-size: 12px; font-weight: 700; }
-    .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+    h3 { margin: 9px 0 2px; font-size: 12px; font-weight: 700; }
+    .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
     .grow { flex: 1; }
     .field { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
     .field > .row { margin: 0; }
+    /* UXP does not reliably render flex gap. Give the adjacent controls explicit
+       margins so the spacing also appears inside Photoshop. */
+    #saveGeminiKey, #saveOpenAIKey, #fitSelection, #pasteRef { margin-left: 7px; }
     .label { font-size: 11px; opacity: 0.8; }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
     #model, #resolution { width: 100%; }
     sp-divider { margin: 10px 0; }
-    #prompt { width: 100%; min-height: 64px; }
+    #prompt { width: 100%; }
     #dropWebview { display: block; margin: 6px 0; }
     #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
     .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
@@ -64,95 +67,91 @@
 </head>
 <body>
   <div id="scroll">
-  <h3>API Keys</h3>
-  <div class="field">
-    <span class="label">Google Gemini key &mdash; powers the Nano Banana models</span>
-    <div class="row">
-      <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
-      <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
+    <h3>API Keys</h3>
+    <div class="field">
+      <span class="label">Google Gemini key &mdash; powers the Nano Banana models</span>
+      <div class="row">
+        <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
+        <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
+      </div>
     </div>
-  </div>
-  <div class="field">
-    <span class="label">OpenAI key &mdash; powers the GPT Image models</span>
-    <div class="row">
-      <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
-      <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+    <div class="field">
+      <span class="label">OpenAI key &mdash; powers the GPT Image models</span>
+      <div class="row">
+        <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
+        <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+      </div>
     </div>
-  </div>
-  <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
+    <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
 
-  <sp-divider size="s"></sp-divider>
+    <sp-divider size="s"></sp-divider>
 
-  <div class="field">
-    <span class="label">Aspect Ratio</span>
-    <div class="row">
-      <!-- Options for this and the two pickers below are generated at runtime
-           from the capability table in src/models.ts, so each model only ever
-           offers ratios and resolutions it can actually produce. -->
-      <sp-picker id="selRatio" size="s" class="grow">
+    <h3>Model Selection</h3>
+    <div class="field">
+      <span class="label">Model</span>
+      <sp-picker id="model" size="s">
         <sp-menu slot="options"></sp-menu>
       </sp-picker>
-      <sp-button id="fitSelection" variant="secondary" size="s">Fit Selection</sp-button>
     </div>
-    <sp-button id="fitNearest" variant="secondary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
-  </div>
-  <div class="muted">Draw a selection, then <b>Generate</b> &mdash; it auto-fits to the nearest official ratio (offset-free). <b>Fit Selection</b> reshapes to the ratio chosen above; <b>Fit to Nearest Aspect Ratio</b> picks the closest ratio, updates the menu, and grows the selection to match.</div>
+    <div class="field">
+      <span class="label">Resolution</span>
+      <sp-picker id="resolution" size="s">
+        <sp-menu slot="options"></sp-menu>
+      </sp-picker>
+    </div>
+    <div class="row spread">
+      <span id="budget" class="muted">Budget spent: &mdash;</span>
+      <sp-button id="resetBudget" variant="secondary" size="s">Reset</sp-button>
+    </div>
 
-  <sp-divider size="s"></sp-divider>
+    <sp-divider size="s"></sp-divider>
 
-  <div class="field">
-    <span class="label">Prompt</span>
-    <sp-textfield id="prompt" multiline placeholder="Enter the image instructions"></sp-textfield>
-  </div>
+    <h3>Prompt</h3>
+    <div class="field">
+      <sp-textfield id="prompt" placeholder="Enter the image instructions"></sp-textfield>
+    </div>
 
-  <h3>Reference Images</h3>
-  <div class="row spread">
+    <sp-divider size="s"></sp-divider>
+
+    <h3>Reference Images</h3>
+    <div class="row spread">
+      <div class="row">
+        <sp-button id="addRefs" variant="secondary" size="s">Add Files…</sp-button>
+        <sp-button id="pasteRef" variant="secondary" size="s">Paste</sp-button>
+      </div>
+      <div class="row">
+        <span id="refCount" class="muted">0/10</span>
+        <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
+      </div>
+    </div>
+    <webview id="dropWebview" src="plugin:/drop-target.html" width="100%" height="64px"></webview>
+    <div id="thumbs"></div>
+    <div class="muted">Drag PNG, JPEG or WebP files onto the box above, or use <b>Paste</b> for an image on the clipboard. A macOS screenshot goes to the clipboard with <b>⌃⇧⌘4</b>.</div>
     <div class="row">
-      <sp-button id="addRefs" variant="secondary" size="s">Add Files…</sp-button>
-      <sp-button id="pasteRef" variant="secondary" size="s">Paste</sp-button>
+      <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
     </div>
-    <div class="row">
-      <span id="refCount" class="muted">0/10</span>
-      <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
+
+    <sp-divider size="s"></sp-divider>
+
+    <h3>Aspect Ratio</h3>
+    <div class="field">
+      <div class="row">
+        <!-- Options for this picker are generated at runtime from the capability
+             table in src/models.ts, so each model only offers supported ratios. -->
+        <sp-picker id="selRatio" size="s" class="grow">
+          <sp-menu slot="options"></sp-menu>
+        </sp-picker>
+        <sp-button id="fitSelection" variant="secondary" size="s">Fit Selection</sp-button>
+      </div>
+      <sp-button id="fitNearest" variant="secondary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
     </div>
-  </div>
-  <webview id="dropWebview" src="plugin:/drop-target.html" width="100%" height="64px"></webview>
-  <div id="thumbs"></div>
-  <div class="muted">Drag PNG, JPEG or WebP files onto the box above, or use <b>Paste</b> for an image on the clipboard. A macOS screenshot goes to the clipboard with <b>⌃⇧⌘4</b>.</div>
+    <div class="muted">Draw a selection, then <b>Generate</b> &mdash; it auto-fits to the nearest official ratio (offset-free). <b>Fit Selection</b> reshapes to the ratio chosen above; <b>Fit to Nearest Aspect Ratio</b> picks the closest ratio, updates the menu, and grows the selection to match.</div>
 
-  <sp-divider size="s"></sp-divider>
+    <sp-divider size="s"></sp-divider>
 
-  <div class="field">
-    <span class="label">Model</span>
-    <sp-picker id="model" size="s">
-      <sp-menu slot="options"></sp-menu>
-    </sp-picker>
-  </div>
-
-  <div class="field">
-    <span class="label">Resolution</span>
-    <sp-picker id="resolution" size="s">
-      <sp-menu slot="options"></sp-menu>
-    </sp-picker>
-  </div>
-  <div class="muted">Aspect ratio is auto-matched to your selection's shape (cover-fit, no distortion). Both menus above list only what the selected model supports.</div>
-  <div class="row spread">
-    <span id="budget" class="muted">Budget spent: &mdash;</span>
-    <sp-button id="resetBudget" variant="secondary" size="s">Reset</sp-button>
-  </div>
-
-  <div class="row" style="margin-top:10px">
-    <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
-  </div>
-  <div class="muted">On: the selected pixels are sent as the image to edit. Off: nothing from the canvas is sent &mdash; with no reference images that is plain text-to-image, rendered into the same area and shape.</div>
-
-  <div class="muted">With a selection active, only that area changes. Without one, the active artboard is selected and framed to the nearest supported ratio. Documents without artboards use the full image.</div>
-
-  <sp-divider size="s"></sp-divider>
-
-  <sp-button id="generate" variant="cta" style="width:100%">Generate Edit</sp-button>
-  <div id="status">Loading…</div>
-  <div id="note"></div>
+    <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
+    <div id="status">Loading…</div>
+    <div id="note"></div>
   </div>
 
   <script src="index.js"></script>
