@@ -1,7 +1,9 @@
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import {
   getActiveDoc,
+  getActiveArtboard,
   getSelectionBounds,
+  intersectBounds,
   padBounds,
   fitRegionToRatio,
   readRegion,
@@ -454,8 +456,19 @@ async function onGenerate(): Promise<void> {
     const docId: number = doc.id;
     const docW: number = doc.width;
     const docH: number = doc.height;
+    const documentBounds: Bounds = { left: 0, top: 0, right: docW, bottom: docH };
+    const activeArtboard = await getActiveArtboard(doc);
+    const targetBounds = activeArtboard?.bounds || documentBounds;
+    const targetW = targetBounds.right - targetBounds.left;
+    const targetH = targetBounds.bottom - targetBounds.top;
 
-    const sel = await getSelectionBounds();
+    const rawSelection = await getSelectionBounds();
+    const hasSelection =
+      !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
+    const sel = hasSelection ? intersectBounds(rawSelection as Bounds, targetBounds) : null;
+    if (hasSelection && activeArtboard && !sel) {
+      throw new Error(`The selection does not overlap the active artboard “${activeArtboard.name}”.`);
+    }
     // Reflect the selection's nearest supported ratio in the picker — display
     // only. An existing selection is never modified, so lasso / ellipse /
     // feathered shapes survive to become the result's mask. The crop is framed to
@@ -466,13 +479,14 @@ async function onGenerate(): Promise<void> {
       setPickerSafe($("selRatio"), info.label);
       saveSetting("selRatio", info.label);
     }
-    const isRegion = !!sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1;
+    const isRegion = !!sel;
 
     // Region edit: crop to the selection (+ small padding for blending) so the
-    // model spends its full resolution on the detail. Else: whole document.
+    // model spends its full resolution on the detail. In an artboard document,
+    // padding and output framing never escape the active artboard.
     const basePad: Bounds = isRegion
-      ? padBounds(sel as Bounds, 0.06, docW, docH)
-      : { left: 0, top: 0, right: docW, bottom: docH };
+      ? padBounds(sel as Bounds, 0.06, targetBounds)
+      : targetBounds;
     const padW = basePad.right - basePad.left;
     const padH = basePad.bottom - basePad.top;
 
@@ -502,41 +516,53 @@ async function onGenerate(): Promise<void> {
         );
         openaiSize = best.size;
         ratioLabel = best.label;
-        region = fitRegionToRatio(basePad, best.ratio, docW, docH);
+        region = fitRegionToRatio(basePad, best.ratio, targetBounds);
       }
     } else {
       geminiAspect = nearestSupportedAspectRatio(padW, padH);
       ratioLabel = geminiAspect;
       const [rw, rh] = geminiAspect.split(":").map(Number);
-      region = fitRegionToRatio(basePad, rw / rh, docW, docH);
+      region = fitRegionToRatio(basePad, rw / rh, targetBounds);
     }
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
 
-    // Nothing was selected: treat the whole document as the target, framed to the
-    // ratio the model will return, and make that framing the live selection so
-    // the user can see exactly which area is in play.
+    // Nothing was selected: use the active artboard, or the full image in a
+    // non-artboard document. Make that framing the live selection so the user
+    // can see exactly which area is in play.
     const notes: string[] = [];
+    if (
+      isRegion &&
+      activeArtboard &&
+      rawSelection &&
+      (sel!.left !== rawSelection.left ||
+        sel!.top !== rawSelection.top ||
+        sel!.right !== rawSelection.right ||
+        sel!.bottom !== rawSelection.bottom)
+    ) {
+      notes.push(`Only the part of the selection inside active artboard “${activeArtboard.name}” is used.`);
+    }
     if (!isRegion) {
       await setRectSelection(region);
       if (ratioLabel) {
         setPickerSafe($("selRatio"), ratioLabel);
         saveSetting("selRatio", ratioLabel);
       }
-      const cropped = cropW !== docW || cropH !== docH;
+      const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
+      const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
       if (!ratioLabel) {
-        notes.push(`No selection — used the full image (${docW}×${docH}); this model matches its shape.`);
+        notes.push(`No selection — used ${targetName} (${targetW}×${targetH}); this model matches its shape.`);
       } else if (cropped) {
         const trimmed =
-          cropW !== docW ? `${docW - cropW}px off the width` : `${docH - cropH}px off the height`;
+          cropW !== targetW ? `${targetW - cropW}px off the width` : `${targetH - cropH}px off the height`;
         notes.push(
-          `No selection — selected the full image and fit it to ${ratioLabel}: ` +
-            `${cropW}×${cropH} of ${docW}×${docH} (${trimmed}). The selection shows ${what}.`
+          `No selection — selected ${targetName} and fit it to ${ratioLabel}: ` +
+            `${cropW}×${cropH} of ${targetW}×${targetH} (${trimmed}). The selection shows ${what}.`
         );
       } else {
         notes.push(
-          `No selection — selected the full image (${docW}×${docH}), already ${ratioLabel}, so nothing was cropped.`
+          `No selection — selected ${targetName} (${targetW}×${targetH}), already ${ratioLabel}, so nothing was cropped.`
         );
       }
     }
@@ -551,7 +577,13 @@ async function onGenerate(): Promise<void> {
 
     let basePng: Uint8Array | undefined;
     if (includeSelection) {
-      setStatus(isRegion ? "Reading selected region…" : "Reading full image…");
+      setStatus(
+        isRegion
+          ? "Reading selected region…"
+          : activeArtboard
+            ? `Reading active artboard “${activeArtboard.name}”…`
+            : "Reading full image…"
+      );
       // withMask=false: the selection shape is applied later as a Photoshop layer
       // mask, so we don't read/resample it here (and leave the selection untouched).
       const read = await readRegion(docId, region, false);
@@ -618,7 +650,9 @@ async function onGenerate(): Promise<void> {
     setStatus(
       isRegion
         ? "Done — result clipped to your selection (new layer)."
-        : "Done — full-image result added as a new layer.",
+        : activeArtboard
+          ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
+          : "Done — full-image result added as a new layer.",
       "ok"
     );
   } catch (err: any) {
@@ -769,7 +803,7 @@ function setPickerSafe(picker: any, v: string): void {
 
 // Grow `sel` outward around its center to exactly `targetAR` (w/h), clamped to
 // the canvas. Growing (not shrinking) keeps all originally-selected content.
-function ratioRect(sel: Bounds, targetAR: number, docW: number, docH: number): Bounds {
+function ratioRect(sel: Bounds, targetAR: number, limit: Bounds): Bounds {
   const w = sel.right - sel.left;
   const h = sel.bottom - sel.top;
   const cx = (sel.left + sel.right) / 2;
@@ -778,17 +812,17 @@ function ratioRect(sel: Bounds, targetAR: number, docW: number, docH: number): B
   let nh = h;
   if (targetAR > w / h) nw = h * targetAR;
   else nh = w / targetAR;
-  nw = Math.min(nw, docW);
-  nh = Math.min(nh, docH);
+  nw = Math.min(nw, limit.right - limit.left);
+  nh = Math.min(nh, limit.bottom - limit.top);
   let left = Math.round(cx - nw / 2);
   let top = Math.round(cy - nh / 2);
   let right = left + Math.round(nw);
   let bottom = top + Math.round(nh);
-  if (left < 0) { right -= left; left = 0; }
-  if (top < 0) { bottom -= top; top = 0; }
-  if (right > docW) { left -= right - docW; right = docW; }
-  if (bottom > docH) { top -= bottom - docH; bottom = docH; }
-  return { left: Math.max(0, left), top: Math.max(0, top), right, bottom };
+  if (left < limit.left) { right += limit.left - left; left = limit.left; }
+  if (top < limit.top) { bottom += limit.top - top; top = limit.top; }
+  if (right > limit.right) { left -= right - limit.right; right = limit.right; }
+  if (bottom > limit.bottom) { top -= bottom - limit.bottom; bottom = limit.bottom; }
+  return { left: Math.max(limit.left, left), top: Math.max(limit.top, top), right, bottom };
 }
 
 // Manual "Fit selection" — reshape the current selection to the chosen ratio
@@ -802,8 +836,15 @@ async function onFitSelection(): Promise<void> {
       setStatus("Draw a selection first, then click Fit selection.", "error");
       return;
     }
+    const activeArtboard = await getActiveArtboard(doc);
+    const limit = activeArtboard?.bounds || { left: 0, top: 0, right: doc.width, bottom: doc.height };
+    const targetSelection = intersectBounds(sel, limit);
+    if (!targetSelection) {
+      setStatus("The selection does not overlap the active artboard.", "error");
+      return;
+    }
     const [rw, rh] = v.split(":").map(Number);
-    await setRectSelection(ratioRect(sel, rw / rh, doc.width, doc.height));
+    await setRectSelection(ratioRect(targetSelection, rw / rh, limit));
     setStatus(`Selection fitted to ${v} — preview the shape, then Generate.`, "ok");
   } catch (err: any) {
     setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
@@ -820,11 +861,21 @@ async function onFitNearest(): Promise<void> {
       setStatus("Draw a selection first, then click Fit to nearest.", "error");
       return;
     }
-    const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
+    const activeArtboard = await getActiveArtboard(doc);
+    const limit = activeArtboard?.bounds || { left: 0, top: 0, right: doc.width, bottom: doc.height };
+    const targetSelection = intersectBounds(sel, limit);
+    if (!targetSelection) {
+      setStatus("The selection does not overlap the active artboard.", "error");
+      return;
+    }
+    const info = aspectRatioInfo(
+      targetSelection.right - targetSelection.left,
+      targetSelection.bottom - targetSelection.top
+    );
     setPickerSafe($("selRatio"), info.label);
     saveSetting("selRatio", info.label);
     const [rw, rh] = info.label.split(":").map(Number);
-    await setRectSelection(ratioRect(sel, rw / rh, doc.width, doc.height));
+    await setRectSelection(ratioRect(targetSelection, rw / rh, limit));
     setStatus(`Fitted to nearest ratio: ${info.label}.`, "ok");
   } catch (err: any) {
     setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");

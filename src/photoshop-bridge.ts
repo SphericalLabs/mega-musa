@@ -9,6 +9,12 @@ export interface Bounds {
   bottom: number;
 }
 
+export interface ActiveArtboard {
+  id: number;
+  name: string;
+  bounds: Bounds;
+}
+
 export interface ImageBuffer {
   data: Uint8Array;
   width: number;
@@ -28,6 +34,80 @@ export function getActiveDoc(): any {
   const doc = app.activeDocument;
   if (!doc) throw new Error("Open a document in Photoshop first.");
   return doc;
+}
+
+function boundVal(u: any): number {
+  return typeof u === "number" ? u : u?._value ?? 0;
+}
+
+function boundsFrom(value: any): Bounds | null {
+  if (!value) return null;
+  const bounds = {
+    left: Math.round(boundVal(value.left)),
+    top: Math.round(boundVal(value.top)),
+    right: Math.round(boundVal(value.right)),
+    bottom: Math.round(boundVal(value.bottom)),
+  };
+  return bounds.right - bounds.left > 1 && bounds.bottom - bounds.top > 1 ? bounds : null;
+}
+
+async function exactArtboardBounds(docId: number, artboard: any): Promise<Bounds | null> {
+  try {
+    const result = await action.batchPlay(
+      [
+        {
+          _obj: "get",
+          _target: [
+            { _ref: "layer", _id: artboard.id },
+            { _ref: "document", _id: docId },
+          ],
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      {}
+    );
+    const exact = boundsFrom(result?.[0]?.artboard?.artboardRect);
+    if (exact) return exact;
+  } catch (e: any) {
+    console.log("[NBP] could not read exact artboard bounds:", e?.message || e);
+  }
+
+  // Older Photoshop descriptors may omit artboardRect. For an artboard layer,
+  // its DOM bounds are the best available fallback.
+  return boundsFrom(artboard.boundsNoEffects) || boundsFrom(artboard.bounds);
+}
+
+// Resolve Photoshop's active artboard from the selected layer and its parents.
+// Returns null for ordinary, non-artboard documents. In a multi-artboard
+// document, refusing to guess prevents an accidental full-spread generation.
+export async function getActiveArtboard(doc: any): Promise<ActiveArtboard | null> {
+  const artboards: any[] = Array.from(doc.artboards || []);
+  if (!artboards.length) return null;
+
+  const byId = new Map<number, any>(artboards.map((artboard) => [artboard.id, artboard]));
+  let active: any | null = null;
+  const activeLayers: any[] = Array.from(doc.activeLayers || []);
+  for (const selected of activeLayers) {
+    let layer: any | null = selected;
+    while (layer) {
+      const artboard = byId.get(layer.id);
+      if (artboard) {
+        active = artboard;
+        break;
+      }
+      layer = layer.parent;
+    }
+    if (active) break;
+  }
+
+  if (!active && artboards.length === 1) active = artboards[0];
+  if (!active) {
+    throw new Error("Select an artboard, or a layer inside one, then try again.");
+  }
+
+  const bounds = await exactArtboardBounds(doc.id, active);
+  if (!bounds) throw new Error(`Could not read the bounds of artboard “${active.name || "Artboard"}”.`);
+  return { id: active.id, name: active.name || "Artboard", bounds };
 }
 
 // Activate the Rectangular Marquee tool and set its Style to Fixed Ratio at
@@ -87,14 +167,26 @@ export async function getSelectionBounds(): Promise<Bounds | null> {
   };
 }
 
-export function padBounds(b: Bounds, padFrac: number, docW: number, docH: number): Bounds {
+export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
+  const intersection = {
+    left: Math.max(a.left, b.left),
+    top: Math.max(a.top, b.top),
+    right: Math.min(a.right, b.right),
+    bottom: Math.min(a.bottom, b.bottom),
+  };
+  return intersection.right - intersection.left > 1 && intersection.bottom - intersection.top > 1
+    ? intersection
+    : null;
+}
+
+export function padBounds(b: Bounds, padFrac: number, limit: Bounds): Bounds {
   const px = Math.round((b.right - b.left) * padFrac);
   const py = Math.round((b.bottom - b.top) * padFrac);
   return {
-    left: Math.max(0, b.left - px),
-    top: Math.max(0, b.top - py),
-    right: Math.min(docW, b.right + px),
-    bottom: Math.min(docH, b.bottom + py),
+    left: Math.max(limit.left, b.left - px),
+    top: Math.max(limit.top, b.top - py),
+    right: Math.min(limit.right, b.right + px),
+    bottom: Math.min(limit.bottom, b.bottom + py),
   };
 }
 
@@ -102,36 +194,34 @@ export function padBounds(b: Bounds, padFrac: number, docW: number, docH: number
 // document when possible (so the whole selection stays covered) and shrinking
 // only if expansion would overflow the canvas. Stays centred on `b`. Used so the
 // crop's ratio equals the model's output ratio — then cover-fit adds no trim.
-export function fitRegionToRatio(b: Bounds, targetRatio: number, docW: number, docH: number): Bounds {
+export function fitRegionToRatio(b: Bounds, targetRatio: number, limit: Bounds): Bounds {
   let w = b.right - b.left;
   let h = b.bottom - b.top;
   if (w < 1 || h < 1) return b;
+  const limitW = limit.right - limit.left;
+  const limitH = limit.bottom - limit.top;
   const cx = (b.left + b.right) / 2;
   const cy = (b.top + b.bottom) / 2;
   if (w / h < targetRatio) {
     const newW = Math.round(h * targetRatio);
-    if (newW <= docW) w = newW;
+    if (newW <= limitW) w = newW;
     else {
-      w = docW;
-      h = Math.round(docW / targetRatio);
+      w = limitW;
+      h = Math.round(limitW / targetRatio);
     }
   } else {
     const newH = Math.round(w / targetRatio);
-    if (newH <= docH) h = newH;
+    if (newH <= limitH) h = newH;
     else {
-      h = docH;
-      w = Math.round(docH * targetRatio);
+      h = limitH;
+      w = Math.round(limitH * targetRatio);
     }
   }
   let left = Math.round(cx - w / 2);
   let top = Math.round(cy - h / 2);
-  left = Math.max(0, Math.min(left, docW - w));
-  top = Math.max(0, Math.min(top, docH - h));
+  left = Math.max(limit.left, Math.min(left, limit.right - w));
+  top = Math.max(limit.top, Math.min(top, limit.bottom - h));
   return { left, top, right: left + w, bottom: top + h };
-}
-
-function boundVal(u: any): number {
-  return typeof u === "number" ? u : u?._value ?? 0;
 }
 
 // Modal step 1: read the flattened pixels inside `bounds`, plus (for region
