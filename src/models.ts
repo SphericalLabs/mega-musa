@@ -1,4 +1,8 @@
-import { SUPPORTED_ASPECT_RATIOS } from "./gemini";
+import { SUPPORTED_ASPECT_RATIOS, ImageQuality, ImageUsage } from "./gemini";
+import { gptImage2Size } from "./openai";
+
+type ExplicitQuality = Exclude<ImageQuality, "auto">;
+type QualityPrices = Partial<Record<ExplicitQuality, Record<string, number>>>;
 
 // Single source of truth for what each model can actually do. Both the UI (which
 // menu items exist) and the request builder (what gets sent) read this table, so
@@ -21,12 +25,30 @@ export interface ModelSpec {
   // depends on things the resolution menu does not pick. Omit a key to show no
   // price for that tier; "auto" is only listed where the default is documented.
   prices?: Record<string, [number, number]>;
+  // Exact USD output prices for explicit OpenAI quality choices, keyed by the
+  // actual output size. GPT Image 2 is calculated from output tokens instead.
+  qualityPrices?: QualityPrices;
 }
 
-// Published prices are USD. ECB reference rate of 2026-08-03 via frankfurter.dev
-// — the francs in the menu move with this one constant, so bump it if the rate
-// drifts far enough to matter.
-const USD_CHF = 0.808;
+// Published prices are USD. Mid-market reference rate on 2026-08-04.
+// The francs in the menu are estimates, so bump this if the rate drifts far
+// enough to matter.
+const USD_CHF = 0.8103;
+
+// GPT Image 2 charges output image tokens rather than a fixed per-image amount.
+// OpenAI's calculator uses these quality factors and an output rate of $30/M.
+const GPT_IMAGE_2_ID = "openai:gpt-image-2";
+const GPT_IMAGE_2_OUTPUT_USD_PER_MILLION = 30;
+const OPENAI_TOKEN_RATES: Record<string, { textInput: number; imageInput: number; imageOutput: number }> = {
+  "openai:gpt-image-2": { textInput: 5, imageInput: 8, imageOutput: 30 },
+  "openai:gpt-image-1.5": { textInput: 5, imageInput: 8, imageOutput: 32 },
+  "openai:gpt-image-1-mini": { textInput: 2, imageInput: 2.5, imageOutput: 8 },
+};
+const GPT_IMAGE_2_QUALITY_FACTORS: Record<"low" | "medium" | "high", number> = {
+  low: 16,
+  medium: 48,
+  high: 96,
+};
 
 // Every Gemini image model frames to the same ten ratios — that part does not
 // vary by model, only the resolution tiers do.
@@ -86,13 +108,8 @@ export const MODELS: ModelSpec[] = [
     label: "OpenAI GPT Image 2 (2026)",
     imageSizes: ["1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
-    // OpenAI publishes per-image prices for three legacy sizes only, and states
-    // that gpt-image-2 supports "thousands of valid resolutions" without giving a
-    // formula — its token count does not even rise monotonically with pixels. So
-    // only the 1K tier gets a price: $0.165 (3:2) to $0.211 (1:1) at high
-    // quality, which is what "auto" is assumed to pick. 2K and 4K cost more by an
-    // amount OpenAI does not publish, so they show no figure rather than a guess.
-    prices: { "1K": [0.165, 0.211] },
+    // Prices are calculated from the exact output dimensions at menu-build time.
+    // The API's quality:auto choice means the UI shows the low-to-high range.
   },
   {
     id: "openai:gpt-image-1.5",
@@ -100,7 +117,11 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
-    // High quality, 1024² up to 1536×1024 — the ratio picker moves within this.
+    qualityPrices: {
+      low: { "1024x1024": 0.009, "1536x1024": 0.013, "1024x1536": 0.013 },
+      medium: { "1024x1024": 0.034, "1536x1024": 0.05, "1024x1536": 0.05 },
+      high: { "1024x1024": 0.133, "1536x1024": 0.2, "1024x1536": 0.2 },
+    },
     prices: { auto: [0.133, 0.2] },
   },
   {
@@ -109,6 +130,11 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
+    qualityPrices: {
+      low: { "1024x1024": 0.011, "1536x1024": 0.016, "1024x1536": 0.016 },
+      medium: { "1024x1024": 0.042, "1536x1024": 0.063, "1024x1536": 0.063 },
+      high: { "1024x1024": 0.167, "1536x1024": 0.25, "1024x1536": 0.25 },
+    },
     prices: { auto: [0.167, 0.25] },
   },
   {
@@ -117,6 +143,11 @@ export const MODELS: ModelSpec[] = [
     imageSizes: [],
     aspectRatios: OPENAI_FIXED.map((p) => p.label),
     fixedSizes: OPENAI_FIXED,
+    qualityPrices: {
+      low: { "1024x1024": 0.005, "1536x1024": 0.006, "1024x1536": 0.006 },
+      medium: { "1024x1024": 0.011, "1536x1024": 0.015, "1024x1536": 0.015 },
+      high: { "1024x1024": 0.036, "1536x1024": 0.052, "1024x1536": 0.052 },
+    },
     prices: { auto: [0.036, 0.052] },
   },
 ];
@@ -135,33 +166,145 @@ export function resolutionLabel(token: string): string {
   return token;
 }
 
+function gptImage2OutputTokens(size: string, quality: keyof typeof GPT_IMAGE_2_QUALITY_FACTORS): number | null {
+  const match = /^(\d+)x(\d+)$/.exec(size);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const pixels = width * height;
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  if (
+    !width ||
+    !height ||
+    width % 16 !== 0 ||
+    height % 16 !== 0 ||
+    pixels < 655360 ||
+    pixels > 8294400 ||
+    longEdge > 3840 ||
+    longEdge > shortEdge * 3
+  ) {
+    return null;
+  }
+
+  const qualityFactor = GPT_IMAGE_2_QUALITY_FACTORS[quality];
+  // Round the aspect-adjusted short axis half-up, using integer arithmetic.
+  const shortAxisFactor = Math.floor((2 * qualityFactor * shortEdge + longEdge) / (2 * longEdge));
+  const numerator = qualityFactor * shortAxisFactor * (2000000 + pixels);
+  return Math.floor((numerator + 3999999) / 4000000);
+}
+
+function gptImage2OutputUSD(size: string, quality: ExplicitQuality): number | null {
+  const tokens = gptImage2OutputTokens(size, quality);
+  return tokens === null ? null : (tokens * GPT_IMAGE_2_OUTPUT_USD_PER_MILLION) / 1000000;
+}
+
+function gptImage2RepresentativeSize(token: string, ratio: string): string | null {
+  if (token !== "1K" && token !== "2K" && token !== "4K") return null;
+  const [rw, rh] = ratio.split(":").map(Number);
+  if (!rw || !rh) return gptImage2Size(1000, 1000, token);
+  return gptImage2Size(rw * 1000, rh * 1000, token);
+}
+
+function fixedOutputSize(spec: ModelSpec, ratio: string): string | null {
+  const match = spec.fixedSizes?.find((size) => size.label === ratio);
+  return match?.size || spec.fixedSizes?.[0]?.size || null;
+}
+
+function outputSizeFor(spec: ModelSpec, token: string, ratio: string): string | null {
+  if (spec.id === GPT_IMAGE_2_ID) return gptImage2RepresentativeSize(token, ratio);
+  return fixedOutputSize(spec, ratio);
+}
+
+function qualityPriceUSD(spec: ModelSpec, outputSize: string | null, quality: ExplicitQuality): number | null {
+  if (!outputSize) return null;
+  if (spec.id === GPT_IMAGE_2_ID) return gptImage2OutputUSD(outputSize, quality);
+  return spec.qualityPrices?.[quality]?.[outputSize] ?? null;
+}
+
+function outputPriceRangeUSD(
+  spec: ModelSpec,
+  token: string,
+  outputSize: string | null,
+  ratio = "1:1"
+): [number, number] | null {
+  const size = outputSize || outputSizeFor(spec, token, ratio);
+  const low = qualityPriceUSD(spec, size, "low");
+  const high = qualityPriceUSD(spec, size, "high");
+  if (low !== null && high !== null) return [low, high];
+  return spec.prices?.[token] || null;
+}
+
 // CHF for one output image. Where the published price spans a range this menu
 // cannot pick between — for the OpenAI models the aspect ratio, plus the quality
 // tier they choose themselves — take the middle of it and mark it "ca.".
-export function estimatedCHF(spec: ModelSpec, token: string): number | null {
-  const range = spec.prices && spec.prices[token];
+export function estimatedCHF(
+  spec: ModelSpec,
+  token: string,
+  outputSize?: string,
+  quality: ImageQuality = "auto"
+): number | null {
+  if (quality !== "auto") {
+    const exact = qualityPriceUSD(spec, outputSize || outputSizeFor(spec, token, "1:1"), quality);
+    if (exact !== null) return exact * USD_CHF;
+  }
+  const range = outputPriceRangeUSD(spec, token, outputSize || null);
   if (!range) return null;
   return ((range[0] + range[1]) / 2) * USD_CHF;
 }
 
-function priceLabel(spec: ModelSpec, token: string): string {
-  const chf = estimatedCHF(spec, token);
-  if (chf === null) return "";
-  const range = spec.prices![token];
-  return `${range[0] === range[1] ? "" : "ca. "}CHF ${chf.toFixed(2)}`;
+export function formatCHF(value: number): string {
+  return value < 0.01 ? value.toFixed(3) : value.toFixed(2);
+}
+
+function priceLabel(spec: ModelSpec, token: string, ratio: string, quality: ImageQuality): string {
+  const size = outputSizeFor(spec, token, ratio);
+  if (quality !== "auto") {
+    const exact = qualityPriceUSD(spec, size, quality);
+    if (exact !== null) return `CHF ${formatCHF(exact * USD_CHF)}`;
+  }
+  const range = outputPriceRangeUSD(spec, token, size, ratio);
+  if (!range) return "";
+  const low = range[0] * USD_CHF;
+  const high = range[1] * USD_CHF;
+  if (low === high) return `CHF ${formatCHF(low)}`;
+  return `ca. CHF ${formatCHF(low)}–${formatCHF(high)}`;
 }
 
 // What the resolution picker shows: the tier plus what one output image costs, so
 // the price is visible at the moment you pick the resolution.
-export function resolutionMenuLabel(token: string, spec: ModelSpec): string {
+export function resolutionMenuLabel(
+  token: string,
+  spec: ModelSpec,
+  ratio = "1:1",
+  quality: ImageQuality = "auto"
+): string {
   const label = resolutionLabel(token);
   // Auto hands the choice to the model, so a figure beside it would read as a
   // promise. Price it only where Auto is the entire menu (the fixed-size OpenAI
   // models) and no tier row is there to carry the number. The table still knows
   // what Auto costs — the budget counter uses it.
   if (token === "auto" && spec.imageSizes.length) return label;
-  const price = priceLabel(spec, token);
+  const price = priceLabel(spec, token, ratio, quality);
   return price ? `${label} / ${price}` : label;
+}
+
+// Exact token-based cost is available when the completed event includes the
+// input/output token breakdown and the model has published token rates.
+export function actualUsageCHF(spec: ModelSpec, usage: ImageUsage): number | null {
+  const rates = OPENAI_TOKEN_RATES[spec.id];
+  if (!rates) return null;
+  const outputTokens = usage.outputTokens;
+  if (outputTokens === undefined) return null;
+  const inputImageTokens = usage.inputImageTokens ?? 0;
+  const inputTextTokens =
+    usage.inputTextTokens ??
+    (usage.inputTokens === undefined ? undefined : Math.max(0, usage.inputTokens - inputImageTokens));
+  if (inputTextTokens === undefined) return null;
+  const usd =
+    (inputTextTokens * rates.textInput + inputImageTokens * rates.imageInput + outputTokens * rates.imageOutput) /
+    1000000;
+  return usd * USD_CHF;
 }
 
 // Closest ratio in `options` to `want`, compared in log space so e.g. 2:1 sits

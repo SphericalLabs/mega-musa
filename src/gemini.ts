@@ -50,6 +50,32 @@ export interface RefImage {
   base64: string;
 }
 
+export type ImageQuality = "auto" | "low" | "medium" | "high";
+
+export const IMAGE_QUALITY_OPTIONS: ReadonlyArray<{ value: ImageQuality; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
+
+export function normalizeImageQuality(value: string): ImageQuality {
+  return value === "low" || value === "medium" || value === "high" ? value : "auto";
+}
+
+export function imageQualityLabel(value: ImageQuality): string {
+  return value[0].toUpperCase() + value.slice(1);
+}
+
+export interface ImageUsage {
+  quality?: ImageQuality;
+  inputTokens?: number;
+  inputImageTokens?: number;
+  inputTextTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
 export interface GenerateOptions {
   apiKey: string;
   model: string;
@@ -64,6 +90,7 @@ export interface GenerateOptions {
 export interface GenerateResult {
   mimeType: string;
   bytes: Uint8Array;
+  usage?: ImageUsage;
 }
 
 // Calls the Gemini generateContent REST endpoint with an image-in / image-out

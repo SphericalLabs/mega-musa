@@ -1,10 +1,10 @@
 import { loadSetting, saveSetting } from "./storage";
 
-// A running estimate of what this panel has cost, kept in localStorage next to the
-// other panel settings. It adds the same per-image figure the resolution menu
-// shows — a midpoint for the OpenAI models — and counts nothing for input tokens
-// (the prompt, the canvas crop, reference images), so it runs low by design.
-// An order of magnitude to steer by, not an invoice.
+// A running record of what this panel has cost, kept in localStorage next to the
+// other panel settings. When GPT Image 2 returns usage, the caller supplies the
+// token-based amount; otherwise it supplies the output-only estimate shown in the
+// resolution menu. Models without compatible published token rates still use
+// that estimate.
 
 export interface Budget {
   chf: number;
@@ -43,9 +43,9 @@ export function resetBudget(): Budget {
   return fresh;
 }
 
-// `chf` is null when the model/tier has no published price (GPT Image 2 above 1K).
-// Those are counted separately rather than added as zero, so the total never
-// implies images it could not price were free.
+// `chf` is null when a model/tier has no usable price estimate. Those runs are
+// counted separately rather than added as zero, so the total never implies an
+// unpriced image was free.
 export function addToBudget(chf: number | null): Budget {
   const b = loadBudget();
   if (chf === null) b.unpriced += 1;

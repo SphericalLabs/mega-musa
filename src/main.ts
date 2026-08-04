@@ -14,7 +14,15 @@ import {
   Bounds,
 } from "./photoshop-bridge";
 import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
-import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
+import {
+  generateEdit,
+  nearestSupportedAspectRatio,
+  aspectRatioInfo,
+  IMAGE_QUALITY_OPTIONS,
+  imageQualityLabel,
+  normalizeImageQuality,
+  ImageQuality,
+} from "./gemini";
 import { generateOpenAIImage, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
 import {
@@ -24,6 +32,8 @@ import {
   resolutionLabel,
   resolutionMenuLabel,
   estimatedCHF,
+  actualUsageCHF,
+  formatCHF,
   nearestImageSize,
   nearestRatioLabel,
 } from "./models";
@@ -40,7 +50,7 @@ import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budg
 const { entrypoints } = require("uxp");
 
 const MAX_REFS = 10;
-const PICKERS = ["model", "resolution", "selRatio"];
+const PICKERS = ["model", "resolution", "quality", "selRatio"];
 
 let refs: RefImage[] = [];
 let running = false;
@@ -427,6 +437,9 @@ async function onGenerate(): Promise<void> {
   const prompt = ($("prompt").value || "").trim();
   const model = $("model").value || "gemini-3-pro-image";
   const provider = modelProviderLabel(model);
+  const quality: ImageQuality = isOpenAIModel(model)
+    ? normalizeImageQuality($("quality")?.value || "auto")
+    : "auto";
   const apiKey = (
     isOpenAIModel(model) ? $("openaiApiKey").value || "" : $("geminiApiKey").value || ""
   ).trim();
@@ -478,6 +491,7 @@ async function onGenerate(): Promise<void> {
       const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
       setPickerSafe($("selRatio"), info.label);
       saveSetting("selRatio", info.label);
+      refreshResolutionLabels();
     }
     const isRegion = !!sel;
 
@@ -547,6 +561,7 @@ async function onGenerate(): Promise<void> {
       if (ratioLabel) {
         setPickerSafe($("selRatio"), ratioLabel);
         saveSetting("selRatio", ratioLabel);
+        refreshResolutionLabels();
       }
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
@@ -597,8 +612,9 @@ async function onGenerate(): Promise<void> {
       : refs.length
         ? "from references"
         : "text-to-image";
+    const qualitySuffix = isOpenAIModel(model) ? `, ${imageQualityLabel(quality)} quality` : "";
     setStatus(
-      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution} with ${model} — ${modeLabel}…  (10–60s)`
+      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…  (10–60s)`
     );
     const baseReq = {
       apiKey,
@@ -608,7 +624,7 @@ async function onGenerate(): Promise<void> {
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
     };
     const result = isOpenAIModel(model)
-      ? await generateOpenAIImage({ ...baseReq, size: openaiSize as string })
+      ? await generateOpenAIImage({ ...baseReq, size: openaiSize as string, quality })
       : await generateEdit({
           ...baseReq,
           aspectRatio: geminiAspect,
@@ -616,8 +632,20 @@ async function onGenerate(): Promise<void> {
         });
 
     // Charged the moment the image comes back, not once it lands on the canvas —
-    // a failure in the scaling or placing below still costs money.
-    renderBudget(addToBudget(estimatedCHF(spec, resolution)));
+    // a failure in the scaling or placing below still costs money. GPT Image 2
+    // can replace the preflight estimate with its completed-event usage.
+    const actualCost = result.usage ? actualUsageCHF(spec, result.usage) : null;
+    const budgetCharge = actualCost ?? estimatedCHF(spec, resolution, openaiSize, quality);
+    renderBudget(addToBudget(budgetCharge));
+    const resolvedQuality = isOpenAIModel(model) ? result.usage?.quality || quality : undefined;
+    const usageDetails: string[] = [];
+    if (resolvedQuality) usageDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
+    if (actualCost !== null) usageDetails.push(`actual ca. CHF ${formatCHF(actualCost)}`);
+    else if (isOpenAIModel(model)) {
+      const estimate = estimatedCHF(spec, resolution, openaiSize, quality);
+      if (estimate !== null) usageDetails.push(`estimate ca. CHF ${formatCHF(estimate)}`);
+    }
+    if (usageDetails.length) setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
@@ -647,12 +675,13 @@ async function onGenerate(): Promise<void> {
       isRegion
     );
 
+    const doneMessage = isRegion
+      ? "Done — result clipped to your selection (new layer)."
+      : activeArtboard
+        ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
+        : "Done — full-image result added as a new layer.";
     setStatus(
-      isRegion
-        ? "Done — result clipped to your selection (new layer)."
-        : activeArtboard
-          ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
-          : "Done — full-image result added as a new layer.",
+      usageDetails.length ? `${doneMessage} (${usageDetails.join(", ")}).` : doneMessage,
       "ok"
     );
   } catch (err: any) {
@@ -735,15 +764,69 @@ function buildModelMenu(): void {
   );
 }
 
+function buildQualityMenu(modelId: string, selected: string): ImageQuality {
+  const field = $("qualityField");
+  const openai = isOpenAIModel(modelId);
+  if (field) field.style.display = openai ? "flex" : "none";
+  if (!openai) {
+    setValueSafe($("quality"), "auto");
+    return "auto";
+  }
+  const quality = normalizeImageQuality(selected);
+  buildMenu(
+    "quality",
+    IMAGE_QUALITY_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+    quality
+  );
+  saveSetting("quality", quality);
+  return quality;
+}
+
+function buildResolutionMenu(
+  spec: ReturnType<typeof modelSpec>,
+  ratio: string,
+  selected: string,
+  quality: ImageQuality = "auto"
+): string {
+  const size = nearestImageSize(selected, spec);
+  buildMenu(
+    "resolution",
+    [{ value: "auto", label: resolutionMenuLabel("auto", spec, ratio, quality) }].concat(
+      spec.imageSizes.map((s) => ({ value: s, label: resolutionMenuLabel(s, spec, ratio, quality) }))
+    ),
+    size
+  );
+  saveSetting("resolution", size);
+  return size;
+}
+
+function refreshResolutionLabels(): void {
+  const model = $("model")?.value || DEFAULT_MODEL;
+  const spec = modelSpec(model);
+  const quality = isOpenAIModel(model) ? normalizeImageQuality($("quality")?.value || "auto") : "auto";
+  buildResolutionMenu(spec, $("selRatio")?.value || "1:1", $("resolution")?.value || "auto", quality);
+}
+
 // Rebuild the ratio and resolution menus from the picked model's entry in the
 // capability table. A choice the new model also supports is kept; anything else
 // snaps to the nearest thing it can actually do, and the caller gets a sentence
 // explaining the move so it never happens silently.
-// `preferRatio`/`preferSize` override what the pickers currently show — used at
-// startup, where the stored settings should win over the markup's defaults.
-function applyModelCapabilities(modelId: string, preferRatio?: string, preferSize?: string): string {
+// `preferRatio`/`preferSize`/`preferQuality` override what the pickers currently
+// show — used at startup, where stored settings should win over markup defaults.
+function applyModelCapabilities(
+  modelId: string,
+  preferRatio?: string,
+  preferSize?: string,
+  preferQuality?: string
+): string {
   const spec = modelSpec(modelId);
   const notes: string[] = [];
+  const quality = buildQualityMenu(
+    modelId,
+    isOpenAIModel(modelId)
+      ? preferQuality || loadSetting("quality", $("quality")?.value || "auto")
+      : "auto"
+  );
 
   const wantRatio = preferRatio || $("selRatio")?.value || "1:1";
   const ratio = nearestRatioLabel(wantRatio, spec.aspectRatios);
@@ -758,15 +841,7 @@ function applyModelCapabilities(modelId: string, preferRatio?: string, preferSiz
   }
 
   const wantSize = preferSize || $("resolution")?.value || "auto";
-  const size = nearestImageSize(wantSize, spec);
-  buildMenu(
-    "resolution",
-    [{ value: "auto", label: resolutionMenuLabel("auto", spec) }].concat(
-      spec.imageSizes.map((s) => ({ value: s, label: resolutionMenuLabel(s, spec) }))
-    ),
-    size
-  );
-  saveSetting("resolution", size);
+  const size = buildResolutionMenu(spec, ratio, wantSize, quality);
   if (size !== wantSize) {
     notes.push(
       spec.imageSizes.length
@@ -874,6 +949,7 @@ async function onFitNearest(): Promise<void> {
     );
     setPickerSafe($("selRatio"), info.label);
     saveSetting("selRatio", info.label);
+    refreshResolutionLabels();
     const [rw, rh] = info.label.split(":").map(Number);
     await setRectSelection(ratioRect(targetSelection, rw / rh, limit));
     setStatus(`Fitted to nearest ratio: ${info.label}.`, "ok");
@@ -897,7 +973,8 @@ async function restoreSettings(): Promise<void> {
   applyModelCapabilities(
     $("model").value || DEFAULT_MODEL,
     loadSetting("selRatio", "1:1"),
-    loadSetting("resolution", "auto")
+    loadSetting("resolution", "auto"),
+    loadSetting("quality", "auto")
   );
   // Defaults to on — only an explicit "0" from a previous session turns it off.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
@@ -905,8 +982,17 @@ async function restoreSettings(): Promise<void> {
 
 function persistSettingsHooks(): void {
   for (const id of PICKERS) {
+    if (id === "selRatio" || id === "quality") continue;
     $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
   }
+  $("quality")?.addEventListener("change", () => {
+    saveSetting("quality", normalizeImageQuality($("quality").value || "auto"));
+    refreshResolutionLabels();
+  });
+  $("selRatio")?.addEventListener("change", () => {
+    saveSetting("selRatio", $("selRatio").value);
+    refreshResolutionLabels();
+  });
   // Switching model re-derives which ratios and resolutions are on offer.
   $("model")?.addEventListener("change", () => {
     const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);

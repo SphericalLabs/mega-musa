@@ -23,7 +23,8 @@
     .label { font-size: 11px; opacity: 0.8; }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
-    #model, #resolution { width: 100%; }
+    #model, #resolution, #quality { width: 100%; }
+    #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
     #prompt { width: 100%; }
     #dropWebview { display: block; margin: 6px 0; }
@@ -96,6 +97,12 @@
     <div class="field">
       <span class="label">Resolution</span>
       <sp-picker id="resolution" size="s">
+        <sp-menu slot="options"></sp-menu>
+      </sp-picker>
+    </div>
+    <div class="field" id="qualityField">
+      <span class="label">Quality</span>
+      <sp-picker id="quality" size="s">
         <sp-menu slot="options"></sp-menu>
       </sp-picker>
     </div>
