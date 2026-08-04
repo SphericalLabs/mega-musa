@@ -281,9 +281,180 @@ export async function placeResult(
           ],
           {}
         );
+        // Adding a mask consumes the selection — Photoshop drops the marching
+        // ants. Load the mask we just made straight back as the selection so it
+        // survives the run: without this the next Generate sees nothing selected,
+        // falls back to the whole image, and the mask appears only every other
+        // time. The mask holds the exact shape, feather included, so this
+        // restores the original selection rather than an approximation of it.
+        try {
+          await action.batchPlay(
+            [
+              {
+                _obj: "set",
+                _target: [{ _ref: "channel", _property: "selection" }],
+                to: { _ref: "channel", _enum: "channel", _value: "mask" },
+                _options: { dialogOptions: "dontDisplay" },
+              },
+            ],
+            {}
+          );
+        } catch (e: any) {
+          // Not fatal — the result is already placed and masked.
+          console.log("[NBP] could not restore the selection after masking:", e?.message || e);
+        }
       }
     },
     { commandName: "Nano Banana Pro: place result" }
+  );
+}
+
+// Longest edge kept for a pasted reference. A 6000px screenshot is slow to
+// PNG-encode in the UXP JS engine and inflates the request body far past what the
+// models actually consume, so oversized pastes are resampled down by Photoshop.
+const PASTE_MAX_EDGE = 2048;
+
+export interface PastedImage extends ImageBuffer {
+  // Size of what was on the clipboard, before any downscale to PASTE_MAX_EDGE.
+  originalWidth: number;
+  originalHeight: number;
+}
+
+// Read the system clipboard as pixels by having Photoshop paste it. UXP's own
+// clipboard API is text-only — no version of it documents image support — but
+// Photoshop pastes anything the OS clipboard holds.
+//
+// It pastes into an empty document that is then grown to the pasted layer and
+// trimmed back to it. Success is judged on the pixels that come out, not on a
+// side effect like layer count — a paste can quietly do nothing. Whatever
+// happened along the way is attached to the error, so a failure names the step
+// that failed instead of a generic "nothing on the clipboard".
+export async function readClipboardImage(): Promise<PastedImage> {
+  // Creating, modifying and closing documents all need modal scope.
+  return await core.executeAsModal(
+    async () => {
+      const trace: string[] = [];
+      // The user's own document: never closed, never read from. Guards the
+      // closeWithoutSaving below against ever touching their artwork.
+      const userDocId: number | undefined = app.activeDocument?.id;
+
+      const scratch = await app.createDocument({
+        width: 64,
+        height: 64,
+        resolution: 72,
+        fill: "transparent",
+        name: "nbp-paste",
+      });
+      if (!scratch) throw new Error("Could not create a scratch document for the paste.");
+      // paste follows the active document, so make sure that is the scratch and
+      // not the user's artwork. This is what makes the paste land where we can
+      // read it — without it, the pixels go into whatever the user had open.
+      try {
+        app.activeDocument = scratch;
+      } catch (e: any) {
+        trace.push(`activate: ${e?.message || e}`);
+      }
+      try {
+        await action.batchPlay(
+          [
+            {
+              _obj: "paste",
+              antiAlias: { _enum: "antiAliasType", _value: "antiAliasNone" },
+              _options: { dialogOptions: "dontDisplay" },
+            },
+          ],
+          {}
+        );
+        trace.push("paste ok");
+      } catch (e: any) {
+        trace.push(`paste: ${e?.message || e}`);
+      }
+      // Grow the canvas to wherever the layer landed, then shave the transparent
+      // surround off. Either can fail harmlessly on an empty document.
+      for (const cmd of [
+        { _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } },
+        {
+          _obj: "trim",
+          trimBasedOn: { _enum: "trimBasedOn", _value: "transparency" },
+          top: true,
+          bottom: true,
+          left: true,
+          right: true,
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ]) {
+        try {
+          await action.batchPlay([cmd], {});
+        } catch (e: any) {
+          trace.push(`${cmd._obj}: ${e?.message || e}`);
+        }
+      }
+      trace.push(`after trim ${Math.round(scratch.width)}x${Math.round(scratch.height)}`);
+
+      try {
+        const originalWidth = Math.round(scratch.width);
+        const originalHeight = Math.round(scratch.height);
+        const longest = Math.max(originalWidth, originalHeight);
+        if (longest > PASTE_MAX_EDGE) {
+          const k = PASTE_MAX_EDGE / longest;
+          await action.batchPlay(
+            [
+              {
+                _obj: "imageSize",
+                width: { _unit: "pixelsUnit", _value: Math.max(1, Math.round(originalWidth * k)) },
+                height: { _unit: "pixelsUnit", _value: Math.max(1, Math.round(originalHeight * k)) },
+                constrainProportions: true,
+                interpolation: { _enum: "interpolationType", _value: "bicubicSharper" },
+                _options: { dialogOptions: "dontDisplay" },
+              },
+            ],
+            {}
+          );
+        }
+        const width = Math.round(scratch.width);
+        const height = Math.round(scratch.height);
+
+        const { imageData } = await imaging.getPixels({
+          documentID: scratch.id,
+          sourceBounds: { left: 0, top: 0, right: width, bottom: height },
+          componentSize: 8,
+          applyAlpha: false,
+        });
+        const raw = await imageData.getData({ chunky: true });
+        const data = new Uint8Array(raw);
+        const components = imageData.components || 4;
+        imageData.dispose();
+
+        // The real test: did any opaque pixel actually arrive? A paste that
+        // silently did nothing leaves a fully transparent document behind.
+        if (components === 4) {
+          let opaque = false;
+          for (let i = 3; i < data.length; i += 4) {
+            if (data[i] !== 0) {
+              opaque = true;
+              break;
+            }
+          }
+          if (!opaque) {
+            throw new Error(
+              `Photoshop pasted nothing — the clipboard has no image it can read. [${trace.join(" | ")}]`
+            );
+          }
+        }
+
+        return { data, width, height, components, originalWidth, originalHeight };
+      } finally {
+        // Only ever close a document this function created.
+        if (scratch && scratch.id !== userDocId) {
+          try {
+            await scratch.closeWithoutSaving();
+          } catch {
+            /* ignore close failures */
+          }
+        }
+      }
+    },
+    { commandName: "Nano Banana Pro: paste reference" }
   );
 }
 
@@ -299,18 +470,20 @@ export async function scaleViaPhotoshop(
   dstW: number,
   dstH: number
 ): Promise<Uint8Array> {
-  const scratch = await app.createDocument({
-    width: srcW,
-    height: srcH,
-    resolution: 72,
-    fill: "transparent",
-    name: "nbp-scale",
-  });
-  if (!scratch) throw new Error("Could not create scratch document for scaling.");
-  try {
-    let out: Uint8Array | undefined;
-    await core.executeAsModal(
-      async () => {
+  // Creating and closing the scratch document both modify Photoshop's state, so
+  // they belong inside modal scope alongside the pixel work — outside it,
+  // createDocument is rejected with "make may modify the state of Photoshop".
+  return await core.executeAsModal(
+    async () => {
+      const scratch = await app.createDocument({
+        width: srcW,
+        height: srcH,
+        resolution: 72,
+        fill: "transparent",
+        name: "nbp-scale",
+      });
+      if (!scratch) throw new Error("Could not create scratch document for scaling.");
+      try {
         const layerId = scratch.layers[0].id;
         const srcData = await imaging.createImageDataFromBuffer(rgba, {
           width: srcW,
@@ -359,30 +532,25 @@ export async function scaleViaPhotoshop(
         const comps = imageData.components || 4;
         imageData.dispose();
 
-        if (comps === 4) {
-          out = new Uint8Array(raw);
-        } else {
-          // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
-          const px = dstW * dstH;
-          const rgbaOut = new Uint8Array(px * 4);
-          for (let i = 0; i < px; i++) {
-            rgbaOut[i * 4] = raw[i * comps];
-            rgbaOut[i * 4 + 1] = raw[i * comps + 1];
-            rgbaOut[i * 4 + 2] = raw[i * comps + 2];
-            rgbaOut[i * 4 + 3] = 255;
-          }
-          out = rgbaOut;
+        if (comps === 4) return new Uint8Array(raw);
+        // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
+        const px = dstW * dstH;
+        const rgbaOut = new Uint8Array(px * 4);
+        for (let i = 0; i < px; i++) {
+          rgbaOut[i * 4] = raw[i * comps];
+          rgbaOut[i * 4 + 1] = raw[i * comps + 1];
+          rgbaOut[i * 4 + 2] = raw[i * comps + 2];
+          rgbaOut[i * 4 + 3] = 255;
         }
-      },
-      { commandName: "Nano Banana Pro: scale result" }
-    );
-    if (!out) throw new Error("Scaling produced no pixels.");
-    return out;
-  } finally {
-    try {
-      await scratch.closeWithoutSaving();
-    } catch {
-      /* ignore close failures */
-    }
-  }
+        return rgbaOut;
+      } finally {
+        try {
+          await scratch.closeWithoutSaving();
+        } catch {
+          /* ignore close failures */
+        }
+      }
+    },
+    { commandName: "Nano Banana Pro: scale result" }
+  );
 }

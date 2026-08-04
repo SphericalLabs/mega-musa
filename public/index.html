@@ -9,7 +9,11 @@
     .row.spread { justify-content: space-between; }
     .grow { flex: 1; }
     .field { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+    .field > .row { margin: 0; }
     .label { font-size: 11px; opacity: 0.8; }
+    /* Pickers size to their content by default, which clips the longer model
+       names. Fill the panel width instead. */
+    #model, #resolution { width: 100%; }
     sp-divider { margin: 10px 0; }
     #prompt { width: 100%; min-height: 64px; }
     #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
@@ -28,34 +32,32 @@
 </head>
 <body>
   <h3>API Keys</h3>
-  <div class="row">
-    <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
-    <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
+  <div class="field">
+    <span class="label">Google Gemini key &mdash; powers the Nano Banana models</span>
+    <div class="row">
+      <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
+      <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
+    </div>
   </div>
-  <div class="row">
-    <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
-    <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+  <div class="field">
+    <span class="label">OpenAI key &mdash; powers the GPT Image models</span>
+    <div class="row">
+      <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
+      <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+    </div>
   </div>
-  <div class="muted">Stored securely on this machine only. Gemini keys come from aistudio.google.com, OpenAI keys from platform.openai.com.</div>
+  <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
 
   <sp-divider size="s"></sp-divider>
 
   <div class="field">
     <span class="label">Aspect Ratio</span>
     <div class="row">
+      <!-- Options for this and the two pickers below are generated at runtime
+           from the capability table in src/models.ts, so each model only ever
+           offers ratios and resolutions it can actually produce. -->
       <sp-picker id="selRatio" size="s" class="grow">
-        <sp-menu slot="options">
-          <sp-menu-item value="1:1" selected>1:1</sp-menu-item>
-          <sp-menu-item value="2:3">2:3</sp-menu-item>
-          <sp-menu-item value="3:2">3:2</sp-menu-item>
-          <sp-menu-item value="3:4">3:4</sp-menu-item>
-          <sp-menu-item value="4:3">4:3</sp-menu-item>
-          <sp-menu-item value="4:5">4:5</sp-menu-item>
-          <sp-menu-item value="5:4">5:4</sp-menu-item>
-          <sp-menu-item value="9:16">9:16</sp-menu-item>
-          <sp-menu-item value="16:9">16:9</sp-menu-item>
-          <sp-menu-item value="21:9">21:9</sp-menu-item>
-        </sp-menu>
+        <sp-menu slot="options"></sp-menu>
       </sp-picker>
       <sp-button id="fitSelection" variant="secondary" size="s">Fit Selection</sp-button>
     </div>
@@ -72,50 +74,41 @@
 
   <h3>Reference Images</h3>
   <div class="row spread">
-    <sp-button id="addRefs" variant="secondary" size="s">Add References…</sp-button>
+    <div class="row">
+      <sp-button id="addRefs" variant="secondary" size="s">Add Files…</sp-button>
+      <sp-button id="pasteRef" variant="secondary" size="s">Paste</sp-button>
+    </div>
     <div class="row">
       <span id="refCount" class="muted">0/10</span>
       <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
     </div>
   </div>
   <div id="thumbs"></div>
+  <div class="muted"><b>Paste</b> adds whatever image is on the clipboard: copied from a browser, a file in Finder, another app. </div>
 
   <sp-divider size="s"></sp-divider>
 
   <div class="field">
     <span class="label">Model</span>
     <sp-picker id="model" size="s">
-      <sp-menu slot="options">
-        <sp-menu-item value="gemini-3-pro-image" selected>Nano Banana Pro (best)</sp-menu-item>
-        <sp-menu-item value="gemini-2.5-flash-image">Nano Banana (fast / cheap)</sp-menu-item>
-        <sp-menu-item value="openai:gpt-image-2">OpenAI GPT Image 2</sp-menu-item>
-        <sp-menu-item value="openai:chatgpt-image-latest">OpenAI ChatGPT Image latest</sp-menu-item>
-        <sp-menu-item value="openai:gpt-image-1.5">OpenAI GPT Image 1.5</sp-menu-item>
-        <sp-menu-item value="openai:gpt-image-1">OpenAI GPT Image 1</sp-menu-item>
-        <sp-menu-item value="openai:gpt-image-1-mini">OpenAI GPT Image 1 mini</sp-menu-item>
-      </sp-menu>
+      <sp-menu slot="options"></sp-menu>
     </sp-picker>
   </div>
 
   <div class="field">
     <span class="label">Resolution</span>
     <sp-picker id="resolution" size="s">
-      <sp-menu slot="options">
-        <sp-menu-item value="auto">Auto</sp-menu-item>
-        <sp-menu-item value="1K">1K</sp-menu-item>
-        <sp-menu-item value="2K" selected>2K</sp-menu-item>
-        <sp-menu-item value="4K">4K</sp-menu-item>
-      </sp-menu>
+      <sp-menu slot="options"></sp-menu>
     </sp-picker>
   </div>
-  <div class="muted">Aspect ratio is auto-matched to your selection's shape (cover-fit, no distortion).</div>
+  <div class="muted">Aspect ratio is auto-matched to your selection's shape (cover-fit, no distortion). Both menus above list only what the selected model supports.</div>
 
   <div class="row" style="margin-top:10px">
     <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
   </div>
   <div class="muted">On: the selected pixels are sent as the image to edit. Off: nothing from the canvas is sent &mdash; with no reference images that is plain text-to-image, rendered into the same area and shape.</div>
 
-  <div class="muted">With a selection active, only that area changes. Without one, the full image is selected for you and framed to the nearest supported ratio &mdash; the panel says what it did.</div>
+  <div class="muted">With a selection active, only that area changes. Without one, the full image is selected and framed to the nearest supported ratio.</div>
 
   <sp-divider size="s"></sp-divider>
 

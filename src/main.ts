@@ -8,12 +8,21 @@ import {
   placeResult,
   scaleViaPhotoshop,
   setRectSelection,
+  readClipboardImage,
   Bounds,
 } from "./photoshop-bridge";
-import { encodePng, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
+import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
 import { generateOpenAIImage, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
 import { pickReferenceImages, RefImage } from "./references";
+import {
+  MODELS,
+  DEFAULT_MODEL,
+  modelSpec,
+  resolutionLabel,
+  nearestImageSize,
+  nearestRatioLabel,
+} from "./models";
 import {
   loadApiKey,
   saveApiKey,
@@ -105,6 +114,42 @@ async function onAddRefs(): Promise<void> {
   }
 }
 
+// Add the clipboard image as a reference. Photoshop performs the paste (see
+// readClipboardImage), so this covers everything it can paste — an image copied
+// in a browser, a file copied in Finder, another app's canvas.
+async function onPasteRef(): Promise<void> {
+  if (refs.length >= MAX_REFS) {
+    setStatus(`Maximum ${MAX_REFS} reference images.`, "error");
+    return;
+  }
+  setStatus("Pasting from the clipboard…");
+  try {
+    const img = await readClipboardImage();
+    const base64 = bytesToBase64(encodePng(img.data, img.width, img.height, img.components));
+    refs = refs
+      .concat({
+        name: `Pasted ${img.width}×${img.height}`,
+        mimeType: "image/png",
+        base64,
+        dataUrl: `data:image/png;base64,${base64}`,
+      })
+      .slice(0, MAX_REFS);
+    renderThumbs();
+    const shrunk = img.width !== img.originalWidth || img.height !== img.originalHeight;
+    setStatus(
+      shrunk
+        ? `Pasted reference added — ${img.originalWidth}×${img.originalHeight} scaled down to ${img.width}×${img.height}.`
+        : `Pasted reference added (${img.width}×${img.height}).`,
+      "ok"
+    );
+  } catch (err: any) {
+    // The bridge attaches a step-by-step trace to the message; mirror it to the
+    // console too, since the status box is narrow.
+    console.log("[NBP] paste failed:", err?.message || String(err));
+    setStatus("Could not paste: " + (err?.message || String(err)), "error");
+  }
+}
+
 async function onGenerate(): Promise<void> {
   if (running) return;
   setStatus("Starting…"); // immediate feedback that the click was received
@@ -125,7 +170,10 @@ async function onGenerate(): Promise<void> {
     return;
   }
 
-  const resolution = $("resolution").value || "auto";
+  const spec = modelSpec(model);
+  // The resolution menu is already rebuilt per model, but clamp again here so a
+  // tier this model cannot produce can never reach the API.
+  const resolution = nearestImageSize($("resolution").value || "auto", spec);
   // Unticked: the canvas contributes nothing to the request. With no reference
   // images either, that makes this a plain text-to-image generation which is
   // still placed into the selection's area and shape.
@@ -174,18 +222,19 @@ async function onGenerate(): Promise<void> {
       if (isGptImage2(model)) {
         openaiSize = gptImage2Size(padW, padH, resolution === "auto" ? undefined : resolution);
       } else {
-        const presets = [
-          { r: 1, size: "1024x1024", label: "1:1" },
-          { r: 3 / 2, size: "1536x1024", label: "3:2" },
-          { r: 2 / 3, size: "1024x1536", label: "2:3" },
-        ];
+        // Fixed-size models: the crop's shape picks one of the sizes the model
+        // actually returns (see fixedSizes in the capability table).
+        const presets = spec.fixedSizes || [];
+        if (!presets.length) {
+          throw new Error(`${spec.label} has no fixedSizes in the model table — cannot pick an output size.`);
+        }
         const cr = padW / padH;
         const best = presets.reduce((a, b) =>
-          Math.abs(Math.log(b.r) - Math.log(cr)) < Math.abs(Math.log(a.r) - Math.log(cr)) ? b : a
+          Math.abs(Math.log(b.ratio) - Math.log(cr)) < Math.abs(Math.log(a.ratio) - Math.log(cr)) ? b : a
         );
         openaiSize = best.size;
         ratioLabel = best.label;
-        region = fitRegionToRatio(basePad, best.r, docW, docH);
+        region = fitRegionToRatio(basePad, best.ratio, docW, docH);
       }
     } else {
       geminiAspect = nearestSupportedAspectRatio(padW, padH);
@@ -354,6 +403,82 @@ function setCheckedSafe(el: any, on: boolean): void {
   }
 }
 
+// Replace a picker's options wholesale and select `selected`.
+function buildMenu(pickerId: string, options: { value: string; label: string }[], selected: string): void {
+  const picker = $(pickerId);
+  const menu = picker?.querySelector("sp-menu");
+  if (!menu) return;
+  clearChildren(menu);
+  for (const opt of options) {
+    const item = document.createElement("sp-menu-item");
+    item.setAttribute("value", opt.value);
+    item.textContent = opt.label;
+    if (opt.value === selected) item.setAttribute("selected", "");
+    menu.appendChild(item);
+  }
+  setValueSafe(picker, selected);
+}
+
+function buildModelMenu(): void {
+  buildMenu(
+    "model",
+    MODELS.map((m) => ({ value: m.id, label: m.label })),
+    DEFAULT_MODEL
+  );
+}
+
+// Rebuild the ratio and resolution menus from the picked model's entry in the
+// capability table. A choice the new model also supports is kept; anything else
+// snaps to the nearest thing it can actually do, and the caller gets a sentence
+// explaining the move so it never happens silently.
+// `preferRatio`/`preferSize` override what the pickers currently show — used at
+// startup, where the stored settings should win over the markup's defaults.
+function applyModelCapabilities(modelId: string, preferRatio?: string, preferSize?: string): string {
+  const spec = modelSpec(modelId);
+  const notes: string[] = [];
+
+  const wantRatio = preferRatio || $("selRatio")?.value || "1:1";
+  const ratio = nearestRatioLabel(wantRatio, spec.aspectRatios);
+  buildMenu(
+    "selRatio",
+    spec.aspectRatios.map((r) => ({ value: r, label: r })),
+    ratio
+  );
+  saveSetting("selRatio", ratio);
+  if (ratio !== wantRatio) {
+    notes.push(`${spec.label} cannot do ${wantRatio} — ratio set to ${ratio}.`);
+  }
+
+  const wantSize = preferSize || $("resolution")?.value || "auto";
+  const size = nearestImageSize(wantSize, spec);
+  buildMenu(
+    "resolution",
+    [{ value: "auto", label: "Auto" }].concat(
+      spec.imageSizes.map((s) => ({ value: s, label: resolutionLabel(s) }))
+    ),
+    size
+  );
+  saveSetting("resolution", size);
+  if (size !== wantSize) {
+    notes.push(
+      spec.imageSizes.length
+        ? `${spec.label} does not output ${resolutionLabel(wantSize)} — resolution set to ${resolutionLabel(size)}.`
+        : `${spec.label} has no resolution control — its output size follows the ratio.`
+    );
+  }
+  return notes.join(" ");
+}
+
+function hasOption(picker: any, v: string): boolean {
+  if (!picker) return false;
+  try {
+    const items: any[] = Array.from(picker.querySelectorAll("sp-menu-item"));
+    return items.some((item) => item.getAttribute("value") === v);
+  } catch {
+    return false;
+  }
+}
+
 function setPickerSafe(picker: any, v: string): void {
   if (!picker) return;
   setValueSafe(picker, v);
@@ -435,10 +560,20 @@ async function onFitNearest(): Promise<void> {
 async function restoreSettings(): Promise<void> {
   setValueSafe($("geminiApiKey"), await loadApiKey());
   setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
-  for (const id of PICKERS) {
-    const v = loadSetting(id, "");
-    if (v) setPickerSafe($(id), v);
-  }
+  // The model menu is generated from the capability table. Only restore a stored
+  // model the table still lists — one dropped since last session would otherwise
+  // leave the picker blank while still being sent to the API.
+  buildModelMenu();
+  const storedModel = loadSetting("model", "");
+  if (storedModel && hasOption($("model"), storedModel)) setPickerSafe($("model"), storedModel);
+  else if (storedModel) saveSetting("model", "");
+  // Ratio and resolution menus follow from the model, restoring each stored
+  // choice that model supports and snapping the rest.
+  applyModelCapabilities(
+    $("model").value || DEFAULT_MODEL,
+    loadSetting("selRatio", "1:1"),
+    loadSetting("resolution", "auto")
+  );
   // Defaults to on — only an explicit "0" from a previous session turns it off.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
 }
@@ -447,6 +582,11 @@ function persistSettingsHooks(): void {
   for (const id of PICKERS) {
     $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
   }
+  // Switching model re-derives which ratios and resolutions are on offer.
+  $("model")?.addEventListener("change", () => {
+    const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);
+    if (note) setStatus(note);
+  });
   $("includeSelection")?.addEventListener("change", () =>
     saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0")
   );
@@ -476,6 +616,7 @@ async function init(): Promise<void> {
       }
     });
     $("addRefs").addEventListener("click", onAddRefs);
+    $("pasteRef").addEventListener("click", onPasteRef);
     $("clearRefs").addEventListener("click", () => {
       refs = [];
       renderThumbs();
@@ -492,10 +633,20 @@ async function init(): Promise<void> {
       }
     });
 
+    // Cmd/Ctrl+V pastes the clipboard image as a reference — but only outside a
+    // text field, so pasting text into the prompt or a key field still works.
+    document.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || (e.key !== "v" && e.key !== "V")) return;
+      const tag = String((e.target as any)?.tagName || "").toUpperCase();
+      if (tag.includes("TEXTFIELD") || tag.includes("TEXTAREA") || tag === "INPUT") return;
+      e.preventDefault();
+      onPasteRef();
+    });
+
     await restoreSettings();
     persistSettingsHooks();
     renderThumbs();
-    setStatus("Ready. Select a region (optional), add references, write a prompt.");
+    setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
   } catch (err: any) {
     setStatus("Init error: " + (err?.message || String(err)), "error");
   }

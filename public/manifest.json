@@ -22,7 +22,7 @@
       "type": "panel",
       "id": "nbpEditorPanel",
       "label": { "default": "Nano Banana Pro Edit" },
-      "minimumSize": { "width": 230, "height": 320 },
+      "minimumSize": { "width": 270, "height": 320 },
       "maximumSize": { "width": 900, "height": 2000 },
       "preferredDockedSize": { "width": 340, "height": 720 },
       "preferredFloatingSize": { "width": 380, "height": 800 },
