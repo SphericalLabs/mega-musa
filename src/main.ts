@@ -14,7 +14,7 @@ import {
 import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import { generateEdit, nearestSupportedAspectRatio, aspectRatioInfo } from "./gemini";
 import { generateOpenAIImage, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
-import { pickReferenceImages, RefImage } from "./references";
+import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
 import {
   MODELS,
   DEFAULT_MODEL,
@@ -148,6 +148,7 @@ function renderThumbs(): void {
     wrap.appendChild(cell);
   });
   $("refCount").textContent = `${refs.length}/${MAX_REFS}`;
+  syncDropCapacity();
 }
 
 async function onAddRefs(): Promise<void> {
@@ -165,6 +166,219 @@ async function onAddRefs(): Promise<void> {
   } catch (err: any) {
     setStatus("Could not load references: " + (err?.message || String(err)), "error");
   }
+}
+
+const DROP_CHANNEL = "nbp-reference-drop-v1";
+const MAX_DROP_CHUNK_LENGTH = 256 * 1024;
+
+interface DropBatchState {
+  expected: number;
+  completed: number;
+  added: number;
+  ignored: number;
+  invalid: number;
+  overflow: number;
+  failed: number;
+}
+
+interface PendingDropFile {
+  batchId: string;
+  name: string;
+  chunks: string[];
+  totalChunks: number;
+}
+
+const dropBatches = new Map<string, DropBatchState>();
+const pendingDropFiles = new Map<string, PendingDropFile>();
+let dropWebviewReady = false;
+
+function safeCount(value: any): number {
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+
+function syncDropCapacity(): void {
+  const webview = $("dropWebview");
+  if (!dropWebviewReady || !webview || typeof webview.postMessage !== "function") return;
+  try {
+    webview.postMessage({ channel: DROP_CHANNEL, type: "capacity", remaining: MAX_REFS - refs.length });
+  } catch {
+    /* The WebView may still be loading; its ready message retries this. */
+  }
+}
+
+function failPendingDropFile(fileId: string): void {
+  const file = pendingDropFiles.get(fileId);
+  if (!file) return;
+  pendingDropFiles.delete(fileId);
+  const batch = dropBatches.get(file.batchId);
+  if (batch) {
+    batch.failed += 1;
+    batch.completed += 1;
+  }
+}
+
+function finishDropBatch(batchId: string): void {
+  const batch = dropBatches.get(batchId);
+  if (!batch) return;
+  for (const [fileId, file] of pendingDropFiles) {
+    if (file.batchId === batchId) {
+      pendingDropFiles.delete(fileId);
+      batch.failed += 1;
+      batch.completed += 1;
+    }
+  }
+  batch.failed += Math.max(0, batch.expected - batch.completed);
+  dropBatches.delete(batchId);
+
+  const skipped: string[] = [];
+  const unsupported = batch.ignored + batch.invalid;
+  if (unsupported) skipped.push(`${unsupported} not ${REF_FORMATS}`);
+  if (batch.overflow) skipped.push(`${batch.overflow} over the ${MAX_REFS}-image limit`);
+  if (batch.failed) skipped.push(`${batch.failed} unreadable`);
+  const tail = skipped.length ? ` Skipped ${skipped.join(", ")}.` : "";
+  setStatus(
+    batch.added
+      ? `Added ${batch.added} reference image${batch.added === 1 ? "" : "s"}.${tail}`
+      : `Nothing added.${tail}`,
+    batch.added ? "ok" : "error"
+  );
+  syncDropCapacity();
+}
+
+function onDropWebviewMessage(event: any): void {
+  const webview = $("dropWebview");
+  // The bridge is local-only in the manifest. Checking the exact WebView source
+  // as well prevents another embedded page from injecting image data.
+  if (!webview || event.source !== webview) return;
+  const message = event.data;
+  if (!message || message.channel !== DROP_CHANNEL || typeof message.type !== "string") return;
+
+  if (message.type === "ready") {
+    dropWebviewReady = true;
+    syncDropCapacity();
+    return;
+  }
+  if (message.type === "drop-error") {
+    setStatus(message.message || "That drop did not contain readable files.", "error");
+    return;
+  }
+
+  const batchId = typeof message.batchId === "string" ? message.batchId : "";
+  if (!batchId || batchId.length > 120) return;
+
+  if (message.type === "batch-start") {
+    dropBatches.set(batchId, {
+      expected: safeCount(message.expected),
+      completed: 0,
+      added: 0,
+      ignored: safeCount(message.ignored),
+      invalid: 0,
+      overflow: safeCount(message.overflow),
+      failed: 0,
+    });
+    setNote("");
+    if (message.expected) {
+      setStatus(`Reading ${message.expected} dropped image${message.expected === 1 ? "" : "s"}…`);
+    }
+    return;
+  }
+
+  const batch = dropBatches.get(batchId);
+  if (!batch) return;
+
+  if (message.type === "file-error") {
+    batch.failed += 1;
+    batch.completed += 1;
+    return;
+  }
+
+  const fileId = typeof message.fileId === "string" ? message.fileId : "";
+  if (message.type === "file-start") {
+    const totalChunks = safeCount(message.totalChunks);
+    if (!fileId || fileId.length > 180 || !totalChunks || totalChunks > 100000) {
+      batch.failed += 1;
+      batch.completed += 1;
+      return;
+    }
+    pendingDropFiles.set(fileId, {
+      batchId,
+      name: String(message.name || "dropped image").slice(0, 512),
+      chunks: new Array(totalChunks),
+      totalChunks,
+    });
+    return;
+  }
+
+  if (message.type === "file-chunk") {
+    const file = pendingDropFiles.get(fileId);
+    const index = Number(message.index);
+    if (
+      !file ||
+      file.batchId !== batchId ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= file.totalChunks ||
+      typeof message.data !== "string" ||
+      message.data.length > MAX_DROP_CHUNK_LENGTH
+    ) {
+      failPendingDropFile(fileId);
+      return;
+    }
+    file.chunks[index] = message.data;
+    return;
+  }
+
+  if (message.type === "file-end") {
+    const file = pendingDropFiles.get(fileId);
+    if (!file || file.batchId !== batchId) return;
+    pendingDropFiles.delete(fileId);
+    batch.completed += 1;
+    let complete = true;
+    for (let index = 0; index < file.totalChunks; index += 1) {
+      if (typeof file.chunks[index] !== "string") {
+        complete = false;
+        break;
+      }
+    }
+    if (!complete) {
+      batch.failed += 1;
+      return;
+    }
+    if (refs.length >= MAX_REFS) {
+      batch.overflow += 1;
+      return;
+    }
+    try {
+      const image = referenceImageFromBase64(file.name, file.chunks.join(""));
+      if (!image) {
+        batch.invalid += 1;
+        return;
+      }
+      refs.push(image);
+      batch.added += 1;
+      renderThumbs();
+    } catch {
+      batch.failed += 1;
+    }
+    return;
+  }
+
+  if (message.type === "batch-end") finishDropBatch(batchId);
+}
+
+function setupDropWebview(): void {
+  const webview = $("dropWebview");
+  if (!webview) return;
+  window.addEventListener("message", onDropWebviewMessage);
+  webview.addEventListener("loadstop", () => {
+    dropWebviewReady = true;
+    syncDropCapacity();
+  });
+  webview.addEventListener("loaderror", () => {
+    dropWebviewReady = false;
+    setStatus("Drag-and-drop could not load. Add Files and Paste still work.", "error");
+  });
 }
 
 // Add the clipboard image as a reference. Photoshop performs the paste (see
@@ -681,6 +895,7 @@ async function init(): Promise<void> {
       refs = [];
       renderThumbs();
     });
+    setupDropWebview();
     $("generate").addEventListener("click", onGenerate);
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
