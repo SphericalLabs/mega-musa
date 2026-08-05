@@ -129,11 +129,6 @@ export async function getActiveArtboard(doc: any): Promise<ActiveArtboard | null
   return { id: active.id, name: active.name || "Artboard", bounds };
 }
 
-// Activate the Rectangular Marquee tool and set its Style to Fixed Ratio at
-// width:height (or Normal when null), so the user drags selections already
-// matching a supported output ratio. NOTE: the marquee-style tokens below are
-// best-effort; if Photoshop rejects them the panel surfaces the error and they
-// can be corrected in one place.
 // Replace the current selection with an exact rectangle (document pixels).
 // Used to snap a freely-drawn selection to a chosen aspect ratio.
 export async function setRectSelection(b: Bounds): Promise<void> {
