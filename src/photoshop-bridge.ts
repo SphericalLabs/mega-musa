@@ -69,7 +69,7 @@ async function exactArtboardBounds(docId: number, artboard: any): Promise<Bounds
     const exact = boundsFrom(result?.[0]?.artboard?.artboardRect);
     if (exact) return exact;
   } catch (e: any) {
-    console.log("[NBP] could not read exact artboard bounds:", e?.message || e);
+    console.log("[Mega Musa] could not read exact artboard bounds:", e?.message || e);
   }
 
   // Older Photoshop descriptors may omit artboardRect. For an artboard layer,
@@ -138,7 +138,7 @@ export async function setRectSelection(b: Bounds): Promise<void> {
         {}
       );
     },
-    { commandName: "Nano Banana Pro: snap selection" }
+    { commandName: "Mega Musa: snap selection" }
   );
 }
 
@@ -303,7 +303,7 @@ export async function readRegion(
 
       return { image: { data, width: cropW, height: cropH, components }, mask, debug };
     },
-    { commandName: "Nano Banana Pro: read region" }
+    { commandName: "Mega Musa: read region" }
   );
 }
 
@@ -391,11 +391,11 @@ export async function placeResult(
           );
         } catch (e: any) {
           // Not fatal — the result is already placed and masked.
-          console.log("[NBP] could not restore the selection after masking:", e?.message || e);
+          console.log("[Mega Musa] could not restore the selection after masking:", e?.message || e);
         }
       }
     },
-    { commandName: "Nano Banana Pro: place result" }
+    { commandName: "Mega Musa: place result" }
   );
 }
 
@@ -433,7 +433,7 @@ export async function readClipboardImage(): Promise<PastedImage> {
         height: 64,
         resolution: 72,
         fill: "transparent",
-        name: "nbp-paste",
+        name: "mm-paste",
       });
       if (!scratch) throw new Error("Could not create a scratch document for the paste.");
       // paste follows the active document, so make sure that is the scratch and
@@ -544,7 +544,7 @@ export async function readClipboardImage(): Promise<PastedImage> {
         }
       }
     },
-    { commandName: "Nano Banana Pro: paste reference" }
+    { commandName: "Mega Musa: paste reference" }
   );
 }
 
@@ -570,7 +570,7 @@ export async function scaleViaPhotoshop(
         height: srcH,
         resolution: 72,
         fill: "transparent",
-        name: "nbp-scale",
+        name: "mm-scale",
       });
       if (!scratch) throw new Error("Could not create scratch document for scaling.");
       try {
@@ -641,6 +641,6 @@ export async function scaleViaPhotoshop(
         }
       }
     },
-    { commandName: "Nano Banana Pro: scale result" }
+    { commandName: "Mega Musa: scale result" }
   );
 }

@@ -1,7 +1,7 @@
 {
   "manifestVersion": 5,
   "id": "com.hgk.nbp.editor",
-  "name": "Nano Banana Pro Edit",
+  "name": "Mega Musa",
   "version": "0.1.1",
   "main": "index.html",
   "host": {
@@ -27,7 +27,7 @@
     {
       "type": "panel",
       "id": "nbpEditorPanel",
-      "label": { "default": "Nano Banana Pro Edit" },
+      "label": { "default": "Mega Musa" },
       "minimumSize": { "width": 270, "height": 320 },
       "maximumSize": { "width": 900, "height": 2000 },
       "preferredDockedSize": { "width": 340, "height": 900 },

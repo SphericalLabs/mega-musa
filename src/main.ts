@@ -424,7 +424,7 @@ async function onPasteRef(): Promise<void> {
   } catch (err: any) {
     // The bridge attaches a step-by-step trace to the message; mirror it to the
     // console too, since the status box is narrow.
-    console.log("[NBP] paste failed:", err?.message || String(err));
+    console.log("[Mega Musa] paste failed:", err?.message || String(err));
     setStatus("Could not paste: " + (err?.message || String(err)), "error");
   }
 }
@@ -603,7 +603,7 @@ async function onGenerate(): Promise<void> {
       // mask, so we don't read/resample it here (and leave the selection untouched).
       const read = await readRegion(docId, region, false);
       basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
-      console.log("[NBP]", read.debug);
+      console.log("[Mega Musa]", read.debug);
     }
 
     const sizeLabel = geminiAspect ?? openaiSize ?? "auto";
@@ -658,7 +658,7 @@ async function onGenerate(): Promise<void> {
       try {
         rgba = await scaleViaPhotoshop(rgba, decoded.width, decoded.height, cropW, cropH);
       } catch (e: any) {
-        console.log("[NBP] Photoshop scale failed, using JS resample:", e?.message || e);
+        console.log("[Mega Musa] Photoshop scale failed, using JS resample:", e?.message || e);
         rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
       }
     }

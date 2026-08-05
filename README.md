@@ -1,6 +1,10 @@
-# Nano Banana Pro Edit — Photoshop UXP plugin
+# Mega Musa — Photoshop UXP plugin
+
+*Musa × paradisiaca*
 
 A Photoshop panel for AI image generation and localized editing with Google Gemini image models (Nano Banana) and OpenAI GPT Image models.
+
+![Mega Musa key visual: an open banana reveals Photoshop's transparency checkerboard](public/assets/github-banner-open-peel.jpg)
 
 ## Features
 
@@ -36,6 +40,14 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 4. Choose the model and settings, then click **Generate**.
 
 Existing selections are framed to the nearest supported output ratio without changing their original shape. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
+
+## Brand assets
+
+- [README key visual](public/assets/mega-musa/github-banner-open-peel.png)
+- [Alternative portrait peel-reveal](public/assets/mega-musa/github-banner-peel-reveal.png)
+- [Square peel-reveal master](public/assets/mega-musa/adobe-hero-peel-reveal.png)
+- [Light hybrid-cross icon master](public/assets/mega-musa/panel-icon-hybrid-cross-light.png)
+- [Dark hybrid-cross icon master](public/assets/mega-musa/panel-icon-hybrid-cross-dark.png)
 
 ## License
 
