@@ -52,7 +52,7 @@ export interface ModelSpec {
 export interface OutputFrame {
   // Always one of the current model's picker options.
   label: string;
-  // The exact ratio the provider's returned pixels will have.
+  // The exact requested ratio. Returned pixels are verified after decoding.
   ratio: number;
   geminiAspect?: string;
   openaiSize?: string;

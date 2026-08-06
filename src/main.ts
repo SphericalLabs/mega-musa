@@ -69,6 +69,8 @@ const { entrypoints } = require("uxp");
 const MAX_REFS = 10;
 const PICKERS = ["model", "resolution", "quality", "selRatio"];
 const REQUEST_MIN_MAX_EDGE = 2048;
+// Provider sizes use pixel grids, so small ratio differences are normal.
+const RETURNED_RATIO_TOLERANCE = 0.02;
 const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
@@ -242,6 +244,14 @@ function isOpenAIModel(model: string): boolean {
 
 function modelProviderLabel(model: string): string {
   return isOpenAIModel(model) ? "OpenAI" : "Gemini";
+}
+
+function pixelSize(width: number, height: number): string {
+  return `${width}×${height}`;
+}
+
+function ratioDiffers(width: number, height: number, expected: number): boolean {
+  return Math.abs(width / height / expected - 1) > RETURNED_RATIO_TOLERANCE;
 }
 
 // Photoshop stops accepting a layer name past 255 characters.
@@ -905,6 +915,14 @@ async function onGenerate(): Promise<void> {
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
     const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
+    const exactOutputSize =
+      openaiDimensions.length === 2 && openaiDimensions.every(Number.isFinite)
+        ? pixelSize(openaiDimensions[0], openaiDimensions[1])
+        : "";
+    const [pickerRatioW, pickerRatioH] = ratioLabel.split(":").map(Number);
+    const pickerIsApproximate =
+      !!exactOutputSize &&
+      openaiDimensions[0] * pickerRatioH !== openaiDimensions[1] * pickerRatioW;
     const tierLongEdge: Record<string, number> = {
       "512px": 512,
       "1K": 1024,
@@ -951,6 +969,14 @@ async function onGenerate(): Promise<void> {
           `No selection — selected ${targetName} (${targetW}×${targetH}), already ${ratioLabel}, so nothing was cropped.`
         );
       }
+    }
+    const outputFrameNote = exactOutputSize
+      ? `${exactOutputSize}${pickerIsApproximate ? `; picker shows nearest ratio ${ratioLabel}` : ""}`
+      : `${ratioLabel} at ${resolution === "auto" ? "default resolution" : resolutionLabel(resolution)}`;
+    if (isRegion) {
+      notes.push(`Region edit — output request: ${outputFrameNote}; result stays clipped to your selection.`);
+    } else if (exactOutputSize) {
+      notes.push(`Output request: ${outputFrameNote}.`);
     }
     if (!includeSelection) {
       notes.push(
@@ -1039,11 +1065,26 @@ async function onGenerate(): Promise<void> {
     if (usageDetails.length) setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
 
     const decoded = decodeImage(result.mimeType, result.bytes);
+    const returnedSize = pixelSize(decoded.width, decoded.height);
+    const returnedRatioDiffers = ratioDiffers(decoded.width, decoded.height, frame.ratio);
+    const returnedSizeDiffers =
+      !!exactOutputSize &&
+      (decoded.width !== openaiDimensions[0] || decoded.height !== openaiDimensions[1]);
+    if (returnedRatioDiffers) {
+      notes.push(
+        exactOutputSize
+          ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It was center-cropped to fit without stretching.`
+          : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It was center-cropped to fit without stretching.`
+      );
+    } else if (returnedSizeDiffers) {
+      notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It was scaled to fit without stretching.`);
+    }
+    if (returnedRatioDiffers || returnedSizeDiffers) {
+      setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+    }
     let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    // Resample the result to the crop box. Hand it to Photoshop's Image Size
-    // engine (bicubic sharper for reductions, smoother for enlargements) — far
-    // better than a JS bilinear pass — and fall back to the JS resampler if the
-    // scratch-document plumbing fails, so a generation never dies here.
+    // Cover-fit the result to the crop box without changing its proportions.
+    // Photoshop handles the normal high-quality path; JS remains the fallback.
     if (decoded.width !== cropW || decoded.height !== cropH) {
       setStatus("Scaling result…");
       try {

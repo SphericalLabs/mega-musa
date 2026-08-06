@@ -617,11 +617,10 @@ export async function readClipboardImage(): Promise<PastedImage> {
   );
 }
 
-// Resample `rgba` (srcW x srcH, RGBA) to dstW x dstH using Photoshop's own Image
-// Size engine, via a throwaway document: Bicubic Sharper for reductions, Bicubic
-// Smoother for enlargements — far better than a hand-rolled bilinear pass. The
-// scratch doc is always closed without saving. Throws on any failure so the
-// caller can fall back to a JS resampler.
+// Cover-fit `rgba` (srcW x srcH, RGBA) to dstW x dstH with Photoshop's Image Size
+// engine, then read the centered destination crop. Proportions stay constrained,
+// so an unexpected provider ratio can never stretch. The scratch doc is always
+// closed without saving. Throws on failure so the caller can use the JS fallback.
 export async function scaleViaPhotoshop(
   rgba: Uint8Array,
   srcW: number,
@@ -660,34 +659,48 @@ export async function scaleViaPhotoshop(
         });
         srcData.dispose();
 
-        // Reductions -> Bicubic Sharper, enlargements -> Bicubic Smoother.
-        const srcPx = srcW * srcH;
-        const dstPx = dstW * dstH;
-        const method =
-          dstPx < srcPx ? "bicubicSharper" : dstPx > srcPx ? "bicubicSmoother" : "bicubic";
-        await action.batchPlay(
-          [
-            {
-              _obj: "imageSize",
-              width: { _unit: "pixelsUnit", _value: dstW },
-              height: { _unit: "pixelsUnit", _value: dstH },
-              constrainProportions: false,
-              interpolation: { _enum: "interpolationType", _value: method },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-          ],
-          {}
-        );
+        const scale = Math.max(dstW / srcW, dstH / srcH);
+        const targetW = Math.max(dstW, Math.ceil(srcW * scale));
+        const targetH = Math.max(dstH, Math.ceil(srcH * scale));
+        if (targetW !== srcW || targetH !== srcH) {
+          const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
+          await action.batchPlay(
+            [
+              {
+                _obj: "imageSize",
+                width: { _unit: "pixelsUnit", _value: targetW },
+                height: { _unit: "pixelsUnit", _value: targetH },
+                constrainProportions: true,
+                interpolation: { _enum: "interpolationType", _value: method },
+                _options: { dialogOptions: "dontDisplay" },
+              },
+            ],
+            {}
+          );
+        }
+
+        const resizedW = Math.round(scratch.width);
+        const resizedH = Math.round(scratch.height);
+        if (resizedW < dstW || resizedH < dstH) {
+          throw new Error("Photoshop's constrained resize did not cover the destination.");
+        }
+        const left = Math.floor((resizedW - dstW) / 2);
+        const top = Math.floor((resizedH - dstH) / 2);
 
         const { imageData } = await imaging.getPixels({
           documentID: scratch.id,
-          sourceBounds: { left: 0, top: 0, right: dstW, bottom: dstH },
+          sourceBounds: { left, top, right: left + dstW, bottom: top + dstH },
           componentSize: 8,
           applyAlpha: false,
         });
+        const outputW = imageData.width;
+        const outputH = imageData.height;
         const raw = await imageData.getData({ chunky: true });
         const comps = imageData.components || 4;
         imageData.dispose();
+        if (outputW !== dstW || outputH !== dstH) {
+          throw new Error("Photoshop returned the wrong cover-fit dimensions.");
+        }
 
         if (comps === 4) return new Uint8Array(raw);
         // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
