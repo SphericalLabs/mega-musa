@@ -49,6 +49,15 @@ export interface ModelSpec {
   qualityPrices?: QualityPrices;
 }
 
+export interface OutputFrame {
+  // Always one of the current model's picker options.
+  label: string;
+  // The exact ratio the provider's returned pixels will have.
+  ratio: number;
+  geminiAspect?: string;
+  openaiSize?: string;
+}
+
 // Published prices are USD. Mid-market reference rate on 2026-08-04.
 // The francs in the menu are estimates, so bump this if the rate drifts far
 // enough to matter.
@@ -348,6 +357,47 @@ export function nearestRatioLabel(want: string, options: string[]): string {
     }
   }
   return best;
+}
+
+// Resolve the picker label and provider request framing together. This is the
+// only place that translates a crop's dimensions into a model output shape, so
+// the menu, crop fitting, request and price estimate cannot disagree.
+export function outputFrame(
+  spec: ModelSpec,
+  tier: string,
+  width: number,
+  height: number
+): OutputFrame {
+  if (!spec.aspectRatios.length) {
+    throw new Error(`${spec.label} has no aspect ratios in the model table.`);
+  }
+
+  const safeW = width > 0 ? width : 1;
+  const safeH = height > 0 ? height : 1;
+
+  if (spec.id === GPT_IMAGE_2_ID) {
+    const openaiSize = gptImage2Size(safeW, safeH, tier === "auto" ? undefined : tier);
+    const [outputW, outputH] = openaiSize.split("x").map(Number);
+    const ratio = outputW / outputH;
+    const label = nearestRatioLabel(`${outputW}:${outputH}`, spec.aspectRatios);
+    return { label, ratio, openaiSize };
+  }
+
+  if (spec.fixedSizes?.length) {
+    const cropRatio = safeW / safeH;
+    const best = spec.fixedSizes.reduce((a, b) =>
+      Math.abs(Math.log(b.ratio) - Math.log(cropRatio)) <
+      Math.abs(Math.log(a.ratio) - Math.log(cropRatio))
+        ? b
+        : a
+    );
+    const label = nearestRatioLabel(best.label, spec.aspectRatios);
+    return { label, ratio: best.ratio, openaiSize: best.size };
+  }
+
+  const label = nearestRatioLabel(`${safeW}:${safeH}`, spec.aspectRatios);
+  const [ratioW, ratioH] = label.split(":").map(Number);
+  return { label, ratio: ratioW / ratioH, geminiAspect: label };
 }
 
 // Closest tier `model` supports to `want`. "auto" always survives; an unknown or

@@ -34,14 +34,12 @@ import {
 import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import {
   generateEdit,
-  nearestSupportedAspectRatio,
-  aspectRatioInfo,
   IMAGE_QUALITY_OPTIONS,
   imageQualityLabel,
   normalizeImageQuality,
   ImageQuality,
 } from "./gemini";
-import { generateOpenAIImage, OPENAI_MODEL_PREFIX, gptImage2Size, isGptImage2 } from "./openai";
+import { generateOpenAIImage, OPENAI_MODEL_PREFIX } from "./openai";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
 import {
   MODELS,
@@ -54,6 +52,7 @@ import {
   formatCHF,
   nearestImageSize,
   nearestRatioLabel,
+  outputFrame,
 } from "./models";
 import {
   loadApiKey,
@@ -692,17 +691,6 @@ async function onGenerate(): Promise<void> {
     if (hasSelection && activeArtboard && !sel) {
       throw new Error(`The selection does not overlap the active artboard “${activeArtboard.name}”.`);
     }
-    // Reflect the selection's nearest supported ratio in the picker — display
-    // only. An existing selection is never modified, so lasso / ellipse /
-    // feathered shapes survive to become the result's mask. The crop is framed to
-    // a supported ratio later (fitRegionToRatio) using only the bounding box.
-    // (When there is no selection we do set one — see the !isRegion block below.)
-    if (sel && sel.right - sel.left > 1 && sel.bottom - sel.top > 1) {
-      const info = aspectRatioInfo(sel.right - sel.left, sel.bottom - sel.top);
-      setPickerSafe($("selRatio"), info.label);
-      saveSetting("selRatio", info.label);
-      refreshResolutionLabels();
-    }
     const isRegion = !!sel;
 
     // Region edit: crop to exactly the selection, so the model spends its full
@@ -714,40 +702,15 @@ async function onGenerate(): Promise<void> {
     const baseW = baseRegion.right - baseRegion.left;
     const baseH = baseRegion.bottom - baseRegion.top;
 
-    // Pick the exact ratio the model will output, then reshape the crop to match
-    // it, so the later cover-fit is a pure scale — no zoom, trim or shift. This
-    // applies to whole-image edits too: framing the canvas to the ratio the model
-    // actually returns is what keeps the result from coming back stretched.
-    // gpt-image-2 is the exception — it takes any size, so we request the crop's
-    // own ratio and leave the crop alone.
-    let region = baseRegion;
-    let geminiAspect: string | undefined;
-    let openaiSize: string | undefined;
-    let ratioLabel = ""; // "" => the model matched the crop's own shape
-    if (isOpenAIModel(model)) {
-      if (isGptImage2(model)) {
-        openaiSize = gptImage2Size(baseW, baseH, resolution === "auto" ? undefined : resolution);
-      } else {
-        // Fixed-size models: the crop's shape picks one of the sizes the model
-        // actually returns (see fixedSizes in the capability table).
-        const presets = spec.fixedSizes || [];
-        if (!presets.length) {
-          throw new Error(`${spec.label} has no fixedSizes in the model table — cannot pick an output size.`);
-        }
-        const cr = baseW / baseH;
-        const best = presets.reduce((a, b) =>
-          Math.abs(Math.log(b.ratio) - Math.log(cr)) < Math.abs(Math.log(a.ratio) - Math.log(cr)) ? b : a
-        );
-        openaiSize = best.size;
-        ratioLabel = best.label;
-        region = fitRegionToRatio(baseRegion, best.ratio, targetBounds);
-      }
-    } else {
-      geminiAspect = nearestSupportedAspectRatio(baseW, baseH);
-      ratioLabel = geminiAspect;
-      const [rw, rh] = geminiAspect.split(":").map(Number);
-      region = fitRegionToRatio(baseRegion, rw / rh, targetBounds);
-    }
+    // Resolve the menu label and exact provider output shape once, then fit the
+    // crop to that shape. An existing selection is not modified, so a lasso,
+    // ellipse or feathered selection still survives as the result's layer mask.
+    const frame = outputFrame(spec, resolution, baseW, baseH);
+    const ratioLabel = frame.label;
+    const region = fitRegionToRatio(baseRegion, frame.ratio, targetBounds);
+    setPickerSafe($("selRatio"), ratioLabel);
+    saveSetting("selRatio", ratioLabel);
+    refreshResolutionLabels();
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
 
@@ -771,17 +734,10 @@ async function onGenerate(): Promise<void> {
       // user's selection, and before anything has been sent.
       throwIfCancelled();
       await setRectSelection(region);
-      if (ratioLabel) {
-        setPickerSafe($("selRatio"), ratioLabel);
-        saveSetting("selRatio", ratioLabel);
-        refreshResolutionLabels();
-      }
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
       const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
-      if (!ratioLabel) {
-        notes.push(`No selection — used ${targetName} (${targetW}×${targetH}); this model matches its shape.`);
-      } else if (cropped) {
+      if (cropped) {
         const trimmed =
           cropW !== targetW ? `${targetW - cropW}px off the width` : `${targetH - cropH}px off the height`;
         notes.push(
@@ -819,7 +775,7 @@ async function onGenerate(): Promise<void> {
       console.log("[Mega Musa]", read.debug);
     }
 
-    const sizeLabel = geminiAspect ?? openaiSize ?? "auto";
+    const sizeLabel = frame.geminiAspect ?? frame.openaiSize ?? "auto";
     const modeLabel = includeSelection
       ? "editing the canvas"
       : refs.length
@@ -839,13 +795,13 @@ async function onGenerate(): Promise<void> {
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
     };
     const controller = newAbortController();
-    sentCharge = estimatedCHF(spec, resolution, openaiSize, quality);
+    sentCharge = estimatedCHF(spec, resolution, frame.openaiSize, quality);
     requestSent = true;
     const request = isOpenAIModel(model)
-      ? generateOpenAIImage({ ...baseReq, size: openaiSize as string, quality, signal: controller.signal })
+      ? generateOpenAIImage({ ...baseReq, size: frame.openaiSize as string, quality, signal: controller.signal })
       : generateEdit({
           ...baseReq,
-          aspectRatio: geminiAspect,
+          aspectRatio: frame.geminiAspect,
           imageSize: resolution === "auto" ? undefined : resolution,
           signal: controller.signal,
         });
@@ -892,7 +848,7 @@ async function onGenerate(): Promise<void> {
     // requested tier; the Gemini models frame to a ratio, so there the tier is
     // the resolution. A model with no resolution control contributes neither.
     const layerDetails: string[] = [modelNameWithoutYear(spec.label)];
-    const resolutionDetail = openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
+    const resolutionDetail = frame.openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
     if (resolutionDetail) layerDetails.push(resolutionDetail);
     if (resolvedQuality) layerDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
     await placeResult(docId, region, rgba, cropW, cropH, resultLayerName(prompt, layerDetails), isRegion);
@@ -1117,30 +1073,6 @@ function setPickerSafe(picker: any, v: string): void {
   }
 }
 
-// Grow `sel` outward around its center to exactly `targetAR` (w/h), clamped to
-// the canvas. Growing (not shrinking) keeps all originally-selected content.
-function ratioRect(sel: Bounds, targetAR: number, limit: Bounds): Bounds {
-  const w = sel.right - sel.left;
-  const h = sel.bottom - sel.top;
-  const cx = (sel.left + sel.right) / 2;
-  const cy = (sel.top + sel.bottom) / 2;
-  let nw = w;
-  let nh = h;
-  if (targetAR > w / h) nw = h * targetAR;
-  else nh = w / targetAR;
-  nw = Math.min(nw, limit.right - limit.left);
-  nh = Math.min(nh, limit.bottom - limit.top);
-  let left = Math.round(cx - nw / 2);
-  let top = Math.round(cy - nh / 2);
-  let right = left + Math.round(nw);
-  let bottom = top + Math.round(nh);
-  if (left < limit.left) { right += limit.left - left; left = limit.left; }
-  if (top < limit.top) { bottom += limit.top - top; top = limit.top; }
-  if (right > limit.right) { left -= right - limit.right; right = limit.right; }
-  if (bottom > limit.bottom) { top -= bottom - limit.bottom; bottom = limit.bottom; }
-  return { left: Math.max(limit.left, left), top: Math.max(limit.top, top), right, bottom };
-}
-
 // Manual "Fit selection" — reshape the current selection to the chosen ratio
 // now, so the user can preview the shape. Generate also does this automatically.
 async function onFitSelection(): Promise<void> {
@@ -1160,7 +1092,7 @@ async function onFitSelection(): Promise<void> {
       return;
     }
     const [rw, rh] = v.split(":").map(Number);
-    await setRectSelection(ratioRect(targetSelection, rw / rh, limit));
+    await setRectSelection(fitRegionToRatio(targetSelection, rw / rh, limit));
     setStatus(`Selection fitted to ${v} — preview the shape, then Generate.`, "ok");
   } catch (err: any) {
     setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
@@ -1168,7 +1100,7 @@ async function onFitSelection(): Promise<void> {
 }
 
 // "Fit to nearest aspect ratio" — detect the closest official ratio to the
-// current selection, set it in the dropdown, and grow the selection to it.
+// current selection, set it in the dropdown, and fit the selection to it.
 async function onFitNearest(): Promise<void> {
   try {
     const doc = getActiveDoc();
@@ -1184,16 +1116,19 @@ async function onFitNearest(): Promise<void> {
       setStatus("The selection does not overlap the active artboard.", "error");
       return;
     }
-    const info = aspectRatioInfo(
+    const spec = modelSpec($("model")?.value || DEFAULT_MODEL);
+    const resolution = nearestImageSize($("resolution")?.value || "auto", spec);
+    const frame = outputFrame(
+      spec,
+      resolution,
       targetSelection.right - targetSelection.left,
       targetSelection.bottom - targetSelection.top
     );
-    setPickerSafe($("selRatio"), info.label);
-    saveSetting("selRatio", info.label);
+    setPickerSafe($("selRatio"), frame.label);
+    saveSetting("selRatio", frame.label);
     refreshResolutionLabels();
-    const [rw, rh] = info.label.split(":").map(Number);
-    await setRectSelection(ratioRect(targetSelection, rw / rh, limit));
-    setStatus(`Fitted to nearest ratio: ${info.label}.`, "ok");
+    await setRectSelection(fitRegionToRatio(targetSelection, frame.ratio, limit));
+    setStatus(`Fitted to nearest ratio: ${frame.label}.`, "ok");
   } catch (err: any) {
     setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
   }
