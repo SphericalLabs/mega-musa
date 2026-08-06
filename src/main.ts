@@ -225,8 +225,11 @@ function setNote(message: string): void {
 }
 
 function renderBudget(b?: Budget): void {
-  const el = $("budget");
-  if (el) el.textContent = budgetText(b || loadBudget());
+  const { total, counts } = budgetText(b || loadBudget());
+  const totalEl = $("budgetTotal");
+  const countsEl = $("budgetCounts");
+  if (totalEl) totalEl.textContent = total;
+  if (countsEl) countsEl.textContent = counts;
 }
 
 function isOpenAIModel(model: string): boolean {

@@ -43,14 +43,15 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       height: 100%;
       border: 1px dashed rgba(128,128,128,0.65);
       border-radius: 4px;
-      /* Off-white on the dark themes, dark gray on the light ones — the label
-         never carries colour of its own, only the panel's own contrast. */
-      color: rgba(235,235,235,0.85);
+      /* The label is an instruction, not a result, so it takes the same medium
+         gray as the panel's own explanatory lines (.muted in index.html) in each
+         theme — it never carries colour of its own. */
+      color: rgb(128,128,128);
       background: rgba(128,128,128,0.08);
       pointer-events: none;
       user-select: none;
     }
-    :root.theme-light #dropZone { color: rgba(64,64,64,0.85); }
+    :root.theme-light #dropZone { color: rgb(120,120,120); }
     #dropZone.over {
       border-color: rgba(64,140,240,0.95);
       background: rgba(64,140,240,0.18);

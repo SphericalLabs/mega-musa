@@ -22,7 +22,17 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 <head>
   <meta charset="utf-8" />
   <style>
-    body { margin: 0; padding: 0; font-size: 12px; }
+    /* Plain HTML text gets no theme-aware colour from UXP — only the sp-*
+       components restyle themselves — so the panel states its own, in four ranks:
+       headings, body text, control labels, and the explanations that close each
+       section (.muted, #note). Each rank is an explicit colour rather than an
+       opacity on the one below, so the ladder does not depend on UXP compositing
+       text and each theme can pick its own spacing between the rungs. This is the
+       dark rank, which covers Photoshop's two dark themes, the medium one, and
+       any runtime that reports no theme at all; the light themes restate the whole
+       ladder in the media query at the bottom, next to the theme probe that reads
+       the same mapping. */
+    body { margin: 0; padding: 0; font-size: 12px; color: rgb(235, 235, 235); }
     /* The panel does not scroll on its own: a UXP panel shorter than its content
        just clips it. Pinning a wrapper to all four edges gives that wrapper the
        panel's exact height, so anything past it scrolls. Photoshop only reserves
@@ -30,7 +40,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        few px as the panel crosses the height where scrolling begins. */
     #scroll { position: absolute; top: 0; left: 0; right: 0; bottom: 0;
               overflow-y: auto; padding: 8px 10px 14px; }
-    h3 { margin: 9px 0 2px; font-size: 12px; font-weight: 700; }
+    /* Section headers sit one step brighter than body text, the way Photoshop's
+       own panel headings do. */
+    h3 { margin: 9px 0 2px; font-size: 12px; font-weight: 700; color: rgb(255, 255, 255); }
     .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
     .grow { flex: 1; }
@@ -39,7 +51,17 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     /* UXP does not reliably render flex gap. Give the adjacent controls explicit
        margins so the spacing also appears inside Photoshop. */
     #saveGeminiKey, #saveOpenAIKey, #fitSelection, #pasteRef { margin-left: 7px; }
-    .label { font-size: 11px; opacity: 0.8; }
+    #budgetTotal, #budgetCounts { display: block; }
+    /* The buttons and the checkbox carry actions, so their labels belong at the
+       headings' contrast, not at the mid gray Spectrum's quiet and secondary
+       treatments give them. The variants in the markup do that for the buttons;
+       this states the label colour too, for the runtimes that let an author
+       colour reach into the component — the quiet Clear button and the checkbox
+       have no variant to raise. #generate is left out on purpose: its label sits
+       on the blue CTA fill and is already white in every theme. */
+    #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
+    #fitSelection, #fitNearest, #includeSelection { color: rgb(255, 255, 255); }
+    .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
     #model, #resolution, #quality { width: 100%; }
@@ -62,7 +84,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                      color: rgb(255, 255, 255); font-size: 10px; cursor: pointer;
                      display: flex; align-items: center; justify-content: center; }
     .thumb .remove:hover { background: rgb(0, 0, 0); }
-    .muted { opacity: 0.7; font-size: 11px; }
+    /* The lines that close each section explain the controls above them rather
+       than saying anything new, so they sit well below the labels — 30% of the
+       way from a medium gray into the panel behind them, which lands at ~3.3:1
+       on the dark theme and ~4.4:1 on the darkest. Under the 4.5:1 body text
+       holds to, deliberately: these lines are meant to be found when wanted, not
+       read on the way past. */
+    .muted { font-size: 11px; color: rgb(128, 128, 128); }
     #status { margin-top: 10px; font-size: 11px; line-height: 1.4; min-height: 28px;
               padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }
     #status.error { background: rgba(226,75,74,0.18); }
@@ -72,10 +100,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        these classes on a timer instead; the alphas are cosine-spaced so the pulse
        eases at both ends rather than sawing up and down. They only ever tint the
        background: the text colour is untouched, and even the strongest step is a
-       low-alpha gray that keeps the label at ~6.6:1 contrast on the dark UI theme
-       and ~8.7:1 on the light one. The swing spans 0.08-0.32 around a 0.20 mid
-       point; widen or narrow it about that mid point to change how strongly the
-       box breathes without shifting its average tint. */
+       low-alpha gray that leaves the label near 7:1 contrast against the theme
+       text colour set above, in either theme. The swing spans 0.08-0.32 around a
+       0.20 mid point; widen or narrow it about that mid point to change how
+       strongly the box breathes without shifting its average tint. */
     #status.pulse0  { background: rgba(128,128,128,0.080); }
     #status.pulse1  { background: rgba(128,128,128,0.083); }
     #status.pulse2  { background: rgba(128,128,128,0.092); }
@@ -91,7 +119,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse12 { background: rgba(128,128,128,0.308); }
     #status.pulse13 { background: rgba(128,128,128,0.317); }
     #status.pulse14 { background: rgba(128,128,128,0.320); }
-    #note { margin-top: 6px; font-size: 11px; line-height: 1.4; opacity: 0.8; }
+    #note { margin-top: 6px; font-size: 11px; line-height: 1.4; color: rgb(128, 128, 128); }
     #note:empty { display: none; }
     /* UXP offers no JavaScript API for Photoshop's Interface theme — it only maps
        the theme onto prefers-color-scheme (UXP 4.1+, values lightest / light /
@@ -103,7 +131,30 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        shipping theme; the light themes override it below. */
     #themeProbe { position: absolute; top: 0; left: 0; width: 0; height: 0;
                   overflow: hidden; color: rgb(255, 255, 255); }
+    /* Photoshop's third theme is a mid-gray panel, and a quiet gray has nowhere
+       to recede to on one: the ranks below would come out washed out at the same
+       colours that read as calm on the two dark themes. It keeps the dark ladder
+       — near-white body text — but with the lower rungs compressed towards it:
+       labels at ~5.2:1 and the explanations at ~4.1:1, about as much room as a
+       mid-gray panel gives below body text. If a runtime reports no such theme,
+       this block simply never matches. */
+    @media (prefers-color-scheme: medium) {
+      .label { color: rgb(212, 212, 212); }
+      .muted, #note { color: rgb(190, 190, 190); }
+    }
+    /* The same four ranks, going the other way: the explanations get brighter
+       here rather than darker, since receding on a light panel means moving
+       towards the background. They travel the same 30% into it as on the dark
+       themes, landing near 3:1, and stop there — Photoshop's light themes are
+       gray panels, not white ones, so a paler gray would lose the text rather
+       than quiet it. */
     @media (prefers-color-scheme: light), (prefers-color-scheme: lightest) {
+      body { color: rgb(30, 30, 30); }
+      h3 { color: rgb(0, 0, 0); }
+      .label { color: rgb(61, 61, 61); }
+      .muted, #note { color: rgb(120, 120, 120); }
+      #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
+      #fitSelection, #fitNearest, #includeSelection { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
     }
   </style>
@@ -112,17 +163,17 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
   <div id="scroll">
     <h3>API Keys</h3>
     <div class="field">
-      <span class="label">Google Gemini key &mdash; powers the Nano Banana models</span>
+      <span class="label">Google Gemini key &mdash; for Nano Banana models</span>
       <div class="row">
         <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
-        <sp-button id="saveGeminiKey" variant="secondary" size="s">Save</sp-button>
+        <sp-button id="saveGeminiKey" variant="primary" size="s">Save</sp-button>
       </div>
     </div>
     <div class="field">
-      <span class="label">OpenAI key &mdash; powers the GPT Image models</span>
+      <span class="label">OpenAI key &mdash; for GPT Image models</span>
       <div class="row">
         <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
-        <sp-button id="saveOpenAIKey" variant="secondary" size="s">Save</sp-button>
+        <sp-button id="saveOpenAIKey" variant="primary" size="s">Save</sp-button>
       </div>
     </div>
     <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
@@ -149,8 +200,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       </sp-picker>
     </div>
     <div class="row spread">
-      <span id="budget" class="muted">Budget spent: &mdash;</span>
-      <sp-button id="resetBudget" variant="secondary" size="s">Reset</sp-button>
+      <!-- Two spans, not one wrapped line: the breakdown starts its own line
+           instead of breaking wherever the panel width happens to fall. -->
+      <span id="budget" class="muted">
+        <span id="budgetTotal">Budget spent: &mdash;</span>
+        <span id="budgetCounts"></span>
+      </span>
+      <sp-button id="resetBudget" variant="primary" size="s">Reset</sp-button>
     </div>
 
     <sp-divider size="s"></sp-divider>
@@ -166,8 +222,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <h3>Reference Images</h3>
     <div class="row spread">
       <div class="row">
-        <sp-button id="addRefs" variant="secondary" size="s">Add Files…</sp-button>
-        <sp-button id="pasteRef" variant="secondary" size="s">Paste</sp-button>
+        <sp-button id="addRefs" variant="primary" size="s">Add Files…</sp-button>
+        <sp-button id="pasteRef" variant="primary" size="s">Paste</sp-button>
       </div>
       <div class="row">
         <span id="refCount" class="muted">0/10</span>
@@ -191,11 +247,11 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
         <sp-picker id="selRatio" size="s" class="grow">
           <sp-menu slot="options"></sp-menu>
         </sp-picker>
-        <sp-button id="fitSelection" variant="secondary" size="s">Fit Selection</sp-button>
+        <sp-button id="fitSelection" variant="primary" size="s">Fit Selection</sp-button>
       </div>
-      <sp-button id="fitNearest" variant="secondary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
+      <sp-button id="fitNearest" variant="primary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
     </div>
-    <div class="muted">Draw a selection, then <b>Generate</b> &mdash; it auto-fits to the nearest official ratio (offset-free). <b>Fit Selection</b> reshapes to the ratio chosen above; <b>Fit to Nearest Aspect Ratio</b> picks the closest ratio, updates the menu, and grows the selection to match.</div>
+    <div class="muted">A selection auto-fits to the model's nearest supported ratio on <b>Generate</b>. <b>Fit Selection</b> reshapes it to the menu's ratio now; <b>Fit to Nearest Aspect Ratio</b> grows it to the closest and sets the menu.</div>
 
     <sp-divider size="s"></sp-divider>
 

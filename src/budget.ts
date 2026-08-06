@@ -110,9 +110,16 @@ export function formatDate(iso: string): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-export function budgetText(b: Budget): string {
+// Two halves rather than one string: the panel puts the breakdown on its own
+// line, and a line it can lay out beats a newline the caller would have to talk
+// UXP into honouring. `counts` keeps its brackets — it reads as an aside under
+// the total either way, and nothing else has to know where the split was.
+export function budgetText(b: Budget): { total: string; counts: string } {
   const counts = [`${b.images} images`];
   if (b.unpriced) counts.push(`${b.unpriced} unpriced`);
   if (b.cancelled) counts.push(`${b.cancelled} cancelled but billed`);
-  return `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)} (${counts.join(", ")})`;
+  return {
+    total: `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)}`,
+    counts: `(${counts.join(", ")})`,
+  };
 }
