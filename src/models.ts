@@ -181,7 +181,9 @@ const TIER_ORDER = ["512px", "1K", "2K", "4K"];
 
 export function resolutionLabel(token: string): string {
   if (token === "auto") return "Auto";
-  if (token === "512px") return "512 px (0.5K)";
+  // Shown as 0.5K so it reads as one more step in the 1K / 2K / 4K ladder. The
+  // token itself stays "512px" — that is what the API and the saved setting use.
+  if (token === "512px") return "0.5K";
   return token;
 }
 

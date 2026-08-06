@@ -8,7 +8,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 
 ## Features
 
-- Edit a selection, the full document or the active artboard. Results are placed on a new layer. Selected regions keep their shape and feathering through a layer mask.
+- Edit a selection, the full document or the active artboard. Results are placed on a new layer at the top of the stack — of the artboard or group they belong to, if any — named after the prompt, with the model, resolution and quality in brackets. Selected regions keep their shape and feathering through a layer mask.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
 - Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste.
 - Choose among Gemini 3 Pro Image, Gemini 3.1 Flash Image, Gemini 2.5 Flash Image and OpenAI GPT Image 2, 1.5, 1 or 1 mini. Set model-supported resolution, quality and aspect ratio.

@@ -321,6 +321,23 @@ export async function readRegion(
   );
 }
 
+// Is this layer already the topmost one inside whatever holds it — a group, an
+// artboard, or the document itself? `parent` is the containing group or artboard,
+// or the document for a top-level layer, and each exposes the sibling list with
+// the topmost layer first.
+//
+// Answers false when the stack cannot be read, so an unreadable document leaves
+// the caller's move to decide rather than silently skipping it.
+function isFrontOfContainer(layer: any, layerId: number): boolean {
+  try {
+    const siblings: any[] = Array.from(layer?.parent?.layers || app.activeDocument.layers || []);
+    return siblings.length > 0 && siblings[0].id === layerId;
+  } catch (e: any) {
+    console.log("[Mega Musa] could not read the layer stack:", e?.message || e);
+    return false;
+  }
+}
+
 // Modal step 2: create a new layer, write the edited RGBA into `bounds`, and (for
 // region edits) add a layer mask that reveals the live selection — so Photoshop
 // itself clips the result to the exact selection shape, feather and all.
@@ -339,7 +356,8 @@ export async function placeResult(
         [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
         {}
       );
-      const layerId = app.activeDocument.activeLayers[0].id;
+      const newLayer = app.activeDocument.activeLayers[0];
+      const layerId = newLayer.id;
 
       await action.batchPlay(
         [
@@ -352,6 +370,39 @@ export async function placeResult(
         ],
         {}
       );
+
+      // A new layer lands directly above whichever layer was active, so a result
+      // could bury itself mid-stack. Layer > Arrange > Bring to Front lifts it to
+      // the top *of its own container*: a layer made inside an artboard or group
+      // stays there. That matters — getActiveArtboard resolves the target artboard
+      // by walking up from the active layer, and this layer is the active one when
+      // the next Generate runs, so hoisting it out of the artboard would break the
+      // following run in a multi-artboard document.
+      //
+      // Photoshop refuses the command outright when the layer is already at the
+      // top, and raises that as its own plugin alert — "The command “Move” is not
+      // currently available." — which a catch on this side cannot suppress. It is
+      // also the common case, because the layer this one was created above is
+      // usually the topmost one already. So check the stack and only move when
+      // there is somewhere to move to.
+      if (!isFrontOfContainer(newLayer, layerId)) {
+        try {
+          await action.batchPlay(
+            [
+              {
+                _obj: "move",
+                _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+                to: { _ref: "layer", _enum: "ordinal", _value: "front" },
+                _options: { dialogOptions: "dontDisplay" },
+              },
+            ],
+            {}
+          );
+        } catch (e: any) {
+          // The result is already placed; a stack position is not worth failing on.
+          console.log("[Mega Musa] could not bring the result layer to the front:", e?.message || e);
+        }
+      }
 
       const imageData = await imaging.createImageDataFromBuffer(rgba, {
         width,

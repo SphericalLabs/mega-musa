@@ -238,6 +238,32 @@ function modelProviderLabel(model: string): string {
   return isOpenAIModel(model) ? "OpenAI" : "Gemini";
 }
 
+// Photoshop stops accepting a layer name past 255 characters.
+const MAX_LAYER_NAME = 255;
+
+// Picker labels carry a release year — "Nano Banana Pro (2025)" — which tells the
+// models apart when choosing one and is just noise once it is on a layer.
+function modelNameWithoutYear(label: string): string {
+  return label.replace(/\s*\(\d{4}\)\s*$/, "");
+}
+
+// Name a result layer after the prompt that produced it, with the settings in
+// brackets at the end, so a stack of results stays readable at a glance. Only an
+// overlong prompt is cut — the bracketed settings are short and always survive.
+function resultLayerName(prompt: string, details: string[]): string {
+  // A layer name is one line, so a multi-line prompt collapses into one.
+  const text = prompt.replace(/\s+/g, " ").trim();
+  const suffix = details.length ? ` [${details.join(", ")}]` : "";
+  const room = Math.max(1, MAX_LAYER_NAME - suffix.length);
+  if (text.length <= room) return `${text}${suffix}`;
+  const clipped = text.slice(0, room - 1); // one character back for the ellipsis
+  const lastSpace = clipped.lastIndexOf(" ");
+  // Prefer a word boundary, but only a late one — cutting a long prompt back to
+  // its first few words would lose more than ending mid-word does.
+  const cut = lastSpace > room * 0.6 ? clipped.slice(0, lastSpace) : clipped;
+  return `${cut}…${suffix}`;
+}
+
 // UXP's DOM does not support setting innerHTML — clear by removing children.
 function clearChildren(el: any): void {
   while (el && el.firstChild) el.removeChild(el.firstChild);
@@ -809,16 +835,15 @@ async function onGenerate(): Promise<void> {
     }
 
     setStatus("Placing result…");
-    const kind = includeSelection ? "edit" : "image";
-    await placeResult(
-      docId,
-      region,
-      rgba,
-      cropW,
-      cropH,
-      isRegion ? `${provider} ${kind} (masked)` : `${provider} ${kind}`,
-      isRegion
-    );
+    // What produced this layer, for the bracketed tail of its name. The OpenAI
+    // models return one fixed size, so their exact output is more use than the
+    // requested tier; the Gemini models frame to a ratio, so there the tier is
+    // the resolution. A model with no resolution control contributes neither.
+    const layerDetails: string[] = [modelNameWithoutYear(spec.label)];
+    const resolutionDetail = openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
+    if (resolutionDetail) layerDetails.push(resolutionDetail);
+    if (resolvedQuality) layerDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
+    await placeResult(docId, region, rgba, cropW, cropH, resultLayerName(prompt, layerDetails), isRegion);
 
     const doneMessage = isRegion
       ? "Done — result clipped to your selection (new layer)."
