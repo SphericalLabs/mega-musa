@@ -233,24 +233,39 @@ export function fitRegionToRatio(b: Bounds, targetRatio: number, limit: Bounds):
 export async function readRegion(
   docId: number,
   bounds: Bounds,
-  withMask: boolean
+  withMask: boolean,
+  maxEdge?: number
 ): Promise<RegionRead> {
   const cropW = bounds.right - bounds.left;
   const cropH = bounds.bottom - bounds.top;
+  const longest = Math.max(cropW, cropH);
+  // Request inputs never need a selection mask. Keeping capped reads to that
+  // path avoids making the mask-placement math below operate in two scales.
+  const targetSize =
+    !withMask && maxEdge && longest > maxEdge
+      ? cropW >= cropH
+        ? { width: maxEdge }
+        : { height: maxEdge }
+      : undefined;
   return await core.executeAsModal(
     async () => {
       const { imageData } = await imaging.getPixels({
         documentID: docId,
         sourceBounds: bounds,
+        targetSize,
         componentSize: 8,
         applyAlpha: false,
       });
       const raw = await imageData.getData({ chunky: true });
       const data = new Uint8Array(raw);
       const components = imageData.components || 4;
+      const imageW = imageData.width;
+      const imageH = imageData.height;
       imageData.dispose();
 
-      let debug = `crop ${cropW}x${cropH} c${components}`;
+      let debug = `crop ${cropW}x${cropH}`;
+      if (imageW !== cropW || imageH !== cropH) debug += ` -> request ${imageW}x${imageH}`;
+      debug += ` c${components}`;
       let mask: Uint8Array | undefined;
 
       if (withMask) {
@@ -304,7 +319,7 @@ export async function readRegion(
         }
       }
 
-      return { image: { data, width: cropW, height: cropH, components }, mask, debug };
+      return { image: { data, width: imageW, height: imageH, components }, mask, debug };
     },
     { commandName: "Mega Musa: read region" }
   );

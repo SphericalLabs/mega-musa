@@ -23,6 +23,7 @@
   const CHANNEL = "nbp-reference-drop-v1";
   const CHUNK_SIZE = 192 * 1024;
   const SUPPORTED_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  const MAX_HOST_CHUNK_LENGTH = 256 * 1024;
   const dropZone = document.getElementById("dropZone");
   const fileInput = document.getElementById("fileInput");
   const label = document.getElementById("label");
@@ -31,6 +32,7 @@
   let dragIdleTimer = null;
   let promiseTimer = null;
   let receivingPromise = false;
+  const pendingResizes = new Map();
 
   function send(message) {
     window.uxpHost.postMessage({ channel: CHANNEL, ...message });
@@ -64,6 +66,88 @@
       reader.onerror = () => reject(reader.error || new Error("The image could not be read."));
       reader.readAsDataURL(file);
     });
+  }
+
+  function loadImage(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("The reference image could not be decoded."));
+      image.src = dataUrl;
+    });
+  }
+
+  function sendResizeError(requestId, error) {
+    send({
+      type: "resize-error",
+      requestId,
+      message: error && error.message ? error.message : "The reference image could not be resized.",
+    });
+  }
+
+  async function finishResize(requestId) {
+    const pending = pendingResizes.get(requestId);
+    if (!pending) return;
+    pendingResizes.delete(requestId);
+    for (let index = 0; index < pending.chunks.length; index += 1) {
+      if (typeof pending.chunks[index] !== "string") {
+        sendResizeError(requestId, new Error("The reference image arrived incomplete."));
+        return;
+      }
+    }
+
+    try {
+      const base64 = pending.chunks.join("");
+      const image = await loadImage(`data:${pending.mimeType};base64,${base64}`);
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      if (!width || !height) throw new Error("The reference image has no readable dimensions.");
+
+      let resultBase64 = base64;
+      let resultWidth = width;
+      let resultHeight = height;
+      if (Math.max(width, height) > pending.maxEdge) {
+        const scale = pending.maxEdge / Math.max(width, height);
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        resultWidth = targetWidth;
+        resultHeight = targetHeight;
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("The image processor could not create a canvas.");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        const dataUrl = canvas.toDataURL("image/png");
+        const comma = dataUrl.indexOf(",");
+        if (comma < 0) throw new Error("The resized image could not be encoded.");
+        resultBase64 = dataUrl.slice(comma + 1);
+      }
+
+      const totalChunks = Math.ceil(resultBase64.length / CHUNK_SIZE);
+      send({
+        type: "resize-result-start",
+        requestId,
+        totalChunks,
+        sourceWidth: width,
+        sourceHeight: height,
+        width: resultWidth,
+        height: resultHeight,
+      });
+      for (let index = 0; index < totalChunks; index += 1) {
+        send({
+          type: "resize-result-chunk",
+          requestId,
+          index,
+          data: resultBase64.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE),
+        });
+      }
+      send({ type: "resize-result-end", requestId });
+    } catch (error) {
+      sendResizeError(requestId, error);
+    }
   }
 
   function resetDragState() {
@@ -240,7 +324,45 @@
     if (event.source !== window.uxpHost) return;
     const message = event.data;
     if (!message || message.channel !== CHANNEL) return;
-    if (message.type === "capacity") {
+    const requestId = typeof message.requestId === "string" ? message.requestId : "";
+    if (message.type === "resize-start") {
+      const totalChunks = Math.floor(Number(message.totalChunks));
+      const maxEdge = Math.floor(Number(message.maxEdge));
+      if (
+        !requestId ||
+        requestId.length > 180 ||
+        !SUPPORTED_TYPES.includes(message.mimeType) ||
+        !totalChunks ||
+        totalChunks > 100000 ||
+        !maxEdge
+      ) {
+        sendResizeError(requestId, new Error("The resize request was invalid."));
+        return;
+      }
+      pendingResizes.set(requestId, {
+        mimeType: message.mimeType,
+        maxEdge,
+        chunks: new Array(totalChunks),
+      });
+    } else if (message.type === "resize-chunk") {
+      const pending = pendingResizes.get(requestId);
+      const index = Number(message.index);
+      if (
+        !pending ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= pending.chunks.length ||
+        typeof message.data !== "string" ||
+        message.data.length > MAX_HOST_CHUNK_LENGTH
+      ) {
+        pendingResizes.delete(requestId);
+        sendResizeError(requestId, new Error("The resize request was invalid."));
+        return;
+      }
+      pending.chunks[index] = message.data;
+    } else if (message.type === "resize-end") {
+      void finishResize(requestId);
+    } else if (message.type === "capacity") {
       remaining = Math.max(0, Number(message.remaining) || 0);
       updateLabel();
     } else if (message.type === "theme") {

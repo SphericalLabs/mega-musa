@@ -68,6 +68,9 @@ const { entrypoints } = require("uxp");
 
 const MAX_REFS = 10;
 const PICKERS = ["model", "resolution", "quality", "selRatio"];
+const REQUEST_MIN_MAX_EDGE = 2048;
+const WEBVIEW_CHUNK_SIZE = 192 * 1024;
+const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 
 let refs: RefImage[] = [];
 let running = false;
@@ -335,10 +338,27 @@ interface PendingDropFile {
   totalChunks: number;
 }
 
+interface RequestReference {
+  mimeType: string;
+  base64: string;
+}
+
+interface PendingReferenceResize {
+  name: string;
+  maxEdge: number;
+  chunks: string[];
+  totalChunks: number;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (image: RequestReference) => void;
+  reject: (error: Error) => void;
+}
+
 const dropBatches = new Map<string, DropBatchState>();
 const pendingDropFiles = new Map<string, PendingDropFile>();
+const pendingReferenceResizes = new Map<string, PendingReferenceResize>();
 let dropWebviewReady = false;
 let dropTheme = "";
+let referenceResizeSequence = 0;
 
 // How often the Photoshop theme is re-read. UXP fires no event when the user
 // switches it, so the panel restyles itself through CSS while the WebView would
@@ -350,14 +370,142 @@ function safeCount(value: any): number {
   return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
-function postToDropWebview(message: Record<string, unknown>): void {
+function postToDropWebview(message: Record<string, unknown>): boolean {
   const webview = $("dropWebview");
-  if (!dropWebviewReady || !webview || typeof webview.postMessage !== "function") return;
+  if (!dropWebviewReady || !webview || typeof webview.postMessage !== "function") return false;
   try {
     webview.postMessage({ channel: DROP_CHANNEL, ...message });
+    return true;
   } catch {
     /* The WebView may still be loading; its ready message retries this. */
+    return false;
   }
+}
+
+function failReferenceResize(requestId: string, error: Error): void {
+  const pending = pendingReferenceResizes.get(requestId);
+  if (!pending) return;
+  pendingReferenceResizes.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.reject(error);
+}
+
+function onReferenceResizeMessage(message: any): boolean {
+  if (!String(message.type || "").startsWith("resize-result") && message.type !== "resize-error") {
+    return false;
+  }
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const pending = pendingReferenceResizes.get(requestId);
+  if (!pending) return true;
+
+  if (message.type === "resize-error") {
+    failReferenceResize(
+      requestId,
+      new Error(message.message || `Could not prepare reference image “${pending.name}”.`)
+    );
+    return true;
+  }
+  if (message.type === "resize-result-start") {
+    const totalChunks = safeCount(message.totalChunks);
+    const width = safeCount(message.width);
+    const height = safeCount(message.height);
+    if (!totalChunks || totalChunks > 100000 || !width || !height || Math.max(width, height) > pending.maxEdge) {
+      failReferenceResize(requestId, new Error(`Invalid resized data for “${pending.name}”.`));
+      return true;
+    }
+    console.log(
+      "[Mega Musa]",
+      `reference ${pending.name}: ${safeCount(message.sourceWidth)}x${safeCount(message.sourceHeight)} -> ${width}x${height}`
+    );
+    pending.totalChunks = totalChunks;
+    pending.chunks = new Array(totalChunks);
+    return true;
+  }
+  if (message.type === "resize-result-chunk") {
+    const index = Number(message.index);
+    if (
+      !pending.totalChunks ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= pending.totalChunks ||
+      typeof message.data !== "string" ||
+      message.data.length > MAX_DROP_CHUNK_LENGTH
+    ) {
+      failReferenceResize(requestId, new Error(`Invalid resized data for “${pending.name}”.`));
+      return true;
+    }
+    pending.chunks[index] = message.data;
+    return true;
+  }
+
+  if (message.type !== "resize-result-end") return true;
+  if (!pending.totalChunks) {
+    failReferenceResize(requestId, new Error(`Incomplete resized data for “${pending.name}”.`));
+    return true;
+  }
+  for (let index = 0; index < pending.totalChunks; index += 1) {
+    if (typeof pending.chunks[index] !== "string") {
+      failReferenceResize(requestId, new Error(`Incomplete resized data for “${pending.name}”.`));
+      return true;
+    }
+  }
+  const image = referenceImageFromBase64(pending.name, pending.chunks.join(""));
+  if (!image) {
+    failReferenceResize(requestId, new Error(`The resized data for “${pending.name}” is not an image.`));
+    return true;
+  }
+  pendingReferenceResizes.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve({ mimeType: image.mimeType, base64: image.base64 });
+  return true;
+}
+
+function resizeReferenceForRequest(ref: RefImage, maxEdge: number): Promise<RequestReference> {
+  if (!dropWebviewReady) {
+    return Promise.reject(new Error("The image processor is not ready. Close and reopen the Mega Musa panel."));
+  }
+  const requestId = `resize-${Date.now().toString(36)}-${referenceResizeSequence++}`;
+  const totalChunks = Math.ceil(ref.base64.length / WEBVIEW_CHUNK_SIZE);
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      failReferenceResize(requestId, new Error(`Timed out preparing reference image “${ref.name}”.`));
+    }, REFERENCE_RESIZE_TIMEOUT_MS);
+    pendingReferenceResizes.set(requestId, {
+      name: ref.name,
+      maxEdge,
+      chunks: [],
+      totalChunks: 0,
+      timer,
+      resolve,
+      reject,
+    });
+
+    if (!postToDropWebview({
+      type: "resize-start",
+      requestId,
+      mimeType: ref.mimeType,
+      maxEdge,
+      totalChunks,
+    })) {
+      failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
+      return;
+    }
+    for (let index = 0; index < totalChunks; index += 1) {
+      if (!postToDropWebview({
+        type: "resize-chunk",
+        requestId,
+        index,
+        data: ref.base64.slice(index * WEBVIEW_CHUNK_SIZE, (index + 1) * WEBVIEW_CHUNK_SIZE),
+      })) {
+        failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
+        return;
+      }
+    }
+    if (!postToDropWebview({ type: "resize-end", requestId })) {
+      failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
+    }
+  });
 }
 
 function syncDropCapacity(): void {
@@ -452,6 +600,7 @@ function onDropWebviewMessage(event: any): void {
     setStatus(message.message || "That drop did not contain readable files.", "error");
     return;
   }
+  if (onReferenceResizeMessage(message)) return;
 
   const batchId = typeof message.batchId === "string" ? message.batchId : "";
   if (!batchId || batchId.length > 120) return;
@@ -567,6 +716,9 @@ function setupDropWebview(): void {
   });
   webview.addEventListener("loaderror", () => {
     dropWebviewReady = false;
+    for (const requestId of Array.from(pendingReferenceResizes.keys())) {
+      failReferenceResize(requestId, new Error("The image processor stopped while preparing references."));
+    }
     setStatus("Drag-and-drop could not load. Add Files and Paste still work.", "error");
   });
   // Nothing announces a theme switch, so the panel watches for one itself. The
@@ -713,6 +865,17 @@ async function onGenerate(): Promise<void> {
     refreshResolutionLabels();
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
+    const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
+    const tierLongEdge: Record<string, number> = {
+      "512px": 512,
+      "1K": 1024,
+      "2K": 2048,
+      "4K": 4096,
+    };
+    const outputLongEdge = openaiDimensions.length === 2
+      ? Math.max(openaiDimensions[0], openaiDimensions[1])
+      : tierLongEdge[resolution] || 1024;
+    const requestMaxEdge = Math.max(REQUEST_MIN_MAX_EDGE, outputLongEdge);
 
     // Nothing was selected: use the active artboard, or the full image in a
     // non-artboard document. Make that framing the live selection so the user
@@ -770,9 +933,19 @@ async function onGenerate(): Promise<void> {
       );
       // withMask=false: the selection shape is applied later as a Photoshop layer
       // mask, so we don't read/resample it here (and leave the selection untouched).
-      const read = await readRegion(docId, region, false);
-      basePng = encodePng(read.image.data, cropW, cropH, read.image.components);
+      const read = await readRegion(docId, region, false, requestMaxEdge);
+      if (Math.max(read.image.width, read.image.height) > requestMaxEdge) {
+        throw new Error("Photoshop returned a canvas input larger than the request limit.");
+      }
+      basePng = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
       console.log("[Mega Musa]", read.debug);
+    }
+
+    const requestReferences: RequestReference[] = [];
+    for (let index = 0; index < refs.length; index += 1) {
+      throwIfCancelled();
+      setStatus(`Preparing reference image ${index + 1}/${refs.length}…`);
+      requestReferences.push(await resizeReferenceForRequest(refs[index], requestMaxEdge));
     }
 
     const sizeLabel = frame.geminiAspect ?? frame.openaiSize ?? "auto";
@@ -792,7 +965,7 @@ async function onGenerate(): Promise<void> {
       model,
       prompt,
       baseImagePng: basePng,
-      references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
+      references: requestReferences,
     };
     const controller = newAbortController();
     sentCharge = estimatedCHF(spec, resolution, frame.openaiSize, quality);
