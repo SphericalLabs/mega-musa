@@ -51,7 +51,17 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
              border-radius: 4px; overflow: hidden; background: rgba(128,128,128,0.15); }
     .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .thumb sp-action-button { position: absolute; top: 1px; right: 1px; min-width: 16px; }
+    /* The remove badge sits on top of arbitrary user imagery, so it cannot take
+       its colour from the theme the way a quiet sp-action-button does — that
+       glyph disappeared on light reference images. This one carries its own
+       contrast: a white ✕ on a dark plate with a pale ring, which stays legible
+       over bright and dark thumbnails in either Photoshop theme. */
+    .thumb .remove { position: absolute; top: 2px; right: 2px; box-sizing: border-box;
+                     width: 16px; height: 16px; border-radius: 8px;
+                     background: rgba(0, 0, 0, 0.62); border: 1px solid rgba(255, 255, 255, 0.65);
+                     color: rgb(255, 255, 255); font-size: 10px; cursor: pointer;
+                     display: flex; align-items: center; justify-content: center; }
+    .thumb .remove:hover { background: rgb(0, 0, 0); }
     .muted { opacity: 0.7; font-size: 11px; }
     #status { margin-top: 10px; font-size: 11px; line-height: 1.4; min-height: 28px;
               padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }

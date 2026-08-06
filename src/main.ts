@@ -278,9 +278,12 @@ function renderThumbs(): void {
     const img = document.createElement("img");
     img.src = ref.dataUrl;
     img.title = ref.name;
-    const remove = document.createElement("sp-action-button");
-    remove.setAttribute("quiet", "");
-    remove.setAttribute("size", "s");
+    // A plain element, not an sp-action-button: Spectrum paints the glyph in the
+    // theme's text colour, which vanished on light references. The badge styles
+    // itself against the thumbnail instead (see .thumb .remove in index.html).
+    const remove = document.createElement("div");
+    remove.className = "remove";
+    remove.title = `Remove ${ref.name}`;
     remove.textContent = "✕";
     remove.addEventListener("click", () => {
       refs.splice(index, 1);
