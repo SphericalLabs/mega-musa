@@ -93,6 +93,19 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse14 { background: rgba(128,128,128,0.320); }
     #note { margin-top: 6px; font-size: 11px; line-height: 1.4; opacity: 0.8; }
     #note:empty { display: none; }
+    /* UXP offers no JavaScript API for Photoshop's Interface theme — it only maps
+       the theme onto prefers-color-scheme (UXP 4.1+, values lightest / light /
+       medium / dark / darkest). This zero-sized probe turns that media query into
+       something main.ts can read with getComputedStyle and forward to the
+       drop-target WebView, which is a real system WebView and would otherwise
+       follow the macOS appearance instead of Photoshop. White is the default so a
+       runtime without the media query still lands on dark, which is Photoshop's
+       shipping theme; the light themes override it below. */
+    #themeProbe { position: absolute; top: 0; left: 0; width: 0; height: 0;
+                  overflow: hidden; color: rgb(255, 255, 255); }
+    @media (prefers-color-scheme: light), (prefers-color-scheme: lightest) {
+      #themeProbe { color: rgb(0, 0, 0); }
+    }
   </style>
 </head>
 <body>
@@ -190,6 +203,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <div id="status">Loading…</div>
     <div id="note"></div>
   </div>
+
+  <div id="themeProbe"></div>
 
   <script src="index.js"></script>
 </body>

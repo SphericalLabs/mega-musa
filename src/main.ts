@@ -337,20 +337,59 @@ interface PendingDropFile {
 const dropBatches = new Map<string, DropBatchState>();
 const pendingDropFiles = new Map<string, PendingDropFile>();
 let dropWebviewReady = false;
+let dropTheme = "";
+
+// How often the Photoshop theme is re-read. UXP fires no event when the user
+// switches it, so the panel restyles itself through CSS while the WebView would
+// keep painting the old colours until something tells it otherwise.
+const THEME_POLL_MS = 2000;
 
 function safeCount(value: any): number {
   const count = Number(value);
   return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
-function syncDropCapacity(): void {
+function postToDropWebview(message: Record<string, unknown>): void {
   const webview = $("dropWebview");
   if (!dropWebviewReady || !webview || typeof webview.postMessage !== "function") return;
   try {
-    webview.postMessage({ channel: DROP_CHANNEL, type: "capacity", remaining: MAX_REFS - refs.length });
+    webview.postMessage({ channel: DROP_CHANNEL, ...message });
   } catch {
     /* The WebView may still be loading; its ready message retries this. */
   }
+}
+
+function syncDropCapacity(): void {
+  postToDropWebview({ type: "capacity", remaining: MAX_REFS - refs.length });
+}
+
+// Photoshop's Interface theme reaches the panel as CSS only, so #themeProbe in
+// index.html restates it as a colour this can read: white under the dark themes,
+// black under the light ones. Everything unexpected — no probe, a runtime without
+// the prefers-color-scheme mapping or without getComputedStyle — counts as dark,
+// Photoshop's default. This runs on a timer, so it must never throw: the panel's
+// global error handler would otherwise overwrite the status line every tick.
+function panelTheme(): "dark" | "light" {
+  try {
+    const probe = $("themeProbe");
+    const color = probe ? String(getComputedStyle(probe).color || "") : "";
+    // Black in any notation means the light-theme rule won.
+    return /^(#000(000)?$|rgba?\(\s*0\s*,\s*0\s*,\s*0\b)/.test(color.trim().toLowerCase())
+      ? "light"
+      : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+// The drop target is a real system WebView: left alone it follows the macOS
+// appearance rather than Photoshop's theme. Push the panel's theme across the
+// bridge so it matches the rest of the panel instead.
+function syncDropTheme(force = false): void {
+  const theme = panelTheme();
+  if (theme === dropTheme && !force) return;
+  dropTheme = theme;
+  postToDropWebview({ type: "theme", theme });
 }
 
 function failPendingDropFile(fileId: string): void {
@@ -403,6 +442,9 @@ function onDropWebviewMessage(event: any): void {
   if (message.type === "ready") {
     dropWebviewReady = true;
     syncDropCapacity();
+    // Forced: a fresh page starts on its built-in default, so it needs the theme
+    // even when nothing has changed since the last time it was sent.
+    syncDropTheme(true);
     return;
   }
   if (message.type === "drop-error") {
@@ -520,11 +562,16 @@ function setupDropWebview(): void {
   webview.addEventListener("loadstop", () => {
     dropWebviewReady = true;
     syncDropCapacity();
+    syncDropTheme(true);
   });
   webview.addEventListener("loaderror", () => {
     dropWebviewReady = false;
     setStatus("Drag-and-drop could not load. Add Files and Paste still work.", "error");
   });
+  // Nothing announces a theme switch, so the panel watches for one itself. The
+  // check is a single getComputedStyle read and only posts when the theme has
+  // actually changed, so it stays idle in the normal case.
+  setInterval(() => syncDropTheme(), THEME_POLL_MS);
 }
 
 // Add the clipboard image as a reference. Photoshop performs the paste (see

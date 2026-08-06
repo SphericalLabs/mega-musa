@@ -229,12 +229,23 @@
     addInputFiles();
   });
 
+  // Photoshop's Interface theme, as reported by the panel. This WebView cannot
+  // see it — its own prefers-color-scheme follows the macOS appearance — so the
+  // panel measures the theme and sends it here (see syncDropTheme in main.ts).
+  function applyTheme(theme) {
+    document.documentElement.classList.toggle("theme-light", theme === "light");
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window.uxpHost) return;
     const message = event.data;
-    if (!message || message.channel !== CHANNEL || message.type !== "capacity") return;
-    remaining = Math.max(0, Number(message.remaining) || 0);
-    updateLabel();
+    if (!message || message.channel !== CHANNEL) return;
+    if (message.type === "capacity") {
+      remaining = Math.max(0, Number(message.remaining) || 0);
+      updateLabel();
+    } else if (message.type === "theme") {
+      applyTheme(message.theme);
+    }
   });
 
   updateLabel();
