@@ -158,6 +158,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <h3>Prompt</h3>
     <div class="field">
       <sp-textfield id="prompt" placeholder="Enter the image instructions"></sp-textfield>
+      <div class="muted" style="margin-top:6px;">Pressing Enter submits the generation immediately.</div>
     </div>
 
     <sp-divider size="s"></sp-divider>
@@ -199,7 +200,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <sp-divider size="s"></sp-divider>
 
     <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
-    <div class="muted" style="margin-top:6px;">While a request is out, <b>Generate</b> becomes <b>Cancel</b>. Cancelling frees the panel, but a request the provider has already received still runs there and counts as billed &mdash; the budget above includes it.</div>
     <div id="status">Loading…</div>
     <div id="note"></div>
   </div>
