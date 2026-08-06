@@ -1230,12 +1230,14 @@ async function init(): Promise<void> {
       setStatus("Budget counter reset — counting from today.", "ok");
     });
 
-    // Cmd/Ctrl+Return in the prompt field fires Generate immediately.
+    // Return in the prompt field fires Generate immediately — the field is
+    // single-line, so Return has nothing else to do. Ignore it mid-composition
+    // so an IME candidate can still be confirmed with Return.
     $("prompt").addEventListener("keydown", (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.key === "Return")) {
-        e.preventDefault();
-        onGenerate();
-      }
+      if (e.key !== "Enter" && e.key !== "Return") return;
+      if ((e as any).isComposing) return;
+      e.preventDefault();
+      onGenerate();
     });
 
     // Cmd/Ctrl+V pastes the clipboard image as a reference — but only outside a
