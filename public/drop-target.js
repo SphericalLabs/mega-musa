@@ -106,8 +106,8 @@
       let resultBase64 = base64;
       let resultWidth = width;
       let resultHeight = height;
-      if (Math.max(width, height) > pending.maxEdge) {
-        const scale = pending.maxEdge / Math.max(width, height);
+      if (Math.max(width, height) > pending.maxEdge || pending.forcePng) {
+        const scale = Math.min(1, pending.maxEdge / Math.max(width, height));
         const targetWidth = Math.max(1, Math.round(width * scale));
         const targetHeight = Math.max(1, Math.round(height * scale));
         resultWidth = targetWidth;
@@ -342,6 +342,7 @@
       pendingResizes.set(requestId, {
         mimeType: message.mimeType,
         maxEdge,
+        forcePng: message.forcePng === true,
         chunks: new Array(totalChunks),
       });
     } else if (message.type === "resize-chunk") {

@@ -26,6 +26,7 @@ export interface RefImage {
   mimeType: string;
   base64: string;
   dataUrl: string; // for the thumbnail <img>
+  thumbnailDataUrl?: string; // PNG fallback for UXP, which cannot preview WebP reliably
 }
 
 const EXT_MIME: Record<string, string> = {

@@ -71,8 +71,10 @@ const PICKERS = ["model", "resolution", "quality", "selRatio"];
 const REQUEST_MIN_MAX_EDGE = 2048;
 const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
+const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
 
 let refs: RefImage[] = [];
+const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
 let running = false;
 // Set by the Cancel button. The run itself decides what that costs: stopping
 // before the request goes out is free, stopping after it has reached the
@@ -280,8 +282,17 @@ function renderThumbs(): void {
     const cell = document.createElement("div");
     cell.className = "thumb";
     const img = document.createElement("img");
-    img.src = ref.dataUrl;
+    img.src = ref.thumbnailDataUrl || ref.dataUrl;
     img.title = ref.name;
+    if (dropWebviewReady && ref.mimeType === "image/webp" && !ref.thumbnailDataUrl) {
+      void ensureReferenceThumbnail(ref)
+        .then((dataUrl) => {
+          img.src = dataUrl;
+        })
+        .catch((err: any) => {
+          console.log("[Mega Musa] WebP thumbnail failed:", err?.message || String(err));
+        });
+    }
     // A plain element, not an sp-action-button: Spectrum paints the glyph in the
     // theme's text colour, which vanished on light references. The badge styles
     // itself against the thumbnail instead (see .thumb .remove in index.html).
@@ -346,6 +357,7 @@ interface RequestReference {
 interface PendingReferenceResize {
   name: string;
   maxEdge: number;
+  logDimensions: boolean;
   chunks: string[];
   totalChunks: number;
   timer: ReturnType<typeof setTimeout>;
@@ -413,10 +425,12 @@ function onReferenceResizeMessage(message: any): boolean {
       failReferenceResize(requestId, new Error(`Invalid resized data for “${pending.name}”.`));
       return true;
     }
-    console.log(
-      "[Mega Musa]",
-      `reference ${pending.name}: ${safeCount(message.sourceWidth)}x${safeCount(message.sourceHeight)} -> ${width}x${height}`
-    );
+    if (pending.logDimensions) {
+      console.log(
+        "[Mega Musa]",
+        `reference ${pending.name}: ${safeCount(message.sourceWidth)}x${safeCount(message.sourceHeight)} -> ${width}x${height}`
+      );
+    }
     pending.totalChunks = totalChunks;
     pending.chunks = new Array(totalChunks);
     return true;
@@ -460,7 +474,12 @@ function onReferenceResizeMessage(message: any): boolean {
   return true;
 }
 
-function resizeReferenceForRequest(ref: RefImage, maxEdge: number): Promise<RequestReference> {
+function resizeReference(
+  ref: RefImage,
+  maxEdge: number,
+  forcePng = false,
+  logDimensions = true
+): Promise<RequestReference> {
   if (!dropWebviewReady) {
     return Promise.reject(new Error("The image processor is not ready. Close and reopen the Mega Musa panel."));
   }
@@ -474,6 +493,7 @@ function resizeReferenceForRequest(ref: RefImage, maxEdge: number): Promise<Requ
     pendingReferenceResizes.set(requestId, {
       name: ref.name,
       maxEdge,
+      logDimensions,
       chunks: [],
       totalChunks: 0,
       timer,
@@ -486,6 +506,7 @@ function resizeReferenceForRequest(ref: RefImage, maxEdge: number): Promise<Requ
       requestId,
       mimeType: ref.mimeType,
       maxEdge,
+      forcePng,
       totalChunks,
     })) {
       failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
@@ -506,6 +527,22 @@ function resizeReferenceForRequest(ref: RefImage, maxEdge: number): Promise<Requ
       failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
     }
   });
+}
+
+function ensureReferenceThumbnail(ref: RefImage): Promise<string> {
+  if (ref.thumbnailDataUrl) return Promise.resolve(ref.thumbnailDataUrl);
+  const existing = pendingReferenceThumbnails.get(ref);
+  if (existing) return existing;
+
+  const pending = resizeReference(ref, REFERENCE_THUMBNAIL_MAX_EDGE, true, false)
+    .then((image) => {
+      const dataUrl = `data:${image.mimeType};base64,${image.base64}`;
+      ref.thumbnailDataUrl = dataUrl;
+      return dataUrl;
+    })
+    .finally(() => pendingReferenceThumbnails.delete(ref));
+  pendingReferenceThumbnails.set(ref, pending);
+  return pending;
 }
 
 function syncDropCapacity(): void {
@@ -594,6 +631,7 @@ function onDropWebviewMessage(event: any): void {
     // Forced: a fresh page starts on its built-in default, so it needs the theme
     // even when nothing has changed since the last time it was sent.
     syncDropTheme(true);
+    if (refs.some((ref) => ref.mimeType === "image/webp" && !ref.thumbnailDataUrl)) renderThumbs();
     return;
   }
   if (message.type === "drop-error") {
@@ -713,6 +751,7 @@ function setupDropWebview(): void {
     dropWebviewReady = true;
     syncDropCapacity();
     syncDropTheme(true);
+    if (refs.some((ref) => ref.mimeType === "image/webp" && !ref.thumbnailDataUrl)) renderThumbs();
   });
   webview.addEventListener("loaderror", () => {
     dropWebviewReady = false;
@@ -945,7 +984,7 @@ async function onGenerate(): Promise<void> {
     for (let index = 0; index < refs.length; index += 1) {
       throwIfCancelled();
       setStatus(`Preparing reference image ${index + 1}/${refs.length}…`);
-      requestReferences.push(await resizeReferenceForRequest(refs[index], requestMaxEdge));
+      requestReferences.push(await resizeReference(refs[index], requestMaxEdge));
     }
 
     const sizeLabel = frame.geminiAspect ?? frame.openaiSize ?? "auto";
