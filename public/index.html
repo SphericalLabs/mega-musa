@@ -90,7 +90,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        on the dark theme and ~4.4:1 on the darkest. Under the 4.5:1 body text
        holds to, deliberately: these lines are meant to be found when wanted, not
        read on the way past. */
-    .muted { font-size: 11px; color: rgb(128, 128, 128); }
+    .muted, #note { font-size: 11px; line-height: normal; color: rgb(128, 128, 128); }
     #status { margin-top: 10px; font-size: 11px; line-height: 1.4; min-height: 28px;
               padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }
     #status.error { background: rgba(226,75,74,0.18); }
@@ -119,7 +119,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse12 { background: rgba(128,128,128,0.308); }
     #status.pulse13 { background: rgba(128,128,128,0.317); }
     #status.pulse14 { background: rgba(128,128,128,0.320); }
-    #note { margin-top: 6px; font-size: 11px; line-height: 1.4; color: rgb(128, 128, 128); }
+    #note { margin-top: 6px; }
     #note:empty { display: none; }
     /* UXP offers no JavaScript API for Photoshop's Interface theme — it only maps
        the theme onto prefers-color-scheme (UXP 4.1+, values lightest / light /
