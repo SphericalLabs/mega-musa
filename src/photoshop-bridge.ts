@@ -646,12 +646,10 @@ export async function scaleViaPhotoshop(
         srcData.dispose();
 
         // Reductions -> Bicubic Sharper, enlargements -> Bicubic Smoother.
+        const srcPx = srcW * srcH;
+        const dstPx = dstW * dstH;
         const method =
-          dstW * dstH < srcW * srcH
-            ? "bicubicSmoother"
-            : dstW * dstH > srcW * srcH
-              ? "bicubicSmoother"
-              : "bicubic";
+          dstPx < srcPx ? "bicubicSharper" : dstPx > srcPx ? "bicubicSmoother" : "bicubic";
         await action.batchPlay(
           [
             {
