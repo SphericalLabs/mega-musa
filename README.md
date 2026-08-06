@@ -42,7 +42,7 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 
 **Generate** becomes **Cancel** for the length of a run. Cancelling before the request is sent costs nothing; cancelling after it has gone out frees the panel but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as cancelled. Once the image is back, the button stops offering the cancel: the money is spent, so the result is placed.
 
-Existing selections are framed to the nearest supported output ratio without changing their original shape. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
+Existing selections are framed to the nearest supported output ratio without changing their original shape. Nothing is added around them — the crop is the selection itself, so select as much surrounding image as the model should see to blend into, and feather the selection for a soft edge. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
 
 ## Data retention
 

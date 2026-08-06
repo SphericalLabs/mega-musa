@@ -193,17 +193,6 @@ export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
     : null;
 }
 
-export function padBounds(b: Bounds, padFrac: number, limit: Bounds): Bounds {
-  const px = Math.round((b.right - b.left) * padFrac);
-  const py = Math.round((b.bottom - b.top) * padFrac);
-  return {
-    left: Math.max(limit.left, b.left - px),
-    top: Math.max(limit.top, b.top - py),
-    right: Math.min(limit.right, b.right + px),
-    bottom: Math.min(limit.bottom, b.bottom + py),
-  };
-}
-
 // Reshape `b` to exactly `targetRatio` (width / height), expanding within the
 // document when possible (so the whole selection stays covered) and shrinking
 // only if expansion would overflow the canvas. Stays centred on `b`. Used so the

@@ -23,7 +23,6 @@ import {
   getActiveArtboard,
   getSelectionBounds,
   intersectBounds,
-  padBounds,
   fitRegionToRatio,
   readRegion,
   placeResult,
@@ -703,14 +702,14 @@ async function onGenerate(): Promise<void> {
     }
     const isRegion = !!sel;
 
-    // Region edit: crop to the selection (+ small padding for blending) so the
-    // model spends its full resolution on the detail. In an artboard document,
-    // padding and output framing never escape the active artboard.
-    const basePad: Bounds = isRegion
-      ? padBounds(sel as Bounds, 0.06, targetBounds)
-      : targetBounds;
-    const padW = basePad.right - basePad.left;
-    const padH = basePad.bottom - basePad.top;
+    // Region edit: crop to exactly the selection, so the model spends its full
+    // resolution on the detail. No context margin is added around it — how much
+    // surrounding image the model gets to blend into, and how soft the edge is,
+    // are the user's to decide by drawing (and feathering) the selection. In an
+    // artboard document, output framing never escapes the active artboard.
+    const baseRegion: Bounds = isRegion ? (sel as Bounds) : targetBounds;
+    const baseW = baseRegion.right - baseRegion.left;
+    const baseH = baseRegion.bottom - baseRegion.top;
 
     // Pick the exact ratio the model will output, then reshape the crop to match
     // it, so the later cover-fit is a pure scale — no zoom, trim or shift. This
@@ -718,13 +717,13 @@ async function onGenerate(): Promise<void> {
     // actually returns is what keeps the result from coming back stretched.
     // gpt-image-2 is the exception — it takes any size, so we request the crop's
     // own ratio and leave the crop alone.
-    let region = basePad;
+    let region = baseRegion;
     let geminiAspect: string | undefined;
     let openaiSize: string | undefined;
     let ratioLabel = ""; // "" => the model matched the crop's own shape
     if (isOpenAIModel(model)) {
       if (isGptImage2(model)) {
-        openaiSize = gptImage2Size(padW, padH, resolution === "auto" ? undefined : resolution);
+        openaiSize = gptImage2Size(baseW, baseH, resolution === "auto" ? undefined : resolution);
       } else {
         // Fixed-size models: the crop's shape picks one of the sizes the model
         // actually returns (see fixedSizes in the capability table).
@@ -732,19 +731,19 @@ async function onGenerate(): Promise<void> {
         if (!presets.length) {
           throw new Error(`${spec.label} has no fixedSizes in the model table — cannot pick an output size.`);
         }
-        const cr = padW / padH;
+        const cr = baseW / baseH;
         const best = presets.reduce((a, b) =>
           Math.abs(Math.log(b.ratio) - Math.log(cr)) < Math.abs(Math.log(a.ratio) - Math.log(cr)) ? b : a
         );
         openaiSize = best.size;
         ratioLabel = best.label;
-        region = fitRegionToRatio(basePad, best.ratio, targetBounds);
+        region = fitRegionToRatio(baseRegion, best.ratio, targetBounds);
       }
     } else {
-      geminiAspect = nearestSupportedAspectRatio(padW, padH);
+      geminiAspect = nearestSupportedAspectRatio(baseW, baseH);
       ratioLabel = geminiAspect;
       const [rw, rh] = geminiAspect.split(":").map(Number);
-      region = fitRegionToRatio(basePad, rw / rh, targetBounds);
+      region = fitRegionToRatio(baseRegion, rw / rh, targetBounds);
     }
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
