@@ -29,6 +29,7 @@ export interface Budget {
   chf: number;
   images: number; // images it could price
   unpriced: number; // images generated at a tier with no published price
+  cancelled: number; // runs stopped after the request went out — billed, no image
   since: string; // ISO date of the last reset, or of first use
 }
 
@@ -41,6 +42,7 @@ function save(b: Budget): void {
   saveSetting("budgetCHF", String(b.chf));
   saveSetting("budgetImages", String(b.images));
   saveSetting("budgetUnpriced", String(b.unpriced));
+  saveSetting("budgetCancelled", String(b.cancelled));
   saveSetting("budgetSince", b.since);
 }
 
@@ -52,12 +54,19 @@ export function loadBudget(): Budget {
     chf: num("budgetCHF"),
     images: num("budgetImages"),
     unpriced: num("budgetUnpriced"),
+    cancelled: num("budgetCancelled"),
     since,
   };
 }
 
 export function resetBudget(): Budget {
-  const fresh: Budget = { chf: 0, images: 0, unpriced: 0, since: new Date().toISOString() };
+  const fresh: Budget = {
+    chf: 0,
+    images: 0,
+    unpriced: 0,
+    cancelled: 0,
+    since: new Date().toISOString(),
+  };
   save(fresh);
   return fresh;
 }
@@ -65,13 +74,17 @@ export function resetBudget(): Budget {
 // `chf` is null when a model/tier has no usable price estimate. Those runs are
 // counted separately rather than added as zero, so the total never implies an
 // unpriced image was free.
-export function addToBudget(chf: number | null): Budget {
+//
+// `cancelled` marks a run the user stopped after its request had already reached
+// the provider: no image landed, but it is billed all the same, so the money goes
+// into the same total. The three counters are disjoint — every run lands in
+// exactly one of them — so they can be read as a breakdown of what was paid for.
+export function addToBudget(chf: number | null, cancelled = false): Budget {
   const b = loadBudget();
-  if (chf === null) b.unpriced += 1;
-  else {
-    b.chf += chf;
-    b.images += 1;
-  }
+  if (chf !== null) b.chf += chf;
+  if (cancelled) b.cancelled += 1;
+  else if (chf === null) b.unpriced += 1;
+  else b.images += 1;
   save(b);
   return b;
 }
@@ -98,6 +111,8 @@ export function formatDate(iso: string): string {
 }
 
 export function budgetText(b: Budget): string {
-  const counts = b.unpriced ? `${b.images} images, ${b.unpriced} unpriced` : `${b.images} images`;
-  return `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)} (${counts})`;
+  const counts = [`${b.images} images`];
+  if (b.unpriced) counts.push(`${b.unpriced} unpriced`);
+  if (b.cancelled) counts.push(`${b.cancelled} cancelled but billed`);
+  return `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)} (${counts.join(", ")})`;
 }

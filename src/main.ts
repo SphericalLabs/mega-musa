@@ -73,9 +73,95 @@ const PICKERS = ["model", "resolution", "quality", "selRatio"];
 
 let refs: RefImage[] = [];
 let running = false;
+// Set by the Cancel button. The run itself decides what that costs: stopping
+// before the request goes out is free, stopping after it has reached the
+// provider is not (see onGenerate's catch).
+let cancelRequested = false;
+// Set only while the HTTP request is out — aborts it and releases the run's
+// await at once. Cleared again the moment the image is back, because from there
+// on the money is spent and cancelling would only throw it away.
+let cancelInFlight: (() => void) | null = null;
 
 function $(id: string): any {
   return document.getElementById(id);
+}
+
+// A cancel is not a failure, so the run's catch has to tell the two apart. The
+// AbortError check covers UXP's fetch rejecting the request itself first.
+function cancelledError(): Error {
+  const err: any = new Error("Cancelled.");
+  err.nbpCancelled = true;
+  return err;
+}
+
+function isCancelledError(err: any): boolean {
+  return !!err?.nbpCancelled || err?.name === "AbortError";
+}
+
+function throwIfCancelled(): void {
+  if (cancelRequested) throw cancelledError();
+}
+
+// Best-effort teardown of the in-flight request. UXP's fetch reads `signal`, but
+// AbortController is not guaranteed to exist in every UXP build — where it is
+// missing we simply send no signal, and the run still ends immediately because
+// awaitCancellable settles on its own.
+function newAbortController(): { signal?: any; abort(): void } {
+  const Ctor: any = (globalThis as any).AbortController;
+  if (typeof Ctor === "function") {
+    try {
+      return new Ctor();
+    } catch {
+      /* fall through to the no-op controller */
+    }
+  }
+  return { abort() {} };
+}
+
+// Cancel must free the panel at once, so the run waits on a race between the
+// request and the Cancel button rather than on the request alone. Whichever
+// settles first wins; the loser's later settlement is handled here, so an
+// abandoned request cannot reach the global unhandledrejection hook and overwrite
+// the status the user is reading.
+function awaitCancellable<T>(request: Promise<T>, controller: { abort(): void }): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    cancelInFlight = () => {
+      try {
+        controller.abort();
+      } catch {
+        /* nothing to abort in this runtime, or already past it */
+      }
+      reject(cancelledError());
+    };
+    request.then(resolve, reject);
+  });
+}
+
+// The one button carries the whole run. "cancel" is the only state the user can
+// act on; "cancelling" and "finishing" are the two short unwinds where there is
+// nothing left to press.
+type GenerateButtonMode = "generate" | "cancel" | "cancelling" | "finishing";
+
+const GENERATE_BUTTON_LABELS: Record<GenerateButtonMode, string> = {
+  generate: "Generate",
+  cancel: "Cancel",
+  cancelling: "Cancelling…",
+  finishing: "Finishing…",
+};
+
+function setGenerateButton(mode: GenerateButtonMode): void {
+  const el = $("generate");
+  if (!el) return;
+  try {
+    el.textContent = GENERATE_BUTTON_LABELS[mode];
+    // Red while the click would stop something, back to the call-to-action blue
+    // once it would start something.
+    el.setAttribute("variant", mode === "generate" ? "cta" : "warning");
+  } catch {
+    /* Label and colour are cosmetic. This also runs from the run's `finally`,
+       where a throw would mask the run's own outcome — so never throw. */
+  }
+  el.disabled = mode === "cancelling" || mode === "finishing";
 }
 
 let statusKind: "info" | "error" | "ok" = "info";
@@ -448,6 +534,25 @@ async function onPasteRef(): Promise<void> {
   }
 }
 
+// The Generate button is also the Cancel button — one click target for the one
+// thing a run can be told to do at any moment.
+function onGenerateClick(): void {
+  if (running) onCancel();
+  else onGenerate();
+}
+
+function onCancel(): void {
+  if (!running || cancelRequested) return;
+  cancelRequested = true;
+  setGenerateButton("cancelling");
+  setStatus("Cancelling…");
+  const stop = cancelInFlight;
+  cancelInFlight = null;
+  // With a request out this ends the wait now; without one the run stops at its
+  // next checkpoint, before anything is sent.
+  if (stop) stop();
+}
+
 async function onGenerate(): Promise<void> {
   if (running) return;
   setStatus("Starting…"); // immediate feedback that the click was received
@@ -481,8 +586,16 @@ async function onGenerate(): Promise<void> {
   const includeSelection = isChecked($("includeSelection"));
 
   running = true;
-  $("generate").disabled = true;
+  cancelRequested = false;
+  cancelInFlight = null;
+  // Turns to Cancel for the length of the run — nothing is sent yet, so a click
+  // now costs nothing.
+  setGenerateButton("cancel");
   setBusy(true);
+  // Once the request is out the provider bills it whatever happens next, so the
+  // estimate is frozen at that moment for the cancel path to charge.
+  let requestSent = false;
+  let sentCharge: number | null = null;
   try {
     const doc = getActiveDoc();
     const docId: number = doc.id;
@@ -576,6 +689,9 @@ async function onGenerate(): Promise<void> {
       notes.push(`Only the part of the selection inside active artboard “${activeArtboard.name}” is used.`);
     }
     if (!isRegion) {
+      // Cancelled while the document was being read: stop before touching the
+      // user's selection, and before anything has been sent.
+      throwIfCancelled();
       await setRectSelection(region);
       if (ratioLabel) {
         setPickerSafe($("selRatio"), ratioLabel);
@@ -632,8 +748,10 @@ async function onGenerate(): Promise<void> {
         ? "from references"
         : "text-to-image";
     const qualitySuffix = isOpenAIModel(model) ? `, ${imageQualityLabel(quality)} quality` : "";
+    // Last free exit: after this the request is on its way and is billed.
+    throwIfCancelled();
     setStatus(
-      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…  (10–60s)`
+      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…  (10–60s, cancellable)`
     );
     const baseReq = {
       apiKey,
@@ -642,27 +760,35 @@ async function onGenerate(): Promise<void> {
       baseImagePng: basePng,
       references: refs.map((r) => ({ mimeType: r.mimeType, base64: r.base64 })),
     };
-    const result = isOpenAIModel(model)
-      ? await generateOpenAIImage({ ...baseReq, size: openaiSize as string, quality })
-      : await generateEdit({
+    const controller = newAbortController();
+    sentCharge = estimatedCHF(spec, resolution, openaiSize, quality);
+    requestSent = true;
+    const request = isOpenAIModel(model)
+      ? generateOpenAIImage({ ...baseReq, size: openaiSize as string, quality, signal: controller.signal })
+      : generateEdit({
           ...baseReq,
           aspectRatio: geminiAspect,
           imageSize: resolution === "auto" ? undefined : resolution,
+          signal: controller.signal,
         });
+    const result = await awaitCancellable(request, controller);
+    // The image is here and paid for. Cancelling from now on could only throw it
+    // away, so the button stops offering it for the rest of the run.
+    cancelInFlight = null;
+    setGenerateButton("finishing");
 
     // Charged the moment the image comes back, not once it lands on the canvas —
     // a failure in the scaling or placing below still costs money. GPT Image 2
     // can replace the preflight estimate with its completed-event usage.
     const actualCost = result.usage ? actualUsageCHF(spec, result.usage) : null;
-    const budgetCharge = actualCost ?? estimatedCHF(spec, resolution, openaiSize, quality);
+    const budgetCharge = actualCost ?? sentCharge;
     renderBudget(addToBudget(budgetCharge));
     const resolvedQuality = isOpenAIModel(model) ? result.usage?.quality || quality : undefined;
     const usageDetails: string[] = [];
     if (resolvedQuality) usageDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
     if (actualCost !== null) usageDetails.push(`actual ca. CHF ${formatCHF(actualCost)}`);
-    else if (isOpenAIModel(model)) {
-      const estimate = estimatedCHF(spec, resolution, openaiSize, quality);
-      if (estimate !== null) usageDetails.push(`estimate ca. CHF ${formatCHF(estimate)}`);
+    else if (isOpenAIModel(model) && sentCharge !== null) {
+      usageDetails.push(`estimate ca. CHF ${formatCHF(sentCharge)}`);
     }
     if (usageDetails.length) setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
 
@@ -704,10 +830,29 @@ async function onGenerate(): Promise<void> {
       "ok"
     );
   } catch (err: any) {
-    setStatus("Error: " + (err?.message || String(err)), "error");
+    if (isCancelledError(err)) {
+      // Stopping the wait does not stop the provider: once the request is out it
+      // is generated and billed whether or not the answer is ever collected. So a
+      // cancel from that point on is charged like any other image, at the frozen
+      // estimate — the real usage figure only ever arrives with the response.
+      if (requestSent) {
+        renderBudget(addToBudget(sentCharge, true));
+        setStatus(
+          sentCharge === null
+            ? "Cancelled — the request was already sent, so it counts as billed. This tier has no published price, so no amount was added."
+            : `Cancelled — the request was already sent, so it counts as billed: ca. CHF ${formatCHF(sentCharge)} added to the budget.`
+        );
+      } else {
+        setStatus("Cancelled before anything was sent — nothing was charged.");
+      }
+    } else {
+      setStatus("Error: " + (err?.message || String(err)), "error");
+    }
   } finally {
     running = false;
-    $("generate").disabled = false;
+    cancelRequested = false;
+    cancelInFlight = null;
+    setGenerateButton("generate");
     // After the catch above, so the resting colour is the run's final ok/error tint.
     setBusy(false);
   }
@@ -1052,7 +1197,7 @@ async function init(): Promise<void> {
       renderThumbs();
     });
     setupDropWebview();
-    $("generate").addEventListener("click", onGenerate);
+    $("generate").addEventListener("click", onGenerateClick);
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
     $("resetBudget").addEventListener("click", () => {
