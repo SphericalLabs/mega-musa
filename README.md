@@ -22,7 +22,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 - UXP Developer Tool
 - A Gemini API key and/or OpenAI API key
 
-Keys are stored in UXP secure storage. Requests go directly to the selected provider. No project server receives your keys or images.
+Keys are stored in UXP secure storage. Requests go directly to the selected provider. No project server receives your keys or images. See [Data retention](#data-retention) for what the provider keeps.
 
 ## Build and load
 
@@ -43,6 +43,15 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 **Generate** becomes **Cancel** for the length of a run. Cancelling before the request is sent costs nothing; cancelling after it has gone out frees the panel but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as cancelled. Once the image is back, the button stops offering the cancel: the money is spent, so the result is placed.
 
 Existing selections are framed to the nearest supported output ratio without changing their original shape. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
+
+## Data retention
+
+What a provider keeps is set on your API account, not by this plugin. Every endpoint and model used here is eligible for zero data retention (ZDR).
+
+- **Gemini:** on the free tier Google may use your prompts and images to improve its products. Use a project with billing enabled, and [request ZDR](https://ai.google.dev/gemini-api/docs/zdr) for that project if you need it.
+- **OpenAI:** inputs are never used for training, and abuse-monitoring logs are kept for 30 days. Ask OpenAI sales about [ZDR](https://developers.openai.com/api/docs/guides/your-data).
+
+Some non-identifying metadata is retained under ZDR either way.
 
 ## License
 
