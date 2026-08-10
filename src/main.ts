@@ -1207,9 +1207,13 @@ function buildMenu(pickerId: string, options: { value: string; label: string }[]
 }
 
 function buildModelMenu(): void {
+  // Keep the capability table intact while exposing only the requested picker entries.
+  const visibleModels = MODELS.filter((model) =>
+    ["gemini-3-pro-image", "gemini-3.1-flash-image", "openai:gpt-image-2"].includes(model.id)
+  );
   buildMenu(
     "model",
-    MODELS.map((m) => ({ value: m.id, label: m.label })),
+    visibleModels.map((m) => ({ value: m.id, label: m.label })),
     DEFAULT_MODEL
   );
 }
