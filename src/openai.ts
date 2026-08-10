@@ -75,58 +75,14 @@ function usageFromApi(value: any): ImageUsage | undefined {
 function resultFromJson(json: any): GenerateResult | null {
   const first = json?.data?.[0];
   if (!first?.b64_json) return null;
+  const rawUsage = json?.usage || first?.usage;
   return {
     mimeType: `image/${json?.output_format || first?.output_format || "png"}`,
     bytes: base64ToBytes(first.b64_json),
-    usage: usageFromApi(json?.usage || first?.usage),
+    usage: usageFromApi(
+      rawUsage ? { ...rawUsage, quality: json?.quality || first?.quality } : undefined
+    ),
   };
-}
-
-// The Image API's stream is server-sent events. We request no partial images,
-// so the completed event contains the final image and the usage metadata we
-// need. Keeping this parser independent of ReadableStream also works in UXP,
-// whose fetch implementation exposes Response.text() more reliably.
-function resultFromStream(raw: string): GenerateResult | null {
-  const events: any[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const payload = line.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try {
-      events.push(JSON.parse(payload));
-    } catch {
-      // Ignore non-JSON keep-alive data. A later completed event is authoritative.
-    }
-  }
-
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i];
-    if (!event?.b64_json) continue;
-    return {
-      mimeType: `image/${event.output_format || "png"}`,
-      bytes: base64ToBytes(event.b64_json),
-      usage: usageFromApi(event.usage ? { ...event.usage, quality: event.quality } : event),
-    };
-  }
-  return null;
-}
-
-function errorFromBody(raw: string): string {
-  try {
-    const json = JSON.parse(raw);
-    return String(json?.error?.message || json?.error || raw);
-  } catch {
-    for (const line of raw.split(/\r?\n/).reverse()) {
-      if (!line.startsWith("data:")) continue;
-      try {
-        const event = JSON.parse(line.slice(5).trim());
-        if (event?.error) return String(event.error.message || event.error);
-      } catch {
-        /* ignore malformed stream data */
-      }
-    }
-    return raw || "OpenAI returned an empty error response.";
-  }
 }
 
 function floor16(n: number): number {
@@ -236,8 +192,6 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   pushField(parts, boundary, "output_format", "png");
   pushField(parts, boundary, "quality", normalizeImageQuality(opts.quality || "auto"));
   pushField(parts, boundary, "size", opts.size);
-  pushField(parts, boundary, "stream", "true");
-  pushField(parts, boundary, "partial_images", "0");
   if (opts.baseImagePng) {
     pushFile(parts, boundary, "image[]", "selection.png", "image/png", opts.baseImagePng);
   }
@@ -280,8 +234,6 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
       output_format: "png",
       quality: normalizeImageQuality(opts.quality || "auto"),
       size: opts.size,
-      stream: true,
-      partial_images: 0,
     });
   } else {
     const multipart = multipartBody(opts, model);
@@ -296,22 +248,14 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
   } catch (err: any) {
     throw new Error(`OpenAI network request failed before an HTTP response: ${err?.message || err}`);
   }
-  const raw = await res.text().catch(() => "");
+  const json: any = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(errorFromBody(raw) || `HTTP ${res.status} ${res.statusText}`);
+    const msg = json?.error?.message || json?.error || `HTTP ${res.status} ${res.statusText}`;
+    throw new Error(String(msg));
   }
 
-  const streamed = resultFromStream(raw);
-  if (streamed) return streamed;
-
-  // Keep a JSON fallback for an endpoint/runtime that ignores `stream: true`.
-  try {
-    const json = JSON.parse(raw);
-    const result = resultFromJson(json);
-    if (result) return result;
-  } catch {
-    /* handled below with a useful message */
-  }
+  const result = resultFromJson(json);
+  if (result) return result;
 
   throw new Error("No image returned by OpenAI.");
 }
