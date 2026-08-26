@@ -10,7 +10,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 
 - Edit a selection, the full document or the active artboard. Results are placed on a new layer at the top of the stack — of the artboard or group they belong to, if any — named after the prompt, with the model, resolution and quality in brackets. Selected regions keep their shape and feathering through a layer mask.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
-- Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste.
+- Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste. References are normalized to sRGB before they are sent.
 - Choose Nano Banana Pro, Nano Banana 2 or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
 - Cancel a running generation from the same button. A request that has already reached the provider counts as billed and is added to the spend counter.
 - Track estimated spend locally.
@@ -43,6 +43,8 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 **Generate** becomes **Cancel** for the length of a run. Cancelling before the request is sent costs nothing; cancelling after it has gone out frees the panel but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as cancelled. Once the image is back, the button stops offering the cancel: the money is spent, so the result is placed.
 
 Existing selections are framed to the nearest supported output ratio without changing their original shape. Nothing is added around them — the crop is the selection itself, so select as much surrounding image as the model should see to blend into, and feather the selection for a soft edge. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
+
+Mega Musa uses 8-bit sRGB for model inputs and outputs. A 16-bit document shows a precision warning. Partial placements in CMYK, Lab, Grayscale and non-sRGB documents show a color-conversion warning, which is skipped when the result fully and opaquely covers the complete document or active artboard. Either warning can be accepted once per exact mode/profile/depth state during the panel session. A 32-bit/HDR document, Quick Mask mode or a Bitmap, Indexed Color, Duotone or Multichannel document blocks generation before anything is sent and explains how to switch to a supported state.
 
 ## Data retention
 

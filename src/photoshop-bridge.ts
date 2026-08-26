@@ -20,6 +20,7 @@
 import { applyAlphaMask, resampleGray } from "./image-codec";
 
 const { app, action, core, imaging } = require("photoshop");
+const SRGB_PROFILE = "sRGB IEC61966-2.1";
 
 export interface Bounds {
   left: number;
@@ -335,6 +336,8 @@ export async function readRegion(
         documentID: docId,
         sourceBounds: bounds,
         targetSize,
+        colorSpace: "RGB",
+        colorProfile: SRGB_PROFILE,
         componentSize: 8,
         applyAlpha: false,
       });
@@ -541,6 +544,7 @@ export async function placeResult(
         components: 4,
         componentSize: 8,
         colorSpace: "RGB",
+        colorProfile: SRGB_PROFILE,
         chunky: true,
       });
       try {
@@ -619,6 +623,7 @@ export async function readClipboardImage(): Promise<PastedImage> {
         resolution: 72,
         fill: "transparent",
         name: "mm-paste",
+        profile: SRGB_PROFILE,
       });
       if (!scratch) throw new Error("Could not create a scratch document for the paste.");
       // paste follows the active document, so make sure that is the scratch and
@@ -692,6 +697,8 @@ export async function readClipboardImage(): Promise<PastedImage> {
         const { imageData } = await imaging.getPixels({
           documentID: scratch.id,
           sourceBounds: { left: 0, top: 0, right: width, bottom: height },
+          colorSpace: "RGB",
+          colorProfile: SRGB_PROFILE,
           componentSize: 8,
           applyAlpha: false,
         });
@@ -755,6 +762,7 @@ export async function scaleViaPhotoshop(
         resolution: 72,
         fill: "transparent",
         name: "mm-scale",
+        profile: SRGB_PROFILE,
       });
       if (!scratch) throw new Error("Could not create scratch document for scaling.");
       try {
@@ -765,6 +773,7 @@ export async function scaleViaPhotoshop(
           components: 4,
           componentSize: 8,
           colorSpace: "RGB",
+          colorProfile: SRGB_PROFILE,
           chunky: true,
         });
         await imaging.putPixels({
@@ -806,6 +815,8 @@ export async function scaleViaPhotoshop(
         const { imageData } = await imaging.getPixels({
           documentID: scratch.id,
           sourceBounds: { left, top, right: left + dstW, bottom: top + dstH },
+          colorSpace: "RGB",
+          colorProfile: SRGB_PROFILE,
           componentSize: 8,
           applyAlpha: false,
         });

@@ -106,7 +106,7 @@
       let resultBase64 = base64;
       let resultWidth = width;
       let resultHeight = height;
-      if (Math.max(width, height) > pending.maxEdge || pending.forcePng) {
+      if (Math.max(width, height) > pending.maxEdge || pending.forcePng || pending.normalizeSrgb) {
         const scale = Math.min(1, pending.maxEdge / Math.max(width, height));
         const targetWidth = Math.max(1, Math.round(width * scale));
         const targetHeight = Math.max(1, Math.round(height * scale));
@@ -115,12 +115,23 @@
         const canvas = document.createElement("canvas");
         canvas.width = targetWidth;
         canvas.height = targetHeight;
-        const context = canvas.getContext("2d");
+        // Canvas pixels use sRGB. Ask for it explicitly where the WebView
+        // supports color-space options, then fall back for older runtimes.
+        let context = null;
+        try {
+          context = canvas.getContext("2d", { colorSpace: "srgb" });
+        } catch {
+          /* Older WebViews reject the options object. */
+        }
+        if (!context) context = canvas.getContext("2d");
         if (!context) throw new Error("The image processor could not create a canvas.");
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, targetWidth, targetHeight);
-        const dataUrl = canvas.toDataURL("image/png");
+        const outputType = pending.forcePng ? "image/png" : pending.mimeType;
+        // Keep compressed references compressed. PNG ignores the quality value
+        // and preserves transparency; JPEG and WebP use a high-quality redraw.
+        const dataUrl = canvas.toDataURL(outputType, 0.95);
         const comma = dataUrl.indexOf(",");
         if (comma < 0) throw new Error("The resized image could not be encoded.");
         resultBase64 = dataUrl.slice(comma + 1);
@@ -343,6 +354,7 @@
         mimeType: message.mimeType,
         maxEdge,
         forcePng: message.forcePng === true,
+        normalizeSrgb: message.normalizeSrgb === true,
         chunks: new Array(totalChunks),
       });
     } else if (message.type === "resize-chunk") {

@@ -76,9 +76,14 @@ const RETURNED_RATIO_TOLERANCE = 0.02;
 const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
+const SRGB_PROFILE = "sRGB IEC61966-2.1";
 
 let refs: RefImage[] = [];
 const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
+// An override applies only to one exact document mode/profile/depth state in
+// this panel session. Changing any of those properties creates a new warning.
+const acceptedDocumentWarnings = new Set<string>();
+let documentWarningGenerateAnyway = false;
 let running = false;
 // Set by the Cancel button. The run itself decides what that costs: stopping
 // before the request goes out is free, stopping after it has reached the
@@ -254,6 +259,211 @@ function pixelSize(width: number, height: number): string {
 
 function ratioDiffers(width: number, height: number, expected: number): boolean {
   return Math.abs(width / height / expected - 1) > RETURNED_RATIO_TOLERANCE;
+}
+
+function placementCoversEntireTarget(
+  region: Bounds,
+  target: Bounds,
+  selection: SelectionSnapshot | null
+): boolean {
+  if (
+    region.left !== target.left ||
+    region.top !== target.top ||
+    region.right !== target.right ||
+    region.bottom !== target.bottom
+  ) {
+    return false;
+  }
+  if (!selection) return true;
+  // Bounding boxes alone are insufficient: an ellipse or feathered selection
+  // can touch every target edge while leaving original pixels visible inside it.
+  for (let i = 0; i < selection.data.length; i += 1) {
+    if (selection.data[i] !== 255) return false;
+  }
+  return true;
+}
+
+function documentModeLabel(mode: any): string {
+  const raw = String(mode || "");
+  const token = raw.replace(/[\s_-]/g, "").toUpperCase();
+  if (token.includes("INDEXED")) return "Indexed Color";
+  if (token.includes("MULTICHANNEL")) return "Multichannel";
+  if (token.includes("GRAYSCALE") || token === "GRAY") return "Grayscale";
+  if (token.includes("DUOTONE")) return "Duotone";
+  if (token.includes("BITMAP")) return "Bitmap";
+  if (token.includes("CMYK")) return "CMYK";
+  if (token.includes("LAB")) return "Lab";
+  if (token.includes("RGB")) return "RGB";
+  return raw || "Unknown mode";
+}
+
+interface DocumentState {
+  mode: string;
+  profile: string;
+  bitsPerChannel: number | null;
+  quickMaskMode: boolean;
+  fingerprint: string;
+}
+
+interface DocumentBlocker {
+  title: string;
+  message: string;
+  instruction: string;
+}
+
+function documentBitsPerChannel(value: any): number | null {
+  const numeric = Number(value);
+  if (numeric === 1 || numeric === 8 || numeric === 16 || numeric === 32) return numeric;
+
+  // UXP exposes enum values such as "eight", "sixteen" and "thirtyTwo".
+  // Normalize defensively in case a host includes the enum name in the string.
+  const token = String(value ?? "").replace(/[\s_.-]/g, "").toUpperCase();
+  if (token.includes("THIRTYTWO")) return 32;
+  if (token.includes("SIXTEEN")) return 16;
+  if (token.includes("EIGHT")) return 8;
+  if (token.endsWith("ONE")) return 1;
+  return null;
+}
+
+function readDocumentProfile(doc: any): string {
+  try {
+    return String(doc?.colorProfileName || "None").trim() || "None";
+  } catch {
+    return "None";
+  }
+}
+
+function getDocumentState(doc: any): DocumentState {
+  const mode = documentModeLabel(doc?.mode);
+  const profile = readDocumentProfile(doc);
+  let bitsPerChannel: number | null = null;
+  let quickMaskMode = false;
+  try {
+    bitsPerChannel = documentBitsPerChannel(doc?.bitsPerChannel);
+  } catch {
+    /* An older host may not expose the DOM property. */
+  }
+  try {
+    quickMaskMode = Boolean(doc?.quickMaskMode);
+  } catch {
+    /* Quick Mask is unavailable on older hosts. */
+  }
+  return {
+    mode,
+    profile,
+    bitsPerChannel,
+    quickMaskMode,
+    fingerprint: [Number(doc?.id), mode, profile.toLowerCase(), bitsPerChannel ?? "unknown"].join("|"),
+  };
+}
+
+function unsupportedModeInstruction(mode: string): string {
+  if (mode === "Bitmap" || mode === "Duotone") {
+    return (
+      "Save a copy, then choose Image > Mode > Grayscale followed by Image > Mode > RGB Color. " +
+      `Finally choose Edit > Convert to Profile… and select ${SRGB_PROFILE}.`
+    );
+  }
+  if (mode === "Multichannel") {
+    return (
+      "Save a copy, then choose Image > Mode > RGB Color. If RGB Color is unavailable, create a new RGB " +
+      `document and copy the artwork into it. Finally convert that document to ${SRGB_PROFILE}.`
+    );
+  }
+  return (
+    "Save a copy, then choose Image > Mode > RGB Color. " +
+    `Finally choose Edit > Convert to Profile… and select ${SRGB_PROFILE}.`
+  );
+}
+
+function documentBlocker(state: DocumentState): DocumentBlocker | null {
+  if (state.quickMaskMode) {
+    return {
+      title: "Quick Mask is active",
+      message: "Mega Musa needs a normal selection to capture and restore the result mask safely.",
+      instruction: "Press Q or click Standard Mode at the bottom of the Tools panel, then try again.",
+    };
+  }
+  if (state.bitsPerChannel === 32) {
+    return {
+      title: "32-bit documents are not supported",
+      message:
+        "Mega Musa generates 8-bit sRGB images. Placing them in a 32-bit/HDR document can change " +
+        "exposure, brightness and color and may cause visible seams.",
+      instruction:
+        "Choose Image > Mode > 16 Bits/Channel or 8 Bits/Channel, review Photoshop’s HDR conversion, " +
+        "then try again.",
+    };
+  }
+  if (["Bitmap", "Indexed Color", "Duotone", "Multichannel"].includes(state.mode)) {
+    return {
+      title: `${state.mode} documents are not supported`,
+      message: `Mega Musa cannot safely place a generated RGB pixel layer in a ${state.mode} document.`,
+      instruction: unsupportedModeInstruction(state.mode),
+    };
+  }
+  return null;
+}
+
+async function showDocumentBlocker(blocker: DocumentBlocker): Promise<void> {
+  const dialog = $("documentBlocker");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    throw new Error("The document compatibility message could not be opened.");
+  }
+  $("documentBlockerTitle").textContent = blocker.title;
+  $("documentBlockerMessage").textContent = blocker.message;
+  $("documentBlockerInstruction").textContent = blocker.instruction;
+  try {
+    await dialog.showModal({ lockDocumentFocus: true });
+  } catch (err: any) {
+    // Closing the window or pressing Escape still leaves generation blocked.
+    console.log("[Mega Musa] document blocker closed:", err?.message || String(err));
+  }
+}
+
+async function confirmDocumentWarning(dialogId: string): Promise<boolean> {
+  const dialog = $(dialogId);
+  if (!dialog || typeof dialog.showModal !== "function") {
+    throw new Error("The document compatibility warning could not be opened.");
+  }
+  documentWarningGenerateAnyway = false;
+  try {
+    await dialog.showModal({ lockDocumentFocus: true });
+    return documentWarningGenerateAnyway;
+  } catch (err: any) {
+    // Escape and the window close button are equivalent to explicit Cancel.
+    console.log(`[Mega Musa] ${dialogId} closed:`, err?.message || String(err));
+    return false;
+  }
+}
+
+async function confirm16BitDocument(state: DocumentState): Promise<boolean> {
+  if (state.bitsPerChannel !== 16) return true;
+  const key = `16-bit|${state.fingerprint}`;
+  if (acceptedDocumentWarnings.has(key)) return true;
+  if (!(await confirmDocumentWarning("bitDepthWarning"))) return false;
+  acceptedDocumentWarnings.add(key);
+  return true;
+}
+
+async function confirmDocumentColorSpace(state: DocumentState): Promise<boolean> {
+  const isSrgb = state.mode === "RGB" && state.profile.toLowerCase() === SRGB_PROFILE.toLowerCase();
+  if (isSrgb) return true;
+  const key = `color|${state.fingerprint}`;
+  if (acceptedDocumentWarnings.has(key)) return true;
+
+  $("colorWarningSpace").textContent = `${state.mode} / ${state.profile}`;
+  if (!(await confirmDocumentWarning("colorWarning"))) return false;
+  acceptedDocumentWarnings.add(key);
+  return true;
+}
+
+async function confirmDocumentWarnings(state: DocumentState, coversEntireTarget: boolean): Promise<boolean> {
+  if (!(await confirm16BitDocument(state))) return false;
+  // A full, opaque result has no internal boundary against the old pixels. The
+  // color conversion still applies, but there is no seam for it to reveal.
+  if (!coversEntireTarget && !(await confirmDocumentColorSpace(state))) return false;
+  return true;
 }
 
 // Photoshop stops accepting a layer name past 255 characters.
@@ -490,7 +700,8 @@ function resizeReference(
   ref: RefImage,
   maxEdge: number,
   forcePng = false,
-  logDimensions = true
+  logDimensions = true,
+  normalizeSrgb = true
 ): Promise<RequestReference> {
   if (!dropWebviewReady) {
     return Promise.reject(new Error("The image processor is not ready. Close and reopen the Mega Musa panel."));
@@ -519,6 +730,7 @@ function resizeReference(
       mimeType: ref.mimeType,
       maxEdge,
       forcePng,
+      normalizeSrgb,
       totalChunks,
     })) {
       failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
@@ -856,6 +1068,22 @@ async function onGenerate(): Promise<void> {
     return;
   }
 
+  let doc: any;
+  let documentState: DocumentState;
+  try {
+    doc = getActiveDoc();
+    documentState = getDocumentState(doc);
+    const blocker = documentBlocker(documentState);
+    if (blocker) {
+      await showDocumentBlocker(blocker);
+      setStatus("Generation blocked before anything was sent — nothing was charged.");
+      return;
+    }
+  } catch (err: any) {
+    setStatus("Error: " + (err?.message || String(err)), "error");
+    return;
+  }
+
   const spec = modelSpec(model);
   // The resolution menu is already rebuilt per model, but clamp again here so a
   // tier this model cannot produce can never reach the API.
@@ -865,19 +1093,11 @@ async function onGenerate(): Promise<void> {
   // still placed into the selection's area and shape.
   const includeSelection = isChecked($("includeSelection"));
 
-  running = true;
-  cancelRequested = false;
-  cancelInFlight = null;
-  // Turns to Cancel for the length of the run — nothing is sent yet, so a click
-  // now costs nothing.
-  setGenerateButton("cancel");
-  setBusy(true);
   // Once the request is out the provider bills it whatever happens next, so the
   // estimate is frozen at that moment for the cancel path to charge.
   let requestSent = false;
   let sentCharge: number | null = null;
   try {
-    const doc = getActiveDoc();
     const docId: number = doc.id;
     const docW: number = doc.width;
     const docH: number = doc.height;
@@ -919,6 +1139,19 @@ async function onGenerate(): Promise<void> {
 
     if (isRegion) setStatus("Capturing selection…");
     const selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
+    const coversEntireTarget = placementCoversEntireTarget(region, targetBounds, selectionSnapshot);
+    if (!(await confirmDocumentWarnings(documentState, coversEntireTarget))) {
+      setStatus("Cancelled before anything was sent — nothing was charged.");
+      return;
+    }
+
+    running = true;
+    cancelRequested = false;
+    cancelInFlight = null;
+    // Geometry checks and compatibility dialogs above are preflight. The button
+    // becomes Cancel only once the actual generation run begins.
+    setGenerateButton("cancel");
+    setBusy(true);
 
     const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
     const exactOutputSize =
@@ -1483,6 +1716,25 @@ async function init(): Promise<void> {
     });
     setupDropWebview();
     $("generate").addEventListener("click", onGenerateClick);
+    $("documentBlockerClose").addEventListener("click", () => {
+      $("documentBlocker").close();
+    });
+    $("bitDepthWarningCancel").addEventListener("click", () => {
+      documentWarningGenerateAnyway = false;
+      $("bitDepthWarning").close();
+    });
+    $("bitDepthWarningContinue").addEventListener("click", () => {
+      documentWarningGenerateAnyway = true;
+      $("bitDepthWarning").close();
+    });
+    $("colorWarningCancel").addEventListener("click", () => {
+      documentWarningGenerateAnyway = false;
+      $("colorWarning").close();
+    });
+    $("colorWarningContinue").addEventListener("click", () => {
+      documentWarningGenerateAnyway = true;
+      $("colorWarning").close();
+    });
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
     $("resetBudget").addEventListener("click", () => {

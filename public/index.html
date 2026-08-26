@@ -121,6 +121,16 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse14 { background: rgba(128,128,128,0.320); }
     #note { margin-top: 6px; }
     #note:empty { display: none; }
+    .document-dialog { width: 360px; padding: 16px; }
+    /* Plain HTML inside UXP dialogs does not inherit the panel's theme-aware
+       body colour. Give dialog copy the same body/heading ladder as the panel;
+       Spectrum headings and buttons already theme themselves correctly. */
+    .document-dialog .dialog-copy { line-height: 1.45; color: rgb(235, 235, 235); }
+    .document-dialog .dialog-copy strong { color: rgb(255, 255, 255); }
+    .document-dialog .dialog-copy p { margin: 0 0 10px; }
+    .document-dialog .dialog-copy p:last-child { margin-bottom: 0; }
+    .document-dialog footer { display: flex; justify-content: flex-end; margin-top: 16px; }
+    #colorWarningContinue, #bitDepthWarningContinue { margin-left: 8px; }
     /* UXP offers no JavaScript API for Photoshop's Interface theme — it only maps
        the theme onto prefers-color-scheme (UXP 4.1+, values lightest / light /
        medium / dark / darkest). This zero-sized probe turns that media query into
@@ -151,6 +161,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     @media (prefers-color-scheme: light), (prefers-color-scheme: lightest) {
       body { color: rgb(30, 30, 30); }
       h3 { color: rgb(0, 0, 0); }
+      .document-dialog .dialog-copy { color: rgb(30, 30, 30); }
+      .document-dialog .dialog-copy strong { color: rgb(0, 0, 0); }
       .label { color: rgb(61, 61, 61); }
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
@@ -259,6 +271,50 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <div id="status">Loading…</div>
     <div id="note"></div>
   </div>
+
+  <dialog id="documentBlocker" class="document-dialog" aria-labelledby="documentBlockerTitle">
+    <form method="dialog">
+      <sp-heading id="documentBlockerTitle" size="S"></sp-heading>
+      <sp-divider size="s"></sp-divider>
+      <div class="dialog-copy">
+        <p id="documentBlockerMessage"></p>
+        <p id="documentBlockerInstruction"></p>
+      </div>
+      <footer>
+        <sp-button id="documentBlockerClose" variant="primary">Close</sp-button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="bitDepthWarning" class="document-dialog" aria-labelledby="bitDepthWarningTitle">
+    <form method="dialog">
+      <sp-heading id="bitDepthWarningTitle" size="S">16-bit document may lose tonal precision</sp-heading>
+      <sp-divider size="s"></sp-divider>
+      <div class="dialog-copy">
+        <p>Mega Musa processes canvas input and generated results at 8 bits per channel. This document uses 16 bits per channel, so the generated area is limited to 8-bit tonal precision and may show banding in smooth gradients.</p>
+        <p>To avoid this, choose <strong>Image &gt; Mode &gt; 8 Bits/Channel</strong>.</p>
+      </div>
+      <footer>
+        <sp-button id="bitDepthWarningCancel" variant="secondary">Cancel</sp-button>
+        <sp-button id="bitDepthWarningContinue" variant="warning">Generate Anyway</sp-button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="colorWarning" class="document-dialog" aria-labelledby="colorWarningTitle">
+    <form method="dialog">
+      <sp-heading id="colorWarningTitle" size="S">Color conversion may cause visible seams</sp-heading>
+      <sp-divider size="s"></sp-divider>
+      <div class="dialog-copy">
+        <p>Mega Musa generates images in sRGB. This document uses <strong id="colorWarningSpace"></strong>, so converting only the generated area may change colors along its edges.</p>
+        <p>For the best match, choose <strong>Edit &gt; Convert to Profile…</strong> and select <strong>sRGB IEC61966-2.1</strong>.</p>
+      </div>
+      <footer>
+        <sp-button id="colorWarningCancel" variant="secondary">Cancel</sp-button>
+        <sp-button id="colorWarningContinue" variant="warning">Generate Anyway</sp-button>
+      </footer>
+    </form>
+  </dialog>
 
   <div id="themeProbe"></div>
 
