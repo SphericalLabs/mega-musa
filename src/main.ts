@@ -103,6 +103,19 @@ function $(id: string): any {
   return document.getElementById(id);
 }
 
+function syncPromptSizer(): void {
+  const prompt = $("prompt");
+  const sizer = $("promptSizer");
+  if (!prompt || !sizer) return;
+  try {
+    // The trailing line gives Spectrum enough room for its cursor and prevents
+    // an internal scrollbar at the exact point where a new line is started.
+    sizer.textContent = `${prompt.value || ""}\n `;
+  } catch {
+    /* Prompt resizing is cosmetic. */
+  }
+}
+
 // A cancel is not a failure, so the run's catch has to tell the two apart. The
 // AbortError check covers UXP's fetch rejecting the request itself first.
 function cancelledError(): Error {
@@ -1944,6 +1957,11 @@ async function init(): Promise<void> {
       renderBudget(resetBudget());
       setStatus("Budget counter reset — counting from today.", "ok");
     });
+
+    // The hidden mirror reflows with the panel width and gives the Spectrum
+    // textarea a five-line minimum that grows and shrinks with its content.
+    $("prompt").addEventListener("input", syncPromptSizer);
+    syncPromptSizer();
 
     // The prompt is multiline, so unmodified Return inserts a line break.
     // Cmd+Return on macOS or Ctrl+Return on Windows fires Generate. Ignore the

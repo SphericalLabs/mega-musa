@@ -68,10 +68,14 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #model, #resolution, #quality { width: 100%; }
     #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
-    /* Five lines leave enough room to compose a useful prompt without letting
-       the editor push the rest of the panel away. Longer prompts scroll inside
-       the native Spectrum textarea. */
-    #prompt { width: 100%; height: 108px; }
+    /* UXP's Spectrum textarea has no autosize API. An invisible text mirror
+       gives the wrapper the required height, including wrapped lines, while the
+       absolutely positioned textarea keeps Spectrum's native appearance. */
+    #promptAutosize { position: relative; width: 100%; }
+    #promptSizer { box-sizing: border-box; min-height: 108px; padding: 8px 12px;
+                   visibility: hidden; white-space: pre-wrap;
+                   overflow-wrap: break-word; font-size: 12px; line-height: 18px; }
+    #prompt { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
     #dropWebview { display: block; margin: 6px 0; }
     #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
     .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
@@ -239,7 +243,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <h3>Prompt</h3>
     <div class="field">
-      <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
+      <div id="promptAutosize">
+        <div id="promptSizer" aria-hidden="true"></div>
+        <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
+      </div>
       <div class="muted" style="margin-top:6px;">Enter adds a new line. Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
     </div>
 
