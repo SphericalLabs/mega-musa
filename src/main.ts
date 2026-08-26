@@ -79,6 +79,8 @@ const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
+const PROMPT_MIN_HEIGHT_PX = 48;
+const PROMPT_MAX_HEIGHT_PX = 180;
 
 let refs: RefImage[] = [];
 const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
@@ -108,9 +110,15 @@ function syncPromptSizer(): void {
   const sizer = $("promptSizer");
   if (!prompt || !sizer) return;
   try {
-    // The trailing line gives Spectrum enough room for its cursor and prevents
-    // an internal scrollbar at the exact point where a new line is started.
-    sizer.textContent = `${prompt.value || ""}\n `;
+    // Grow with wrapped content until UXP's safe native-control height; longer
+    // prompts stay at the cap and use Spectrum's internal scrollbar.
+    const value = String(prompt.value || "");
+    sizer.textContent = value ? `${value}\n ` : " ";
+    const measuredHeight = Math.ceil(sizer.getBoundingClientRect().height || 0);
+    prompt.style.height = `${Math.min(
+      PROMPT_MAX_HEIGHT_PX,
+      Math.max(PROMPT_MIN_HEIGHT_PX, measuredHeight)
+    )}px`;
   } catch {
     /* Prompt resizing is cosmetic. */
   }
@@ -1958,9 +1966,9 @@ async function init(): Promise<void> {
       setStatus("Budget counter reset — counting from today.", "ok");
     });
 
-    // The hidden mirror reflows with the panel width and gives the Spectrum
-    // textarea a five-line minimum that grows and shrinks with its content.
+    // Re-measure on edits and panel resizing because both can change wrapping.
     $("prompt").addEventListener("input", syncPromptSizer);
+    window.addEventListener("resize", syncPromptSizer);
     syncPromptSizer();
 
     // The prompt is multiline, so unmodified Return inserts a line break.
