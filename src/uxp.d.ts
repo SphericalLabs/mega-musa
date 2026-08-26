@@ -29,6 +29,11 @@ interface PhotoshopImageData {
   dispose(): void;
 }
 
+interface PhotoshopSelectionData {
+  imageData: PhotoshopImageData;
+  sourceBounds?: any;
+}
+
 interface PhotoshopModule {
   app: any;
   action: {
@@ -42,7 +47,7 @@ interface PhotoshopModule {
   };
   imaging: {
     getPixels(options: any): Promise<{ imageData: PhotoshopImageData }>;
-    getSelection(options: any): Promise<{ imageData: PhotoshopImageData }>;
+    getSelection(options: any): Promise<PhotoshopSelectionData>;
     putPixels(options: any): Promise<void>;
     createImageDataFromBuffer(buffer: Uint8Array, options: any): Promise<PhotoshopImageData>;
   };

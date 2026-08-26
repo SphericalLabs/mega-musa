@@ -22,6 +22,7 @@ import {
   getActiveDoc,
   getActiveArtboard,
   getSelectionBounds,
+  captureSelection,
   intersectBounds,
   fitRegionToRatio,
   readRegion,
@@ -30,6 +31,7 @@ import {
   setRectSelection,
   readClipboardImage,
   Bounds,
+  SelectionSnapshot,
 } from "./photoshop-bridge";
 import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
 import {
@@ -914,6 +916,10 @@ async function onGenerate(): Promise<void> {
     refreshResolutionLabels();
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
+
+    if (isRegion) setStatus("Capturing selection…");
+    const selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
+
     const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
     const exactOutputSize =
       openaiDimensions.length === 2 && openaiDimensions.every(Number.isFinite)
@@ -1104,10 +1110,20 @@ async function onGenerate(): Promise<void> {
     const resolutionDetail = frame.openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
     if (resolutionDetail) layerDetails.push(resolutionDetail);
     if (resolvedQuality) layerDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
-    await placeResult(docId, region, rgba, cropW, cropH, resultLayerName(prompt, layerDetails), isRegion);
+    const clip = await placeResult(
+      docId,
+      region,
+      rgba,
+      cropW,
+      cropH,
+      resultLayerName(prompt, layerDetails),
+      selectionSnapshot
+    );
 
     const doneMessage = isRegion
-      ? "Done — result clipped to your selection (new layer)."
+      ? clip === "alpha"
+        ? "Done — result clipped to the selection captured at the start (new layer with baked transparency)."
+        : "Done — result clipped to your selection (new layer with editable mask)."
       : activeArtboard
         ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
         : "Done — full-image result added as a new layer.";

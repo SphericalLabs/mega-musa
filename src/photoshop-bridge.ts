@@ -17,7 +17,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { resampleGray } from "./image-codec";
+import { applyAlphaMask, resampleGray } from "./image-codec";
 
 const { app, action, core, imaging } = require("photoshop");
 
@@ -47,6 +47,12 @@ export interface RegionRead {
   mask?: Uint8Array;
   // Human-readable diagnostics about what was actually read (dims, sel bounds).
   debug: string;
+}
+
+export interface SelectionSnapshot {
+  bounds: Bounds;
+  // Region-sized selection coverage, 0..255, including feathering.
+  data: Uint8Array;
 }
 
 export function getActiveDoc(): any {
@@ -181,6 +187,82 @@ export async function getSelectionBounds(): Promise<Bounds | null> {
   };
 }
 
+// Read selection coverage into a buffer covering all of `bounds`. Photoshop may
+// return only the non-empty part, so align its source bounds back into the full
+// region and leave everything outside it unselected.
+async function readSelectionMask(docId: number, bounds: Bounds): Promise<Uint8Array> {
+  const selection = await imaging.getSelection({
+    documentID: docId,
+    sourceBounds: bounds,
+    componentSize: 8,
+  });
+  const imageData = selection.imageData;
+  try {
+    const sourceW = imageData.width;
+    const sourceH = imageData.height;
+    const components = imageData.components || 1;
+    if (sourceW < 1 || sourceH < 1) throw new Error("Photoshop returned an empty selection snapshot.");
+
+    const raw = await imageData.getData({ chunky: true });
+    let gray: Uint8Array;
+    if (components === 1) {
+      gray = raw;
+    } else {
+      gray = new Uint8Array(sourceW * sourceH);
+      for (let i = 0; i < gray.length; i++) gray[i] = raw[i * components];
+    }
+
+    const sourceBounds = boundsFrom(selection.sourceBounds) || bounds;
+    const regionW = sourceBounds.right - sourceBounds.left;
+    const regionH = sourceBounds.bottom - sourceBounds.top;
+    const regionMask =
+      sourceW === regionW && sourceH === regionH
+        ? gray
+        : resampleGray(gray, sourceW, sourceH, regionW, regionH);
+    if (
+      sourceBounds.left === bounds.left &&
+      sourceBounds.top === bounds.top &&
+      regionW === bounds.right - bounds.left &&
+      regionH === bounds.bottom - bounds.top
+    ) {
+      return regionMask;
+    }
+
+    const width = bounds.right - bounds.left;
+    const height = bounds.bottom - bounds.top;
+    const mask = new Uint8Array(width * height);
+    const offsetX = sourceBounds.left - bounds.left;
+    const offsetY = sourceBounds.top - bounds.top;
+    for (let y = 0; y < regionH; y++) {
+      const targetY = y + offsetY;
+      if (targetY < 0 || targetY >= height) continue;
+      for (let x = 0; x < regionW; x++) {
+        const targetX = x + offsetX;
+        if (targetX < 0 || targetX >= width) continue;
+        mask[targetY * width + targetX] = regionMask[y * regionW + x];
+      }
+    }
+    return mask;
+  } finally {
+    imageData.dispose();
+  }
+}
+
+// Capture the final placement region before the provider request. Failure is
+// intentionally propagated so no request is billed without a usable fallback.
+export async function captureSelection(docId: number, bounds: Bounds): Promise<SelectionSnapshot> {
+  return await core.executeAsModal(
+    async () => {
+      const data = await readSelectionMask(docId, bounds);
+      if (!data.some((coverage) => coverage > 0)) {
+        throw new Error("Photoshop returned an empty selection snapshot.");
+      }
+      return { bounds, data };
+    },
+    { commandName: "Mega Musa: capture selection" }
+  );
+}
+
 export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
   const intersection = {
     left: Math.max(a.left, b.left),
@@ -270,49 +352,11 @@ export async function readRegion(
 
       if (withMask) {
         try {
-          const sel = await imaging.getSelection({ documentID: docId, sourceBounds: bounds });
-          const mw = sel.imageData.width;
-          const mh = sel.imageData.height;
-          const mc = sel.imageData.components || 1;
-          const mraw = await sel.imageData.getData({ chunky: true });
-          let gray: Uint8Array;
-          if (mc === 1) {
-            gray = new Uint8Array(mraw);
-          } else {
-            gray = new Uint8Array(mw * mh);
-            for (let i = 0; i < mw * mh; i++) gray[i] = mraw[i * mc];
-          }
-          sel.imageData.dispose();
-
-          // Region the returned mask actually covers, in document pixels.
-          const sb = (sel as any).sourceBounds;
-          const sbL = sb ? boundVal(sb.left) : bounds.left;
-          const sbT = sb ? boundVal(sb.top) : bounds.top;
-          const sbR = sb ? boundVal(sb.right) : bounds.right;
-          const sbB = sb ? boundVal(sb.bottom) : bounds.bottom;
-          const regW = Math.max(1, sbR - sbL);
-          const regH = Math.max(1, sbB - sbT);
-
-          // Resample the mask to its region's pixel size, then drop it into a
-          // crop-sized buffer at the right offset (unselected stays 0).
-          const regMask = mw === regW && mh === regH ? gray : resampleGray(gray, mw, mh, regW, regH);
-          mask = new Uint8Array(cropW * cropH);
-          const offX = sbL - bounds.left;
-          const offY = sbT - bounds.top;
-          for (let y = 0; y < regH; y++) {
-            const ty = y + offY;
-            if (ty < 0 || ty >= cropH) continue;
-            for (let x = 0; x < regW; x++) {
-              const tx = x + offX;
-              if (tx < 0 || tx >= cropW) continue;
-              mask[ty * cropW + tx] = regMask[y * regW + x];
-            }
-          }
-
+          mask = await readSelectionMask(docId, bounds);
           let covered = 0;
           for (let i = 0; i < mask.length; i++) if (mask[i] > 127) covered++;
           const pct = Math.round((100 * covered) / mask.length);
-          debug += ` | sel raw ${mw}x${mh} sb[${sbL},${sbT},${sbR},${sbB}] cover ${pct}%`;
+          debug += ` | selection cover ${pct}%`;
         } catch (e: any) {
           mask = undefined;
           debug += ` | getSelection FAILED: ${e?.message || e}`;
@@ -342,9 +386,54 @@ function isFrontOfContainer(layer: any, layerId: number): boolean {
   }
 }
 
-// Modal step 2: create a new layer, write the edited RGBA into `bounds`, and (for
-// region edits) add a layer mask that reveals the live selection — so Photoshop
-// itself clips the result to the exact selection shape, feather and all.
+export type PlacementClip = "none" | "mask" | "alpha";
+
+function openDocumentById(docId: number): any | null {
+  return Array.from(app.documents || []).find((doc: any) => doc.id === docId) || null;
+}
+
+async function withActiveDocument(docId: number, run: () => Promise<PlacementClip>): Promise<PlacementClip> {
+  const previousDocument = app.activeDocument;
+  const targetDocument = openDocumentById(docId);
+  if (!targetDocument) {
+    throw new Error("The original Photoshop document was closed, so the billed result was not placed.");
+  }
+
+  const switched = previousDocument?.id !== docId;
+  try {
+    if (switched) app.activeDocument = targetDocument;
+    if (app.activeDocument?.id !== docId) {
+      throw new Error("Photoshop could not reactivate the original document, so the billed result was not placed.");
+    }
+    return await run();
+  } finally {
+    if (switched && previousDocument && openDocumentById(previousDocument.id)) {
+      try {
+        app.activeDocument = previousDocument;
+      } catch (e: any) {
+        console.log("[Mega Musa] could not restore the previously active document:", e?.message || e);
+      }
+    }
+  }
+}
+
+async function liveSelectionMatches(docId: number, snapshot: SelectionSnapshot): Promise<boolean> {
+  try {
+    const current = await readSelectionMask(docId, snapshot.bounds);
+    if (current.length !== snapshot.data.length) return false;
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] !== snapshot.data[i]) return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.log("[Mega Musa] live selection is unavailable or changed:", e?.message || e);
+    return false;
+  }
+}
+
+// Modal step 2: create a new layer and write the result once. An unchanged live
+// selection becomes an editable layer mask; otherwise the captured coverage is
+// baked into alpha without modifying Photoshop's current selection.
 export async function placeResult(
   docId: number,
   bounds: Bounds,
@@ -352,10 +441,11 @@ export async function placeResult(
   width: number,
   height: number,
   layerName: string,
-  maskToSelection: boolean
-): Promise<void> {
-  await core.executeAsModal(
-    async () => {
+  selection: SelectionSnapshot | null
+): Promise<PlacementClip> {
+  return await core.executeAsModal(
+    () => withActiveDocument(docId, async () => {
+      const selectionStillMatches = selection ? await liveSelectionMatches(docId, selection) : false;
       await action.batchPlay(
         [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
         {}
@@ -408,6 +498,43 @@ export async function placeResult(
         }
       }
 
+      let clip: PlacementClip = "none";
+      let masked = false;
+      if (selectionStillMatches) {
+        try {
+          await action.batchPlay(
+            [
+              {
+                _obj: "make",
+                new: { _class: "channel" },
+                at: { _ref: "channel", _enum: "channel", _value: "mask" },
+                using: { _enum: "userMaskEnabled", _value: "revealSelection" },
+                _options: { dialogOptions: "dontDisplay" },
+              },
+            ],
+            {}
+          );
+          masked = true;
+          clip = "mask";
+        } catch (e: any) {
+          console.log("[Mega Musa] could not create the selection mask; using layer alpha:", e?.message || e);
+        }
+      }
+
+      if (selection && !masked) {
+        if (
+          selection.bounds.left !== bounds.left ||
+          selection.bounds.top !== bounds.top ||
+          selection.bounds.right !== bounds.right ||
+          selection.bounds.bottom !== bounds.bottom ||
+          selection.data.length !== width * height
+        ) {
+          throw new Error("The captured selection does not match the result region.");
+        }
+        applyAlphaMask(rgba, selection.data);
+        clip = "alpha";
+      }
+
       const imageData = await imaging.createImageDataFromBuffer(rgba, {
         width,
         height,
@@ -416,30 +543,18 @@ export async function placeResult(
         colorSpace: "RGB",
         chunky: true,
       });
-      await imaging.putPixels({
-        documentID: docId,
-        layerID: layerId,
-        targetBounds: bounds,
-        imageData,
-      });
-      imageData.dispose();
+      try {
+        await imaging.putPixels({
+          documentID: docId,
+          layerID: layerId,
+          targetBounds: bounds,
+          imageData,
+        });
+      } finally {
+        imageData.dispose();
+      }
 
-      // Clip to the selection with a real layer mask. The user's selection is
-      // still live (we never altered it), so "reveal selection" reproduces any
-      // lasso / ellipse / feather exactly, rendered by Photoshop.
-      if (maskToSelection) {
-        await action.batchPlay(
-          [
-            {
-              _obj: "make",
-              new: { _class: "channel" },
-              at: { _ref: "channel", _enum: "channel", _value: "mask" },
-              using: { _enum: "userMaskEnabled", _value: "revealSelection" },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-          ],
-          {}
-        );
+      if (masked) {
         // Adding a mask consumes the selection — Photoshop drops the marching
         // ants. Load the mask we just made straight back as the selection so it
         // survives the run: without this the next Generate sees nothing selected,
@@ -463,7 +578,8 @@ export async function placeResult(
           console.log("[Mega Musa] could not restore the selection after masking:", e?.message || e);
         }
       }
-    },
+      return clip;
+    }),
     { commandName: "Mega Musa: place result" }
   );
 }
