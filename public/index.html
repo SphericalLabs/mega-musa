@@ -41,8 +41,19 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #scroll { position: absolute; top: 0; left: 0; right: 0; bottom: 0;
               overflow-y: auto; padding: 8px 10px 14px; }
     /* Section headers sit one step brighter than body text, the way Photoshop's
-       own panel headings do. */
+       own panel headings do. A neutral row avoids UXP's pill-shaped HTML button
+       treatment; the icon is Photoshop's built-in Spectrum chevron. */
     h3 { margin: 9px 0 2px; font-size: 12px; font-weight: 700; color: rgb(255, 255, 255); }
+    .section-toggle { box-sizing: border-box; display: flex; align-items: center;
+                      width: 100%; margin: 0; padding: 7px 2px 3px;
+                      color: rgb(255, 255, 255); font-size: 12px;
+                      font-weight: 700; text-align: left; cursor: pointer; }
+    .section-toggle:focus { outline: 1px solid rgba(128,128,128,0.75); }
+    .section-chevron { flex: 0 0 auto; margin: 0 7px 0 0; color: inherit; }
+    .section-chevron-collapsed { display: none; }
+    .section-toggle[aria-expanded="false"] .section-chevron-expanded { display: none; }
+    .section-toggle[aria-expanded="false"] .section-chevron-collapsed { display: block; }
+    .collapsible-section.collapsed .section-content { display: none; }
     .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
     .grow { flex: 1; }
@@ -58,10 +69,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        treatments give them. The variants in the markup do that for the buttons;
        this states the label colour too, for the runtimes that let an author
        colour reach into the component — the quiet Clear button and the checkbox
-       have no variant to raise. #generate and #describe are left out on purpose:
-       their labels sit on the blue CTA fill and are already white in every theme. */
+       have no variant to raise. #generate is left out on purpose: its label sits
+       on the blue CTA fill and is already white in every theme. */
     #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
-    #undoDescription,
+    #describe, #undoDescription,
     #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
     #loadArchivedSettings { color: rgb(255, 255, 255); }
     .label { font-size: 11px; color: rgb(198, 198, 198); }
@@ -176,12 +187,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     @media (prefers-color-scheme: light), (prefers-color-scheme: lightest) {
       body { color: rgb(30, 30, 30); }
       h3 { color: rgb(0, 0, 0); }
+      .section-toggle { color: rgb(0, 0, 0); }
       .notice-dialog .dialog-copy { color: rgb(30, 30, 30); }
       .notice-dialog .dialog-copy strong { color: rgb(0, 0, 0); }
       .label { color: rgb(61, 61, 61); }
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
-      #undoDescription,
+      #describe, #undoDescription,
       #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
       #loadArchivedSettings { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
@@ -190,122 +202,181 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 </head>
 <body>
   <div id="scroll">
-    <h3>API Keys</h3>
-    <div class="field">
-      <span class="label">Google Gemini key &mdash; for Nano Banana models</span>
-      <div class="row">
-        <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
-        <sp-button id="saveGeminiKey" variant="primary" size="s">Save</sp-button>
+    <div id="apiKeysSection" class="collapsible-section">
+      <div id="apiKeysSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="apiKeysSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>API Keys</span>
       </div>
-    </div>
-    <div class="field">
-      <span class="label">OpenAI key &mdash; for GPT Image models</span>
-      <div class="row">
-        <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
-        <sp-button id="saveOpenAIKey" variant="primary" size="s">Save</sp-button>
-      </div>
-    </div>
-    <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
-
-    <sp-divider size="s"></sp-divider>
-
-    <h3>Model Selection</h3>
-    <div class="field">
-      <span class="label">Model</span>
-      <sp-picker id="model" size="s">
-        <sp-menu slot="options"></sp-menu>
-      </sp-picker>
-    </div>
-    <div class="field">
-      <span class="label">Resolution</span>
-      <sp-picker id="resolution" size="s">
-        <sp-menu slot="options"></sp-menu>
-      </sp-picker>
-    </div>
-    <div class="field" id="qualityField">
-      <span class="label">Quality</span>
-      <sp-picker id="quality" size="s">
-        <sp-menu slot="options"></sp-menu>
-      </sp-picker>
-    </div>
-    <div class="row spread">
-      <!-- Two spans, not one wrapped line: the breakdown starts its own line
-           instead of breaking wherever the panel width happens to fall. -->
-      <span id="budget" class="muted">
-        <span id="budgetTotal">Budget spent: &mdash;</span>
-        <span id="budgetCounts"></span>
-      </span>
-      <sp-button id="resetBudget" variant="primary" size="s">Reset</sp-button>
-    </div>
-
-    <sp-divider size="s"></sp-divider>
-
-    <h3>Prompt</h3>
-    <div class="field">
-      <div id="promptAutosize">
-        <div id="promptSizer" aria-hidden="true"></div>
-        <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
-      </div>
-      <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
-    </div>
-    <div class="field">
-      <span class="label">Describe with</span>
-      <sp-picker id="describeModel" size="s">
-        <sp-menu slot="options"></sp-menu>
-      </sp-picker>
-      <div id="describeActions" class="row">
-        <sp-button id="describe" class="grow" variant="cta" size="s">Describe</sp-button>
-        <sp-button id="undoDescription" variant="primary" size="s" disabled>Undo</sp-button>
+      <div id="apiKeysSectionContent" class="section-content" role="region" aria-labelledby="apiKeysSectionToggle">
+        <div class="field">
+          <span class="label">Google Gemini key &mdash; for Nano Banana models</span>
+          <div class="row">
+            <sp-textfield id="geminiApiKey" class="grow" type="password" placeholder="Gemini API key"></sp-textfield>
+            <sp-button id="saveGeminiKey" variant="primary" size="s">Save</sp-button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">OpenAI key &mdash; for GPT Image models</span>
+          <div class="row">
+            <sp-textfield id="openaiApiKey" class="grow" type="password" placeholder="OpenAI API key"></sp-textfield>
+            <sp-button id="saveOpenAIKey" variant="primary" size="s">Save</sp-button>
+          </div>
+        </div>
+        <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
       </div>
     </div>
 
     <sp-divider size="s"></sp-divider>
 
-    <div id="archivePanel">
-      <h3>Archived Generation</h3>
-      <div id="archiveLayerName" class="label"></div>
-      <div id="archiveDetails" class="label"></div>
-      <div id="archiveSource" class="muted"></div>
-      <div class="row">
-        <sp-button id="copyArchivedPrompt" variant="primary" size="s">Copy Prompt</sp-button>
-        <sp-button id="loadArchivedSettings" variant="primary" size="s">Load Settings</sp-button>
+    <div id="modelSelectionSection" class="collapsible-section">
+      <div id="modelSelectionSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="modelSelectionSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Model Selection</span>
+      </div>
+      <div id="modelSelectionSectionContent" class="section-content" role="region" aria-labelledby="modelSelectionSectionToggle">
+        <div class="field">
+          <span class="label">Model</span>
+          <sp-picker id="model" size="s">
+            <sp-menu slot="options"></sp-menu>
+          </sp-picker>
+        </div>
+        <div class="field">
+          <span class="label">Resolution</span>
+          <sp-picker id="resolution" size="s">
+            <sp-menu slot="options"></sp-menu>
+          </sp-picker>
+        </div>
+        <div class="field" id="qualityField">
+          <span class="label">Quality</span>
+          <sp-picker id="quality" size="s">
+            <sp-menu slot="options"></sp-menu>
+          </sp-picker>
+        </div>
+        <div class="row spread">
+          <!-- Two spans, not one wrapped line: the breakdown starts its own line
+               instead of breaking wherever the panel width happens to fall. -->
+          <span id="budget" class="muted">
+            <span id="budgetTotal">Budget spent: &mdash;</span>
+            <span id="budgetCounts"></span>
+          </span>
+          <sp-button id="resetBudget" variant="primary" size="s">Reset</sp-button>
+        </div>
+      </div>
+    </div>
+
+    <sp-divider size="s"></sp-divider>
+
+    <div id="promptSection" class="collapsible-section">
+      <div id="promptSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="promptSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Prompt</span>
+      </div>
+      <div id="promptSectionContent" class="section-content" role="region" aria-labelledby="promptSectionToggle">
+        <div class="field">
+          <div id="promptAutosize">
+            <div id="promptSizer" aria-hidden="true"></div>
+            <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
+          </div>
+          <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
+        </div>
+      </div>
+    </div>
+
+    <sp-divider size="s"></sp-divider>
+
+    <div id="referenceImagesSection" class="collapsible-section">
+      <div id="referenceImagesSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="referenceImagesSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Reference Images</span>
+      </div>
+      <div id="referenceImagesSectionContent" class="section-content" role="region" aria-labelledby="referenceImagesSectionToggle">
+        <div class="row spread">
+          <div class="row">
+            <sp-button id="addRefs" variant="primary" size="s">Add Files…</sp-button>
+            <sp-button id="pasteRef" variant="primary" size="s">Paste</sp-button>
+          </div>
+          <div class="row">
+            <span id="refCount" class="muted">0/10</span>
+            <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
+          </div>
+        </div>
+        <webview id="dropWebview" src="plugin:/drop-target.html" width="100%" height="64px"></webview>
+        <div id="thumbs"></div>
+        <div class="muted">Drag PNG, JPEG or WebP files onto the box above, or use <b>Paste</b> for an image on the clipboard. A macOS screenshot goes to the clipboard with <b>⌃⇧⌘4</b>.</div>
+        <div class="row">
+          <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
+        </div>
+      </div>
+    </div>
+
+    <sp-divider size="s"></sp-divider>
+
+    <div id="describeWithSection" class="collapsible-section">
+      <div id="describeWithSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="describeWithSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Describe Images</span>
+      </div>
+      <div id="describeWithSectionContent" class="section-content" role="region" aria-labelledby="describeWithSectionToggle">
+        <div class="field">
+          <span class="label">Model</span>
+          <sp-picker id="describeModel" size="s">
+            <sp-menu slot="options"></sp-menu>
+          </sp-picker>
+          <div id="describeActions" class="row">
+            <sp-button id="describe" class="grow" variant="primary" size="s" disabled>Describe</sp-button>
+            <sp-button id="undoDescription" variant="primary" size="s" disabled>Undo</sp-button>
+          </div>
+        </div>
+        <div class="muted">Describe turns the included Photoshop selection and any reference images into a ready-to-edit prompt using the model above. It replaces the current prompt; <b>Undo</b> restores the previous text.</div>
+      </div>
+    </div>
+
+    <sp-divider size="s"></sp-divider>
+
+    <div id="archivePanel" class="collapsible-section">
+      <div id="archiveSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="archiveSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Archived Images</span>
+      </div>
+      <div id="archiveSectionContent" class="section-content" role="region" aria-labelledby="archiveSectionToggle">
+        <div id="archiveLayerName" class="label"></div>
+        <div id="archiveDetails" class="label"></div>
+        <div id="archiveSource" class="muted"></div>
+        <div class="row">
+          <sp-button id="copyArchivedPrompt" variant="primary" size="s">Copy Prompt</sp-button>
+          <sp-button id="loadArchivedSettings" variant="primary" size="s">Load Settings</sp-button>
+        </div>
       </div>
       <sp-divider size="s"></sp-divider>
     </div>
 
-    <h3>Reference Images</h3>
-    <div class="row spread">
-      <div class="row">
-        <sp-button id="addRefs" variant="primary" size="s">Add Files…</sp-button>
-        <sp-button id="pasteRef" variant="primary" size="s">Paste</sp-button>
+    <div id="aspectRatioSection" class="collapsible-section">
+      <div id="aspectRatioSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="aspectRatioSectionContent">
+        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
+        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span>Aspect Ratio</span>
       </div>
-      <div class="row">
-        <span id="refCount" class="muted">0/10</span>
-        <sp-action-button id="clearRefs" quiet size="s">Clear</sp-action-button>
+      <div id="aspectRatioSectionContent" class="section-content" role="region" aria-labelledby="aspectRatioSectionToggle">
+        <div class="field">
+          <div class="row">
+            <!-- Options for this picker are generated at runtime from the capability
+                 table in src/models.ts, so each model only offers supported ratios. -->
+            <sp-picker id="selRatio" size="s" class="grow">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+            <sp-button id="fitSelection" variant="primary" size="s">Fit Selection</sp-button>
+          </div>
+          <sp-button id="fitNearest" variant="primary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
+        </div>
+        <div class="muted"><b>Generate</b> adjusts the output area to a supported aspect ratio. It does not change your selection. It uses your selection as a layer mask. <b>Fit Selection</b> changes the selection to the ratio in the menu. <b>Fit to Nearest Aspect Ratio</b> fits the selection to the closest supported ratio and updates the menu.</div>
       </div>
     </div>
-    <webview id="dropWebview" src="plugin:/drop-target.html" width="100%" height="64px"></webview>
-    <div id="thumbs"></div>
-    <div class="muted">Drag PNG, JPEG or WebP files onto the box above, or use <b>Paste</b> for an image on the clipboard. A macOS screenshot goes to the clipboard with <b>⌃⇧⌘4</b>.</div>
-    <div class="row">
-      <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
-    </div>
-
-    <sp-divider size="s"></sp-divider>
-
-    <h3>Aspect Ratio</h3>
-    <div class="field">
-      <div class="row">
-        <!-- Options for this picker are generated at runtime from the capability
-             table in src/models.ts, so each model only offers supported ratios. -->
-        <sp-picker id="selRatio" size="s" class="grow">
-          <sp-menu slot="options"></sp-menu>
-        </sp-picker>
-        <sp-button id="fitSelection" variant="primary" size="s">Fit Selection</sp-button>
-      </div>
-      <sp-button id="fitNearest" variant="primary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
-    </div>
-    <div class="muted"><b>Generate</b> adjusts the output area to a supported aspect ratio. It does not change your selection. It uses your selection as a layer mask. <b>Fit Selection</b> changes the selection to the ratio in the menu. <b>Fit to Nearest Aspect Ratio</b> fits the selection to the closest supported ratio and updates the menu.</div>
 
     <sp-divider size="s"></sp-divider>
 

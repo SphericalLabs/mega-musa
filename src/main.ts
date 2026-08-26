@@ -91,6 +91,15 @@ const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
+const COLLAPSIBLE_SECTIONS = [
+  "apiKeys",
+  "modelSelection",
+  "prompt",
+  "referenceImages",
+  "describeWith",
+  "archive",
+  "aspectRatio",
+] as const;
 
 let refs: RefImage[] = [];
 const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
@@ -116,6 +125,9 @@ let selectedArchive: {
 } | null = null;
 let archiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let archiveRefreshSequence = 0;
+let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let descriptionInputRefreshSequence = 0;
+let hasDescriptionSelection = false;
 
 function $(id: string): any {
   return document.getElementById(id);
@@ -137,6 +149,43 @@ function syncPromptSizer(): void {
     )}px`;
   } catch {
     /* Prompt resizing is cosmetic. */
+  }
+}
+
+function setSectionExpanded(sectionId: (typeof COLLAPSIBLE_SECTIONS)[number], expanded: boolean): void {
+  const section = sectionId === "archive" ? $("archivePanel") : $(`${sectionId}Section`);
+  const toggle = $(`${sectionId}SectionToggle`);
+  const content = $(`${sectionId}SectionContent`);
+  if (!section || !toggle || !content) return;
+
+  if (expanded) section.classList.remove("collapsed");
+  else section.classList.add("collapsed");
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  content.setAttribute("aria-hidden", expanded ? "false" : "true");
+
+  // A hidden prompt cannot report its wrapped height. Re-measure as soon as it
+  // becomes visible so a long prompt restores at the correct height.
+  if (expanded && sectionId === "prompt") syncPromptSizer();
+}
+
+function setupCollapsibleSections(): void {
+  for (const sectionId of COLLAPSIBLE_SECTIONS) {
+    const toggle = $(`${sectionId}SectionToggle`);
+    if (!toggle) continue;
+
+    const settingName = `section.${sectionId}.expanded`;
+    setSectionExpanded(sectionId, loadSetting(settingName, "1") !== "0");
+    const toggleSection = () => {
+      const expanded = toggle.getAttribute("aria-expanded") !== "true";
+      setSectionExpanded(sectionId, expanded);
+      saveSetting(settingName, expanded ? "1" : "0");
+    };
+    toggle.addEventListener("click", toggleSection);
+    toggle.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.repeat || !["Enter", " ", "Spacebar"].includes(event.key)) return;
+      event.preventDefault();
+      toggleSection();
+    });
   }
 }
 
@@ -222,7 +271,10 @@ function setGenerateButton(mode: GenerateButtonMode): void {
 function updateDescriptionControls(): void {
   const busy = running || describing;
   const describeButton = $("describe");
-  if (describeButton) describeButton.disabled = busy;
+  if (describeButton) {
+    const hasInput = refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection);
+    describeButton.disabled = busy || !hasInput;
+  }
   const describeModel = $("describeModel");
   if (describeModel) describeModel.disabled = busy;
   const undo = $("undoDescription");
@@ -238,6 +290,29 @@ function setDescriptionBusy(on: boolean): void {
   const generate = $("generate");
   if (generate) generate.disabled = on;
   updateDescriptionControls();
+}
+
+async function refreshDescriptionInputAvailability(sequence: number): Promise<void> {
+  let hasSelection = false;
+  try {
+    const selection = await getSelectionBounds();
+    hasSelection =
+      !!selection && selection.right - selection.left > 1 && selection.bottom - selection.top > 1;
+  } catch {
+    /* No document or no readable selection means no Photoshop input. */
+  }
+  if (sequence !== descriptionInputRefreshSequence) return;
+  hasDescriptionSelection = hasSelection;
+  updateDescriptionControls();
+}
+
+function scheduleDescriptionInputRefresh(): void {
+  if (descriptionInputRefreshTimer !== null) clearTimeout(descriptionInputRefreshTimer);
+  const sequence = ++descriptionInputRefreshSequence;
+  descriptionInputRefreshTimer = setTimeout(() => {
+    descriptionInputRefreshTimer = null;
+    void refreshDescriptionInputAvailability(sequence);
+  }, 60);
 }
 
 let statusKind: "info" | "error" | "ok" = "info";
@@ -774,15 +849,19 @@ function scheduleArchivedGenerationRefresh(): void {
 async function setupArchivedGenerationTracking(): Promise<void> {
   try {
     await photoshopAction.addNotificationListener(
-      ["select", "make", "delete", "open", "close"],
-      () => scheduleArchivedGenerationRefresh()
+      ["select", "set", "make", "delete", "open", "close"],
+      () => {
+        scheduleArchivedGenerationRefresh();
+        scheduleDescriptionInputRefresh();
+      }
     );
   } catch (err: any) {
-    // Manual refresh on panel show and after generation still works if an older
-    // host cannot register notifications.
-    console.log("[Mega Musa] could not watch layer selection:", err?.message || err);
+    // Manual refresh on panel show, reference changes and after generation still
+    // works if an older host cannot register notifications.
+    console.log("[Mega Musa] could not watch Photoshop input:", err?.message || err);
   }
   scheduleArchivedGenerationRefresh();
+  scheduleDescriptionInputRefresh();
 }
 
 async function onCopyArchivedPrompt(): Promise<void> {
@@ -821,6 +900,8 @@ async function onLoadArchivedSettings(): Promise<void> {
   }
   setCheckedSafe($("includeSelection"), archive.includeSelection);
   saveSetting("includeSelection", archive.includeSelection ? "1" : "0");
+  updateDescriptionControls();
+  scheduleDescriptionInputRefresh();
 
   const messages: string[] = [];
   if (hasOption($("model"), archive.model)) {
@@ -928,6 +1009,7 @@ function renderThumbs(): void {
   });
   $("refCount").textContent = `${refs.length}/${MAX_REFS}`;
   syncDropCapacity();
+  updateDescriptionControls();
 }
 
 async function onAddRefs(): Promise<void> {
@@ -1441,34 +1523,37 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
   const descriptionRefs = refs.slice();
 
   if (includeSelection) {
-    setStatus("Reading Photoshop input for description…");
-    const doc = getActiveDoc();
-    const documentBounds: Bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
-    const activeArtboard = await getActiveArtboard(doc);
-    const targetBounds = activeArtboard?.bounds || documentBounds;
-    const rawSelection = await getSelectionBounds();
+    let rawSelection: Bounds | null = null;
+    try {
+      rawSelection = await getSelectionBounds();
+    } catch {
+      /* References can still be described without an open Photoshop document. */
+    }
     const hasSelection =
       !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
-    const region = hasSelection ? intersectBounds(rawSelection as Bounds, targetBounds) : targetBounds;
-    if (!region) {
-      throw new Error(
-        activeArtboard
-          ? `The selection does not overlap the active artboard “${activeArtboard.name}”.`
-          : "The selection does not overlap the Photoshop document."
-      );
-    }
+    if (hasSelection) {
+      setStatus("Reading Photoshop selection for description…");
+      const doc = getActiveDoc();
+      const documentBounds: Bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
+      const activeArtboard = await getActiveArtboard(doc);
+      const targetBounds = activeArtboard?.bounds || documentBounds;
+      const region = intersectBounds(rawSelection as Bounds, targetBounds);
+      if (!region) {
+        throw new Error(
+          activeArtboard
+            ? `The selection does not overlap the active artboard “${activeArtboard.name}”.`
+            : "The selection does not overlap the Photoshop document."
+        );
+      }
 
-    const read = await readRegion(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
-    const png = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
-    inputs.push({
-      source: hasSelection
-        ? "Photoshop selection"
-        : activeArtboard
-          ? `Photoshop artboard “${activeArtboard.name}”`
-          : "Photoshop document",
-      image: { mimeType: "image/png", base64: bytesToBase64(png) },
-    });
-    console.log("[Mega Musa] description", read.debug);
+      const read = await readRegion(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
+      const png = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
+      inputs.push({
+        source: "Photoshop selection",
+        image: { mimeType: "image/png", base64: bytesToBase64(png) },
+      });
+      console.log("[Mega Musa] description", read.debug);
+    }
   }
 
   for (let index = 0; index < descriptionRefs.length; index += 1) {
@@ -1497,6 +1582,10 @@ function descriptionUsageText(totalTokens?: number, reasoningTokens?: number): s
 
 async function onDescribe(): Promise<void> {
   if (running || describing) return;
+  if (!(refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection))) {
+    setStatus("Add a reference image or draw and include a Photoshop selection.", "error");
+    return;
+  }
   const model = selectedDescriptionModel();
   if (!model) {
     setStatus("Choose a description model.", "error");
@@ -1514,7 +1603,7 @@ async function onDescribe(): Promise<void> {
   try {
     const inputs = await prepareDescriptionInputs();
     if (!inputs.length) {
-      throw new Error("Add a reference image or enable Include Photoshop selection.");
+      throw new Error("Add a reference image or draw and include a Photoshop selection.");
     }
 
     setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
@@ -2266,9 +2355,11 @@ function persistSettingsHooks(): void {
     const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);
     if (note) setStatus(note);
   });
-  $("includeSelection")?.addEventListener("change", () =>
-    saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0")
-  );
+  $("includeSelection")?.addEventListener("change", () => {
+    saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0");
+    updateDescriptionControls();
+    scheduleDescriptionInputRefresh();
+  });
   $("describeModel")?.addEventListener("change", () =>
     saveSetting("describeModel", $("describeModel").value || DEFAULT_OPENAI_DESCRIPTION_MODEL)
   );
@@ -2278,8 +2369,16 @@ async function init(): Promise<void> {
   try {
     // Register the panel entrypoint declared in manifest.json.
     entrypoints.setup({
-      panels: { nbpEditorPanel: { show() { scheduleArchivedGenerationRefresh(); } } },
+      panels: {
+        nbpEditorPanel: {
+          show() {
+            scheduleArchivedGenerationRefresh();
+            scheduleDescriptionInputRefresh();
+          },
+        },
+      },
     });
+    setupCollapsibleSections();
 
     $("saveGeminiKey").addEventListener("click", async () => {
       const apiKey = ($("geminiApiKey").value || "").trim();
