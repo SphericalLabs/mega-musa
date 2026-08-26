@@ -42,17 +42,55 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
               overflow-y: auto; padding: 8px 10px 14px; }
     /* Section headers sit one step brighter than body text, the way Photoshop's
        own panel headings do. A neutral row avoids UXP's pill-shaped HTML button
-       treatment; the icon is Photoshop's built-in Spectrum chevron. */
+       treatment; the disclosure arrow is a text glyph, for the reason set out
+       above .section-chevron. */
     h3 { margin: 9px 0 2px; font-size: 12px; font-weight: 700; color: rgb(255, 255, 255); }
+    /* The line-height is stated rather than left at `normal` so the row has an
+       integer content height. A fractional one (12px bold works out near
+       14.4px) leaves the shorter chevron box centred on a fractional offset,
+       and that offset snaps to a different device pixel depending on where the
+       row happens to start — the API Keys header is the one section not
+       preceded by an sp-divider, so its arrow landed a pixel off the rest. */
     .section-toggle { box-sizing: border-box; display: flex; align-items: center;
                       width: 100%; margin: 0; padding: 7px 2px 3px;
-                      color: rgb(255, 255, 255); font-size: 12px;
+                      color: rgb(255, 255, 255); font-size: 12px; line-height: 16px;
                       font-weight: 700; text-align: left; cursor: pointer; }
     .section-toggle:focus { outline: 1px solid rgba(128,128,128,0.75); }
-    .section-chevron { flex: 0 0 auto; margin: 0 7px 0 0; color: inherit; }
+    /* The disclosure arrows are text, not icons and not drawn shapes, because
+       the other two routes are both closed in UXP:
+         - Photoshop's built-in ui:Chevron*Medium glyphs cannot be matched to
+           each other. The right-pointing one renders larger and heavier than
+           the down-pointing one, and an author width/height on the sp-icon
+           host does not reach the icon's inner svg, so nothing equalises them.
+         - CSS cannot draw a diagonal here at all. UXP paints each border side
+           as a plain rectangle with no mitering, so the border-triangle trick
+           yields two bars rather than two triangles; and the thin
+           rotated-square chevron needs `transform: rotate()`, which UXP gates
+           behind the CSSNextSupport manifest flag this plugin does not set.
+       U+25BE and U+25B8 are a matched pair from one typeface, so one font-size
+       governs both and they cannot drift apart the way the sprite pair did.
+       They are the small triangles rather than U+25BC/U+25B6 on purpose: the
+       larger pair carries an emoji presentation that some runtimes honour,
+       which would paint them in colour instead of the heading's.
+       The font-size looks oversized next to the row's 12px and is not: these
+       glyphs ink at roughly half their em box, so 22px draws an arrow of about
+       10px. It is the one knob for their size — the box only centres them.
+       That box matches the row's line-height, so both flex items are the same
+       integer height and neither is centred on a fractional offset.
+       The box keeps the heading text from shifting as the row toggles,
+       and the weight is dropped back to normal so the row's bold does not
+       synthesise a heavier arrow. Colour is restated rather than inherited
+       through `currentColor`, whose UXP support is unproven; the light themes
+       flip it at the bottom, beside the .section-toggle rule it tracks. */
+    .section-chevron { flex: 0 0 auto; display: flex;
+                       align-items: center; justify-content: center;
+                       position: relative; top: -1px;
+                       width: 14px; height: 16px; margin: 0 7px 0 0;
+                       font-size: 22px; font-weight: 400; line-height: 1;
+                       color: rgb(255, 255, 255); }
     .section-chevron-collapsed { display: none; }
     .section-toggle[aria-expanded="false"] .section-chevron-expanded { display: none; }
-    .section-toggle[aria-expanded="false"] .section-chevron-collapsed { display: block; }
+    .section-toggle[aria-expanded="false"] .section-chevron-collapsed { display: flex; }
     .collapsible-section.collapsed .section-content { display: none; }
     .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
@@ -188,6 +226,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       body { color: rgb(30, 30, 30); }
       h3 { color: rgb(0, 0, 0); }
       .section-toggle { color: rgb(0, 0, 0); }
+      .section-chevron { color: rgb(0, 0, 0); }
       .notice-dialog .dialog-copy { color: rgb(30, 30, 30); }
       .notice-dialog .dialog-copy strong { color: rgb(0, 0, 0); }
       .label { color: rgb(61, 61, 61); }
@@ -204,8 +243,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
   <div id="scroll">
     <div id="apiKeysSection" class="collapsible-section">
       <div id="apiKeysSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="apiKeysSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>API Keys</span>
       </div>
       <div id="apiKeysSectionContent" class="section-content" role="region" aria-labelledby="apiKeysSectionToggle">
@@ -231,8 +270,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="modelSelectionSection" class="collapsible-section">
       <div id="modelSelectionSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="modelSelectionSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Model Selection</span>
       </div>
       <div id="modelSelectionSectionContent" class="section-content" role="region" aria-labelledby="modelSelectionSectionToggle">
@@ -270,8 +309,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="promptSection" class="collapsible-section">
       <div id="promptSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="promptSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Prompt</span>
       </div>
       <div id="promptSectionContent" class="section-content" role="region" aria-labelledby="promptSectionToggle">
@@ -289,8 +328,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="referenceImagesSection" class="collapsible-section">
       <div id="referenceImagesSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="referenceImagesSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Reference Images</span>
       </div>
       <div id="referenceImagesSectionContent" class="section-content" role="region" aria-labelledby="referenceImagesSectionToggle">
@@ -317,8 +356,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="describeWithSection" class="collapsible-section">
       <div id="describeWithSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="describeWithSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Describe Images</span>
       </div>
       <div id="describeWithSectionContent" class="section-content" role="region" aria-labelledby="describeWithSectionToggle">
@@ -340,8 +379,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="archivePanel" class="collapsible-section">
       <div id="archiveSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="archiveSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Archived Images</span>
       </div>
       <div id="archiveSectionContent" class="section-content" role="region" aria-labelledby="archiveSectionToggle">
@@ -358,8 +397,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div id="aspectRatioSection" class="collapsible-section">
       <div id="aspectRatioSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="aspectRatioSectionContent">
-        <sp-icon class="section-chevron section-chevron-expanded" name="ui:ChevronDownMedium" size="xs" aria-hidden="true"></sp-icon>
-        <sp-icon class="section-chevron section-chevron-collapsed" name="ui:ChevronRightMedium" size="xs" aria-hidden="true"></sp-icon>
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
         <span>Aspect Ratio</span>
       </div>
       <div id="aspectRatioSectionContent" class="section-content" role="region" aria-labelledby="aspectRatioSectionToggle">
