@@ -17,12 +17,12 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { applyAlphaMask, resampleGray } from "./image-codec";
+import { applyAlphaMask, coverResampleRGBA, resampleGray } from "./image-codec";
 import { GenerationArchive, writeLayerGenerationArchive } from "./archive";
 import { archiveReferenceAssetsInActiveDocument } from "./reference-assets";
 import { RefImage } from "./references";
 
-const { app, action, core, imaging } = require("photoshop");
+const { app, action, constants, core, imaging } = require("photoshop");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 
 export interface Bounds {
@@ -397,6 +397,7 @@ export type PlacementClip = "none" | "mask" | "alpha";
 export interface PlacementResult {
   clip: PlacementClip;
   layerId: number;
+  smartObject: boolean;
   archiveSaved: boolean;
   referenceArchiveFailures: number;
 }
@@ -444,9 +445,444 @@ async function liveSelectionMatches(docId: number, snapshot: SelectionSnapshot):
   }
 }
 
-// Modal step 2: create a new layer and write the result once. An unchanged live
-// selection becomes an editable layer mask; otherwise the captured coverage is
-// baked into alpha without modifying Photoshop's current selection.
+function preciseBoundsFrom(value: any): Bounds | null {
+  if (!value) return null;
+  const bounds = {
+    left: boundVal(value.left),
+    top: boundVal(value.top),
+    right: boundVal(value.right),
+    bottom: boundVal(value.bottom),
+  };
+  return bounds.right - bounds.left > 0 && bounds.bottom - bounds.top > 0 ? bounds : null;
+}
+
+async function selectLayerById(layerId: number): Promise<void> {
+  await action.batchPlay(
+    [
+      {
+        _obj: "select",
+        _target: [{ _ref: "layer", _id: layerId }],
+        makeVisible: false,
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    {}
+  );
+}
+
+async function renameActiveLayer(name: string): Promise<void> {
+  await action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+        to: { _obj: "layer", name },
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    {}
+  );
+}
+
+// A result belongs at the top of its current group, artboard or document. Avoid
+// Photoshop's noisy unavailable-command alert when it is already there.
+async function bringResultToFront(layer: any): Promise<void> {
+  const layerId = layer.id;
+  if (isFrontOfContainer(layer, layerId)) return;
+  try {
+    await selectLayerById(layerId);
+    await action.batchPlay(
+      [
+        {
+          _obj: "move",
+          _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+          to: { _ref: "layer", _enum: "ordinal", _value: "front" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      {}
+    );
+  } catch (e: any) {
+    // Stack position is secondary to preserving an already returned paid image.
+    console.log("[Mega Musa] could not bring the result layer to the front:", e?.message || e);
+  }
+}
+
+async function makeSelectionMask(): Promise<void> {
+  await action.batchPlay(
+    [
+      {
+        _obj: "make",
+        new: { _class: "channel" },
+        at: { _ref: "channel", _enum: "channel", _value: "mask" },
+        using: { _enum: "userMaskEnabled", _value: "revealSelection" },
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    {}
+  );
+  // Photoshop creates layer masks linked by default. Keeping that default makes
+  // later Move/Free Transform operations scale the result and mask as one unit.
+}
+
+async function restoreSelectionFromMask(): Promise<void> {
+  try {
+    await action.batchPlay(
+      [
+        {
+          _obj: "set",
+          _target: [{ _ref: "channel", _property: "selection" }],
+          to: { _ref: "channel", _enum: "channel", _value: "mask" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      {}
+    );
+  } catch (e: any) {
+    // The result and its mask are already safe; only the marching ants are lost.
+    console.log("[Mega Musa] could not restore the selection after masking:", e?.message || e);
+  }
+}
+
+async function deleteResultLayer(layerId: number): Promise<void> {
+  await action.batchPlay(
+    [
+      {
+        _obj: "delete",
+        _target: [{ _ref: "layer", _id: layerId }],
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    {}
+  );
+}
+
+function isLayerContainer(value: any): boolean {
+  try {
+    return !!value && value.layers != null && String(value.typename || "").toLowerCase() !== "document";
+  } catch {
+    return false;
+  }
+}
+
+function descendantLayers(owner: any): any[] {
+  let direct: any[];
+  try {
+    direct = Array.from(owner?.layers || []);
+  } catch {
+    return [];
+  }
+
+  const result: any[] = [];
+  for (const layer of direct) {
+    result.push(layer);
+    if (isLayerContainer(layer)) result.push(...descendantLayers(layer));
+  }
+  return result;
+}
+
+function newDocumentLayers(document: any, existingLayerIds: Set<number>): any[] {
+  return descendantLayers(document).filter((layer) => {
+    const id = Number(layer?.id);
+    return Number.isFinite(id) && !existingLayerIds.has(id);
+  });
+}
+
+let smartObjectMarkerSequence = 0;
+
+function nextSmartObjectMarker(): string {
+  smartObjectMarkerSequence += 1;
+  return `__mega_musa_result_${Date.now()}_${smartObjectMarkerSequence}`;
+}
+
+// Build the Smart Object from an explicit 8-bit sRGB document instead of a
+// temporary PNG. That retains every returned source pixel, avoids missing-profile
+// interpretation during Place Embedded and leaves no source file to manage.
+async function createNativeSmartObject(
+  targetDocument: any,
+  anchorLayer: any,
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  layerName: string
+): Promise<any> {
+  const destinationParent = anchorLayer?.parent || null;
+  const existingTargetLayerIds = new Set(
+    descendantLayers(targetDocument).map((layer) => Number(layer.id)).filter(Number.isFinite)
+  );
+  const sourceMarker = nextSmartObjectMarker();
+  let scratch: any | null = null;
+  let placedLayer: any | null = null;
+  try {
+    scratch = await app.createDocument({
+      width,
+      height,
+      resolution: 72,
+      fill: "transparent",
+      name: "mm-result-source",
+      profile: SRGB_PROFILE,
+    });
+    if (!scratch) throw new Error("Photoshop could not create the Smart Object source document.");
+
+    const sourceLayer = scratch.layers?.[0];
+    if (!sourceLayer) throw new Error("The Smart Object source document has no pixel layer.");
+    const imageData = await imaging.createImageDataFromBuffer(rgba, {
+      width,
+      height,
+      components: 4,
+      componentSize: 8,
+      colorSpace: "RGB",
+      colorProfile: SRGB_PROFILE,
+      chunky: true,
+    });
+    try {
+      await imaging.putPixels({
+        documentID: scratch.id,
+        layerID: sourceLayer.id,
+        targetBounds: { left: 0, top: 0, right: width, bottom: height },
+        imageData,
+      });
+    } finally {
+      imageData.dispose();
+    }
+
+    await selectLayerById(sourceLayer.id);
+    await action.batchPlay(
+      [{ _obj: "newPlacedLayer", _options: { dialogOptions: "dontDisplay" } }],
+      {}
+    );
+    const embeddedSource = scratch.activeLayers?.[0];
+    if (!embeddedSource) throw new Error("Photoshop did not create the embedded Smart Object.");
+    await renameActiveLayer(sourceMarker);
+
+    await scratch.duplicateLayers([embeddedSource], targetDocument);
+
+    app.activeDocument = targetDocument;
+    const createdLayers = newDocumentLayers(targetDocument, existingTargetLayerIds);
+    placedLayer = createdLayers.find((layer) => layer.name === sourceMarker) || null;
+    if (!placedLayer && createdLayers.length === 1) placedLayer = createdLayers[0];
+    if (!placedLayer) {
+      throw new Error("Photoshop copied the Smart Object but did not expose its destination layer.");
+    }
+
+    if (isLayerContainer(destinationParent)) {
+      placedLayer.move(destinationParent, constants.ElementPlacement.PLACEINSIDE);
+    }
+    await selectLayerById(placedLayer.id);
+    await renameActiveLayer(layerName);
+    return placedLayer;
+  } catch (error) {
+    if (openDocumentById(targetDocument.id)) {
+      app.activeDocument = targetDocument;
+      const incompleteLayers = newDocumentLayers(targetDocument, existingTargetLayerIds);
+      if (
+        placedLayer &&
+        !incompleteLayers.some((layer) => Number(layer.id) === Number(placedLayer.id)) &&
+        !existingTargetLayerIds.has(Number(placedLayer.id))
+      ) {
+        incompleteLayers.push(placedLayer);
+      }
+      for (const incompleteLayer of incompleteLayers) {
+        try {
+          await deleteResultLayer(incompleteLayer.id);
+        } catch (cleanupError: any) {
+          console.log(
+            "[Mega Musa] could not remove an incomplete Smart Object:",
+            cleanupError?.message || cleanupError
+          );
+          try {
+            incompleteLayer.visible = false;
+          } catch {
+            /* the visible raster fallback remains the best available recovery */
+          }
+        }
+      }
+    }
+    throw error;
+  } finally {
+    if (scratch && openDocumentById(scratch.id)) {
+      try {
+        await scratch.closeWithoutSaving();
+      } catch {
+        /* only the plugin-created scratch document is eligible for closing */
+      }
+    }
+    if (openDocumentById(targetDocument.id)) app.activeDocument = targetDocument;
+  }
+}
+
+async function smartObjectBounds(layer: any): Promise<Bounds | null> {
+  // smartObjectMore.transform describes the four transformed source corners and
+  // remains accurate when the source has transparent pixels at an outside edge.
+  try {
+    const result = await action.batchPlay(
+      [
+        {
+          _obj: "get",
+          _target: [{ _ref: "layer", _id: layer.id }],
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      {}
+    );
+    const transform = result?.[0]?.smartObjectMore?.transform;
+    if (Array.isArray(transform) && transform.length >= 8) {
+      const xs = [
+        boundVal(transform[0]),
+        boundVal(transform[2]),
+        boundVal(transform[4]),
+        boundVal(transform[6]),
+      ];
+      const ys = [
+        boundVal(transform[1]),
+        boundVal(transform[3]),
+        boundVal(transform[5]),
+        boundVal(transform[7]),
+      ];
+      if ([...xs, ...ys].every(Number.isFinite)) {
+        const transformed = {
+          left: Math.min(...xs),
+          top: Math.min(...ys),
+          right: Math.max(...xs),
+          bottom: Math.max(...ys),
+        };
+        if (transformed.right > transformed.left && transformed.bottom > transformed.top) return transformed;
+      }
+    }
+  } catch {
+    /* boundsNoEffects is the compatible fallback on older hosts */
+  }
+  return preciseBoundsFrom(layer.boundsNoEffects) || preciseBoundsFrom(layer.bounds);
+}
+
+// Uniformly cover the target without rasterizing. Any excess source area stays
+// inside the Smart Object and can be revealed later by moving or rescaling it.
+async function coverTransformSmartObject(layer: any, target: Bounds): Promise<Bounds> {
+  const initial = await smartObjectBounds(layer);
+  if (!initial) throw new Error("Photoshop did not report the Smart Object bounds.");
+  const initialW = initial.right - initial.left;
+  const initialH = initial.bottom - initial.top;
+  const targetW = target.right - target.left;
+  const targetH = target.bottom - target.top;
+  const scale = Math.max(targetW / initialW, targetH / initialH);
+  if (!Number.isFinite(scale) || scale <= 0) throw new Error("The Smart Object transform is invalid.");
+
+  if (Math.abs(scale - 1) > 0.000001) await layer.scale(scale * 100, scale * 100);
+  const scaled = await smartObjectBounds(layer);
+  if (!scaled) throw new Error("Photoshop did not report the scaled Smart Object bounds.");
+  const dx = (target.left + target.right - scaled.left - scaled.right) / 2;
+  const dy = (target.top + target.bottom - scaled.top - scaled.bottom) / 2;
+  if (Math.abs(dx) > 0.000001 || Math.abs(dy) > 0.000001) await layer.translate(dx, dy);
+
+  const transformed = await smartObjectBounds(layer);
+  if (!transformed) throw new Error("Photoshop did not report the positioned Smart Object bounds.");
+  const tolerance = 0.75;
+  if (
+    transformed.left > target.left + tolerance ||
+    transformed.top > target.top + tolerance ||
+    transformed.right < target.right - tolerance ||
+    transformed.bottom < target.bottom - tolerance
+  ) {
+    throw new Error("The Smart Object transform did not cover the result region.");
+  }
+  return transformed;
+}
+
+function extendsPastTarget(layerBounds: Bounds, target: Bounds): boolean {
+  const tolerance = 0.75;
+  return (
+    layerBounds.left < target.left - tolerance ||
+    layerBounds.top < target.top - tolerance ||
+    layerBounds.right > target.right + tolerance ||
+    layerBounds.bottom > target.bottom + tolerance
+  );
+}
+
+async function placeRasterFallback(
+  docId: number,
+  bounds: Bounds,
+  sourceRgba: Uint8Array,
+  sourceWidth: number,
+  sourceHeight: number,
+  layerName: string,
+  selection: SelectionSnapshot | null,
+  selectionStillMatches: boolean
+): Promise<{ layer: any; clip: PlacementClip }> {
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  let rgba: Uint8Array;
+  if (sourceWidth === width && sourceHeight === height) {
+    rgba = sourceRgba.slice();
+  } else {
+    try {
+      rgba = await scaleViaPhotoshopInModal(sourceRgba, sourceWidth, sourceHeight, width, height);
+    } catch (e: any) {
+      console.log("[Mega Musa] Photoshop raster fallback scaling failed; using JS resample:", e?.message || e);
+      rgba = coverResampleRGBA(sourceRgba, sourceWidth, sourceHeight, width, height);
+    }
+  }
+
+  await action.batchPlay(
+    [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
+    {}
+  );
+  const layer = app.activeDocument.activeLayers[0];
+  await renameActiveLayer(layerName);
+  await bringResultToFront(layer);
+
+  let clip: PlacementClip = "none";
+  let masked = false;
+  if (selection && selectionStillMatches) {
+    try {
+      await makeSelectionMask();
+      masked = true;
+      clip = "mask";
+    } catch (e: any) {
+      console.log("[Mega Musa] could not create the selection mask; using layer alpha:", e?.message || e);
+    }
+  }
+
+  if (selection && !masked) {
+    if (
+      selection.bounds.left !== bounds.left ||
+      selection.bounds.top !== bounds.top ||
+      selection.bounds.right !== bounds.right ||
+      selection.bounds.bottom !== bounds.bottom ||
+      selection.data.length !== width * height
+    ) {
+      throw new Error("The captured selection does not match the result region.");
+    }
+    applyAlphaMask(rgba, selection.data);
+    clip = "alpha";
+  }
+
+  const imageData = await imaging.createImageDataFromBuffer(rgba, {
+    width,
+    height,
+    components: 4,
+    componentSize: 8,
+    colorSpace: "RGB",
+    colorProfile: SRGB_PROFILE,
+    chunky: true,
+  });
+  try {
+    await imaging.putPixels({
+      documentID: docId,
+      layerID: layer.id,
+      targetBounds: bounds,
+      imageData,
+    });
+  } finally {
+    imageData.dispose();
+  }
+  if (masked) await restoreSelectionFromMask();
+  return { layer, clip };
+}
+
+// Modal step 2: preserve the complete native provider image inside an embedded
+// Smart Object, cover-transform it into `bounds` and attach a linked layer mask
+// when the target shape needs clipping. Any Smart Object failure falls back to
+// the previous raster placement so a paid result is never discarded.
 export async function placeResult(
   docId: number,
   bounds: Bounds,
@@ -455,145 +891,82 @@ export async function placeResult(
   height: number,
   layerName: string,
   selection: SelectionSnapshot | null,
+  maskOnlyWhenOverflow: boolean,
   archive: GenerationArchive,
   references: RefImage[]
 ): Promise<PlacementResult> {
   return await core.executeAsModal(
     () => withActiveDocument(docId, async () => {
-      const selectionStillMatches = selection ? await liveSelectionMatches(docId, selection) : false;
-      await action.batchPlay(
-        [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
-        {}
-      );
-      const newLayer = app.activeDocument.activeLayers[0];
-      const layerId = newLayer.id;
-
-      await action.batchPlay(
-        [
-          {
-            _obj: "set",
-            _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
-            to: { _obj: "layer", name: layerName },
-            _options: { dialogOptions: "dontDisplay" },
-          },
-        ],
-        {}
-      );
-
-      // A new layer lands directly above whichever layer was active, so a result
-      // could bury itself mid-stack. Layer > Arrange > Bring to Front lifts it to
-      // the top *of its own container*: a layer made inside an artboard or group
-      // stays there. That matters — getActiveArtboard resolves the target artboard
-      // by walking up from the active layer, and this layer is the active one when
-      // the next Generate runs, so hoisting it out of the artboard would break the
-      // following run in a multi-artboard document.
-      //
-      // Photoshop refuses the command outright when the layer is already at the
-      // top, and raises that as its own plugin alert — "The command “Move” is not
-      // currently available." — which a catch on this side cannot suppress. It is
-      // also the common case, because the layer this one was created above is
-      // usually the topmost one already. So check the stack and only move when
-      // there is somewhere to move to.
-      if (!isFrontOfContainer(newLayer, layerId)) {
-        try {
-          await action.batchPlay(
-            [
-              {
-                _obj: "move",
-                _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
-                to: { _ref: "layer", _enum: "ordinal", _value: "front" },
-                _options: { dialogOptions: "dontDisplay" },
-              },
-            ],
-            {}
-          );
-        } catch (e: any) {
-          // The result is already placed; a stack position is not worth failing on.
-          console.log("[Mega Musa] could not bring the result layer to the front:", e?.message || e);
-        }
-      }
-
+      const document = app.activeDocument;
+      const anchorLayer = document.activeLayers?.[0] || null;
+      const anchorLayerId = anchorLayer?.id;
+      let resultLayer: any;
       let clip: PlacementClip = "none";
-      let masked = false;
-      if (selectionStillMatches) {
-        try {
-          await action.batchPlay(
-            [
-              {
-                _obj: "make",
-                new: { _class: "channel" },
-                at: { _ref: "channel", _enum: "channel", _value: "mask" },
-                using: { _enum: "userMaskEnabled", _value: "revealSelection" },
-                _options: { dialogOptions: "dontDisplay" },
-              },
-            ],
-            {}
-          );
-          masked = true;
-          clip = "mask";
-        } catch (e: any) {
-          console.log("[Mega Musa] could not create the selection mask; using layer alpha:", e?.message || e);
-        }
-      }
+      let smartObject = true;
+      let incompleteSmartObject: any | null = null;
 
-      if (selection && !masked) {
-        if (
-          selection.bounds.left !== bounds.left ||
-          selection.bounds.top !== bounds.top ||
-          selection.bounds.right !== bounds.right ||
-          selection.bounds.bottom !== bounds.bottom ||
-          selection.data.length !== width * height
-        ) {
-          throw new Error("The captured selection does not match the result region.");
-        }
-        applyAlphaMask(rgba, selection.data);
-        clip = "alpha";
-      }
-
-      const imageData = await imaging.createImageDataFromBuffer(rgba, {
-        width,
-        height,
-        components: 4,
-        componentSize: 8,
-        colorSpace: "RGB",
-        colorProfile: SRGB_PROFILE,
-        chunky: true,
-      });
       try {
-        await imaging.putPixels({
-          documentID: docId,
-          layerID: layerId,
-          targetBounds: bounds,
-          imageData,
-        });
-      } finally {
-        imageData.dispose();
+        incompleteSmartObject = await createNativeSmartObject(
+          document,
+          anchorLayer,
+          rgba,
+          width,
+          height,
+          layerName
+        );
+        const transformedBounds = await coverTransformSmartObject(incompleteSmartObject, bounds);
+        await bringResultToFront(incompleteSmartObject);
+
+        const maskRequired =
+          !!selection && (!maskOnlyWhenOverflow || extendsPastTarget(transformedBounds, bounds));
+        if (maskRequired) {
+          if (!(await liveSelectionMatches(docId, selection))) {
+            throw new Error("The selection changed before the linked Smart Object mask could be created.");
+          }
+          await selectLayerById(incompleteSmartObject.id);
+          await makeSelectionMask();
+          clip = "mask";
+          await restoreSelectionFromMask();
+        }
+        resultLayer = incompleteSmartObject;
+      } catch (error: any) {
+        smartObject = false;
+        console.log("[Mega Musa] Smart Object placement failed; using raster fallback:", error?.message || error);
+        if (incompleteSmartObject) {
+          try {
+            await deleteResultLayer(incompleteSmartObject.id);
+          } catch (cleanupError: any) {
+            console.log("[Mega Musa] could not remove the incomplete Smart Object:", cleanupError?.message || cleanupError);
+            try {
+              incompleteSmartObject.visible = false;
+            } catch {
+              /* the raster fallback remains the visible paid result */
+            }
+          }
+        }
+        if (anchorLayerId) await selectLayerById(anchorLayerId);
+        // A raster layer is already exactly `bounds`, so a rectangular overflow
+        // mask is unnecessary. Irregular/feathered original selections still use
+        // the normal editable-mask-or-alpha fallback.
+        const rasterSelection = maskOnlyWhenOverflow ? null : selection;
+        const selectionStillMatches = rasterSelection
+          ? await liveSelectionMatches(docId, rasterSelection)
+          : false;
+        const fallback = await placeRasterFallback(
+          docId,
+          bounds,
+          rgba,
+          width,
+          height,
+          layerName,
+          rasterSelection,
+          selectionStillMatches
+        );
+        resultLayer = fallback.layer;
+        clip = fallback.clip;
       }
 
-      if (masked) {
-        // Adding a mask consumes the selection — Photoshop drops the marching
-        // ants. Load the mask we just made straight back as the selection so it
-        // survives the run: without this the next Generate sees nothing selected,
-        // falls back to the whole image, and the mask appears only every other
-        // time. The mask holds the exact shape, feather included, so this
-        // restores the original selection rather than an approximation of it.
-        try {
-          await action.batchPlay(
-            [
-              {
-                _obj: "set",
-                _target: [{ _ref: "channel", _property: "selection" }],
-                to: { _ref: "channel", _enum: "channel", _value: "mask" },
-                _options: { dialogOptions: "dontDisplay" },
-              },
-            ],
-            {}
-          );
-        } catch (e: any) {
-          // Not fatal — the result is already placed and masked.
-          console.log("[Mega Musa] could not restore the selection after masking:", e?.message || e);
-        }
-      }
+      const layerId = resultLayer.id;
 
       let referenceArchiveFailures = 0;
       try {
@@ -617,7 +990,7 @@ export async function placeResult(
         archiveSaved = false;
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
-      return { clip, layerId, archiveSaved, referenceArchiveFailures };
+      return { clip, layerId, smartObject, archiveSaved, referenceArchiveFailures };
     }),
     { commandName: "Mega Musa: place result" }
   );
@@ -779,6 +1152,109 @@ export async function readClipboardImage(): Promise<PastedImage> {
 // engine, then read the centered destination crop. Proportions stay constrained,
 // so an unexpected provider ratio can never stretch. The scratch doc is always
 // closed without saving. Throws on failure so the caller can use the JS fallback.
+async function scaleViaPhotoshopInModal(
+  rgba: Uint8Array,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number
+): Promise<Uint8Array> {
+  const scratch = await app.createDocument({
+    width: srcW,
+    height: srcH,
+    resolution: 72,
+    fill: "transparent",
+    name: "mm-scale",
+    profile: SRGB_PROFILE,
+  });
+  if (!scratch) throw new Error("Could not create scratch document for scaling.");
+  try {
+    const layerId = scratch.layers[0].id;
+    const srcData = await imaging.createImageDataFromBuffer(rgba, {
+      width: srcW,
+      height: srcH,
+      components: 4,
+      componentSize: 8,
+      colorSpace: "RGB",
+      colorProfile: SRGB_PROFILE,
+      chunky: true,
+    });
+    try {
+      await imaging.putPixels({
+        documentID: scratch.id,
+        layerID: layerId,
+        targetBounds: { left: 0, top: 0, right: srcW, bottom: srcH },
+        imageData: srcData,
+      });
+    } finally {
+      srcData.dispose();
+    }
+
+    const scale = Math.max(dstW / srcW, dstH / srcH);
+    const targetW = Math.max(dstW, Math.ceil(srcW * scale));
+    const targetH = Math.max(dstH, Math.ceil(srcH * scale));
+    if (targetW !== srcW || targetH !== srcH) {
+      const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
+      await action.batchPlay(
+        [
+          {
+            _obj: "imageSize",
+            width: { _unit: "pixelsUnit", _value: targetW },
+            height: { _unit: "pixelsUnit", _value: targetH },
+            constrainProportions: true,
+            interpolation: { _enum: "interpolationType", _value: method },
+            _options: { dialogOptions: "dontDisplay" },
+          },
+        ],
+        {}
+      );
+    }
+
+    const resizedW = Math.round(scratch.width);
+    const resizedH = Math.round(scratch.height);
+    if (resizedW < dstW || resizedH < dstH) {
+      throw new Error("Photoshop's constrained resize did not cover the destination.");
+    }
+    const left = Math.floor((resizedW - dstW) / 2);
+    const top = Math.floor((resizedH - dstH) / 2);
+
+    const { imageData } = await imaging.getPixels({
+      documentID: scratch.id,
+      sourceBounds: { left, top, right: left + dstW, bottom: top + dstH },
+      colorSpace: "RGB",
+      colorProfile: SRGB_PROFILE,
+      componentSize: 8,
+      applyAlpha: false,
+    });
+    const outputW = imageData.width;
+    const outputH = imageData.height;
+    const raw = await imageData.getData({ chunky: true });
+    const comps = imageData.components || 4;
+    imageData.dispose();
+    if (outputW !== dstW || outputH !== dstH) {
+      throw new Error("Photoshop returned the wrong cover-fit dimensions.");
+    }
+
+    if (comps === 4) return new Uint8Array(raw);
+    // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
+    const px = dstW * dstH;
+    const rgbaOut = new Uint8Array(px * 4);
+    for (let i = 0; i < px; i++) {
+      rgbaOut[i * 4] = raw[i * comps];
+      rgbaOut[i * 4 + 1] = raw[i * comps + 1];
+      rgbaOut[i * 4 + 2] = raw[i * comps + 2];
+      rgbaOut[i * 4 + 3] = 255;
+    }
+    return rgbaOut;
+  } finally {
+    try {
+      await scratch.closeWithoutSaving();
+    } catch {
+      /* ignore close failures */
+    }
+  }
+}
+
 export async function scaleViaPhotoshop(
   rgba: Uint8Array,
   srcW: number,
@@ -790,99 +1266,7 @@ export async function scaleViaPhotoshop(
   // they belong inside modal scope alongside the pixel work — outside it,
   // createDocument is rejected with "make may modify the state of Photoshop".
   return await core.executeAsModal(
-    async () => {
-      const scratch = await app.createDocument({
-        width: srcW,
-        height: srcH,
-        resolution: 72,
-        fill: "transparent",
-        name: "mm-scale",
-        profile: SRGB_PROFILE,
-      });
-      if (!scratch) throw new Error("Could not create scratch document for scaling.");
-      try {
-        const layerId = scratch.layers[0].id;
-        const srcData = await imaging.createImageDataFromBuffer(rgba, {
-          width: srcW,
-          height: srcH,
-          components: 4,
-          componentSize: 8,
-          colorSpace: "RGB",
-          colorProfile: SRGB_PROFILE,
-          chunky: true,
-        });
-        await imaging.putPixels({
-          documentID: scratch.id,
-          layerID: layerId,
-          targetBounds: { left: 0, top: 0, right: srcW, bottom: srcH },
-          imageData: srcData,
-        });
-        srcData.dispose();
-
-        const scale = Math.max(dstW / srcW, dstH / srcH);
-        const targetW = Math.max(dstW, Math.ceil(srcW * scale));
-        const targetH = Math.max(dstH, Math.ceil(srcH * scale));
-        if (targetW !== srcW || targetH !== srcH) {
-          const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
-          await action.batchPlay(
-            [
-              {
-                _obj: "imageSize",
-                width: { _unit: "pixelsUnit", _value: targetW },
-                height: { _unit: "pixelsUnit", _value: targetH },
-                constrainProportions: true,
-                interpolation: { _enum: "interpolationType", _value: method },
-                _options: { dialogOptions: "dontDisplay" },
-              },
-            ],
-            {}
-          );
-        }
-
-        const resizedW = Math.round(scratch.width);
-        const resizedH = Math.round(scratch.height);
-        if (resizedW < dstW || resizedH < dstH) {
-          throw new Error("Photoshop's constrained resize did not cover the destination.");
-        }
-        const left = Math.floor((resizedW - dstW) / 2);
-        const top = Math.floor((resizedH - dstH) / 2);
-
-        const { imageData } = await imaging.getPixels({
-          documentID: scratch.id,
-          sourceBounds: { left, top, right: left + dstW, bottom: top + dstH },
-          colorSpace: "RGB",
-          colorProfile: SRGB_PROFILE,
-          componentSize: 8,
-          applyAlpha: false,
-        });
-        const outputW = imageData.width;
-        const outputH = imageData.height;
-        const raw = await imageData.getData({ chunky: true });
-        const comps = imageData.components || 4;
-        imageData.dispose();
-        if (outputW !== dstW || outputH !== dstH) {
-          throw new Error("Photoshop returned the wrong cover-fit dimensions.");
-        }
-
-        if (comps === 4) return new Uint8Array(raw);
-        // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
-        const px = dstW * dstH;
-        const rgbaOut = new Uint8Array(px * 4);
-        for (let i = 0; i < px; i++) {
-          rgbaOut[i * 4] = raw[i * comps];
-          rgbaOut[i * 4 + 1] = raw[i * comps + 1];
-          rgbaOut[i * 4 + 2] = raw[i * comps + 2];
-          rgbaOut[i * 4 + 3] = 255;
-        }
-        return rgbaOut;
-      } finally {
-        try {
-          await scratch.closeWithoutSaving();
-        } catch {
-          /* ignore close failures */
-        }
-      }
-    },
+    () => scaleViaPhotoshopInModal(rgba, srcW, srcH, dstW, dstH),
     { commandName: "Mega Musa: scale result" }
   );
 }

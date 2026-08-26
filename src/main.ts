@@ -27,13 +27,12 @@ import {
   fitRegionToRatio,
   readRegion,
   placeResult,
-  scaleViaPhotoshop,
   setRectSelection,
   readClipboardImage,
   Bounds,
   SelectionSnapshot,
 } from "./photoshop-bridge";
-import { encodePng, bytesToBase64, decodeImage, toRGBA, coverResampleRGBA } from "./image-codec";
+import { encodePng, bytesToBase64, decodeImage, toRGBA } from "./image-codec";
 import {
   generateEdit,
   IMAGE_QUALITY_OPTIONS,
@@ -639,7 +638,7 @@ function documentBlocker(state: DocumentState): DocumentBlocker | null {
   if (["Bitmap", "Indexed Color", "Duotone", "Multichannel"].includes(state.mode)) {
     return {
       title: `${state.mode} documents are not supported`,
-      message: `Mega Musa cannot safely place a generated RGB pixel layer in a ${state.mode} document.`,
+      message: `Mega Musa cannot safely place a generated RGB result in a ${state.mode} document.`,
       instruction: unsupportedModeInstruction(state.mode),
     };
   }
@@ -1765,7 +1764,7 @@ async function onGenerate(): Promise<void> {
     const cropH = region.bottom - region.top;
 
     if (isRegion) setStatus("Capturing selection…");
-    const selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
+    let selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
     const coversEntireTarget = placementCoversEntireTarget(region, targetBounds, selectionSnapshot);
     if (!(await confirmDocumentWarnings(documentState, coversEntireTarget))) {
       setStatus("Cancelled before anything was sent — nothing was charged.");
@@ -1820,6 +1819,10 @@ async function onGenerate(): Promise<void> {
       // user's selection, and before anything has been sent.
       throwIfCancelled();
       await setRectSelection(region);
+      // Keep the fitted rectangle as an overflow mask source. It is used only
+      // when an unexpected provider ratio makes the native Smart Object extend
+      // outside this region; normal full-frame results need no extra mask.
+      selectionSnapshot = await captureSelection(docId, region);
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
       const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
@@ -1939,27 +1942,16 @@ async function onGenerate(): Promise<void> {
     if (returnedRatioDiffers) {
       notes.push(
         exactOutputSize
-          ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It was center-cropped to fit without stretching.`
-          : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It was center-cropped to fit without stretching.`
+          ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It is cover-fitted without stretching.`
+          : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It is cover-fitted without stretching.`
       );
     } else if (returnedSizeDiffers) {
-      notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It was scaled to fit without stretching.`);
+      notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It is transformed to fit without stretching.`);
     }
     if (returnedRatioDiffers || returnedSizeDiffers) {
       setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
     }
-    let rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
-    // Cover-fit the result to the crop box without changing its proportions.
-    // Photoshop handles the normal high-quality path; JS remains the fallback.
-    if (decoded.width !== cropW || decoded.height !== cropH) {
-      setStatus("Scaling result…");
-      try {
-        rgba = await scaleViaPhotoshop(rgba, decoded.width, decoded.height, cropW, cropH);
-      } catch (e: any) {
-        console.log("[Mega Musa] Photoshop scale failed, using JS resample:", e?.message || e);
-        rgba = coverResampleRGBA(rgba, decoded.width, decoded.height, cropW, cropH);
-      }
-    }
+    const rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
 
     setStatus("Placing result…");
     // What produced this layer, for the bracketed tail of its name. The OpenAI
@@ -1991,23 +1983,40 @@ async function onGenerate(): Promise<void> {
       docId,
       region,
       rgba,
-      cropW,
-      cropH,
+      decoded.width,
+      decoded.height,
       resultLayerName(prompt, layerDetails),
       selectionSnapshot,
+      !isRegion,
       archive,
       generationRefs
     );
     scheduleArchivedGenerationRefresh();
 
+    if (placement.smartObject) {
+      notes.push(
+        `The complete native ${returnedSize} result is embedded for nondestructive scaling${returnedRatioDiffers ? "; unlink its mask to reframe inside the fixed target" : ""}.`
+      );
+      setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+    }
+
     const doneMessage = isRegion
       ? placement.clip === "alpha"
-        ? "Done — result clipped to the selection captured at the start (new layer with baked transparency)."
-        : "Done — result clipped to your selection (new layer with editable mask)."
+        ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
+        : placement.smartObject
+          ? "Done — native result embedded as a Smart Object with an editable linked mask."
+          : "Done — raster fallback clipped to your selection with an editable mask."
       : activeArtboard
-        ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
-        : "Done — full-image result added as a new layer.";
+        ? placement.smartObject
+          ? `Done — native result embedded in active artboard “${activeArtboard.name}” as a Smart Object.`
+          : `Done — result added to active artboard “${activeArtboard.name}” as a raster layer.`
+        : placement.smartObject
+          ? "Done — native full-image result embedded as a Smart Object."
+          : "Done — full-image result added as a raster layer.";
     const archiveMessages: string[] = [];
+    if (!placement.smartObject) {
+      archiveMessages.push("Smart Object placement failed; the paid result was preserved as a raster layer.");
+    }
     if (!placement.archiveSaved) archiveMessages.push("Prompt archive could not be saved; see the console.");
     if (placement.referenceArchiveFailures) {
       archiveMessages.push(
