@@ -42,6 +42,14 @@ import {
   ImageQuality,
 } from "./gemini";
 import { generateOpenAIImage, OPENAI_MODEL_PREFIX } from "./openai";
+import {
+  describeImages,
+  descriptionModelSpec,
+  DESCRIPTION_MODELS,
+  DEFAULT_GEMINI_DESCRIPTION_MODEL,
+  DEFAULT_OPENAI_DESCRIPTION_MODEL,
+  DescriptionModelSpec,
+} from "./describe";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
 import {
   MODELS,
@@ -78,6 +86,7 @@ const RETURNED_RATIO_TOLERANCE = 0.02;
 const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
+const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
@@ -89,6 +98,8 @@ const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
 const acceptedDocumentWarnings = new Set<string>();
 let documentWarningGenerateAnyway = false;
 let running = false;
+let describing = false;
+let promptBeforeDescription: string | null = null;
 // Set by the Cancel button. The run itself decides what that costs: stopping
 // before the request goes out is free, stopping after it has reached the
 // provider is not (see onGenerate's catch).
@@ -200,6 +211,28 @@ function setGenerateButton(mode: GenerateButtonMode): void {
        where a throw would mask the run's own outcome — so never throw. */
   }
   el.disabled = mode === "cancelling" || mode === "finishing";
+  updateDescriptionControls();
+}
+
+function updateDescriptionControls(): void {
+  const busy = running || describing;
+  const describeButton = $("describe");
+  if (describeButton) describeButton.disabled = busy;
+  const describeModel = $("describeModel");
+  if (describeModel) describeModel.disabled = busy;
+  const undo = $("undoDescription");
+  if (undo) undo.disabled = busy || promptBeforeDescription === null;
+}
+
+function setDescriptionBusy(on: boolean): void {
+  describing = on;
+  const describeButton = $("describe");
+  if (describeButton) describeButton.textContent = on ? "Describing…" : "Describe";
+  const prompt = $("prompt");
+  if (prompt) prompt.disabled = on;
+  const generate = $("generate");
+  if (generate) generate.disabled = on;
+  updateDescriptionControls();
 }
 
 let statusKind: "info" | "error" | "ok" = "info";
@@ -1220,6 +1253,145 @@ async function onPasteRef(): Promise<void> {
   }
 }
 
+interface PreparedDescriptionInput {
+  source: string;
+  image: RequestReference;
+}
+
+function selectedDescriptionModel(): DescriptionModelSpec | null {
+  return descriptionModelSpec($("describeModel")?.value || "");
+}
+
+function descriptionApiKey(model: DescriptionModelSpec): string {
+  return String(model.provider === "openai" ? $("openaiApiKey")?.value || "" : $("geminiApiKey")?.value || "").trim();
+}
+
+async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
+  const inputs: PreparedDescriptionInput[] = [];
+  const includeSelection = isChecked($("includeSelection"));
+  const descriptionRefs = refs.slice();
+
+  if (includeSelection) {
+    setStatus("Reading Photoshop input for description…");
+    const doc = getActiveDoc();
+    const documentBounds: Bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
+    const activeArtboard = await getActiveArtboard(doc);
+    const targetBounds = activeArtboard?.bounds || documentBounds;
+    const rawSelection = await getSelectionBounds();
+    const hasSelection =
+      !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
+    const region = hasSelection ? intersectBounds(rawSelection as Bounds, targetBounds) : targetBounds;
+    if (!region) {
+      throw new Error(
+        activeArtboard
+          ? `The selection does not overlap the active artboard “${activeArtboard.name}”.`
+          : "The selection does not overlap the Photoshop document."
+      );
+    }
+
+    const read = await readRegion(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
+    const png = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
+    inputs.push({
+      source: hasSelection
+        ? "Photoshop selection"
+        : activeArtboard
+          ? `Photoshop artboard “${activeArtboard.name}”`
+          : "Photoshop document",
+      image: { mimeType: "image/png", base64: bytesToBase64(png) },
+    });
+    console.log("[Mega Musa] description", read.debug);
+  }
+
+  for (let index = 0; index < descriptionRefs.length; index += 1) {
+    const reference = descriptionRefs[index];
+    setStatus(`Preparing reference image ${index + 1}/${descriptionRefs.length} for description…`);
+    inputs.push({
+      source: `Reference ${index + 1}: ${reference.name}`,
+      image: await resizeReference(reference, DESCRIPTION_INPUT_MAX_EDGE),
+    });
+  }
+  return inputs;
+}
+
+function formatDescriptions(inputs: PreparedDescriptionInput[], descriptions: string[]): string {
+  if (descriptions.length === 1) return descriptions[0].trim();
+  return descriptions
+    .map((description, index) => `Image ${index + 1} — ${inputs[index].source}\n${description.trim()}`)
+    .join("\n\n");
+}
+
+function descriptionUsageText(totalTokens?: number, reasoningTokens?: number): string {
+  if (totalTokens === undefined) return "";
+  const reasoning = reasoningTokens ? `, including ${Math.round(reasoningTokens)} reasoning tokens` : "";
+  return ` (${Math.round(totalTokens)} tokens${reasoning})`;
+}
+
+async function onDescribe(): Promise<void> {
+  if (running || describing) return;
+  const model = selectedDescriptionModel();
+  if (!model) {
+    setStatus("Choose a description model.", "error");
+    return;
+  }
+  const apiKey = descriptionApiKey(model);
+  if (!apiKey) {
+    setStatus(`Enter your ${model.provider === "openai" ? "OpenAI" : "Gemini"} API key and press Save.`, "error");
+    return;
+  }
+
+  setDescriptionBusy(true);
+  setBusy(true);
+  setStatus("Preparing inputs for description…");
+  try {
+    const inputs = await prepareDescriptionInputs();
+    if (!inputs.length) {
+      throw new Error("Add a reference image or enable Include Photoshop selection.");
+    }
+
+    setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
+    const result = await describeImages({
+      apiKey,
+      model,
+      images: inputs.map((input) => input.image),
+    });
+    const prompt = $("prompt");
+    promptBeforeDescription = String(prompt?.value || "");
+    setValueSafe(prompt, formatDescriptions(inputs, result.descriptions));
+    try {
+      prompt?.dispatchEvent(new Event("input"));
+    } catch {
+      /* Prompt resizing is cosmetic. */
+    }
+    updateDescriptionControls();
+    setStatus(
+      `Prompt filled from ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}${descriptionUsageText(
+        result.usage?.totalTokens,
+        result.usage?.reasoningTokens
+      )}.`,
+      "ok"
+    );
+  } catch (error: any) {
+    setStatus("Description error: " + (error?.message || String(error)), "error");
+  } finally {
+    setDescriptionBusy(false);
+    setBusy(false);
+  }
+}
+
+function onUndoDescription(): void {
+  if (promptBeforeDescription === null || running || describing) return;
+  const prompt = $("prompt");
+  setValueSafe(prompt, promptBeforeDescription);
+  promptBeforeDescription = null;
+  try {
+    prompt?.dispatchEvent(new Event("input"));
+  } catch {
+    /* Prompt resizing is cosmetic. */
+  }
+  updateDescriptionControls();
+  setStatus("Previous prompt restored.", "ok");
+}
+
 // The Generate button is also the Cancel button — one click target for the one
 // thing a run can be told to do at any moment.
 function onGenerateClick(): void {
@@ -1686,6 +1858,25 @@ function buildModelMenu(): void {
   );
 }
 
+function preferredDescriptionModel(): string {
+  const hasOpenAIKey = String($("openaiApiKey")?.value || "").trim().length > 0;
+  const hasGeminiKey = String($("geminiApiKey")?.value || "").trim().length > 0;
+  if (hasOpenAIKey) return DEFAULT_OPENAI_DESCRIPTION_MODEL;
+  if (hasGeminiKey) return DEFAULT_GEMINI_DESCRIPTION_MODEL;
+  return DEFAULT_OPENAI_DESCRIPTION_MODEL;
+}
+
+function refreshDescriptionModelSelection(): void {
+  const stored = loadSetting("describeModel", "");
+  const storedSpec = descriptionModelSpec(stored);
+  const selected = storedSpec && descriptionApiKey(storedSpec) ? stored : preferredDescriptionModel();
+  buildMenu(
+    "describeModel",
+    DESCRIPTION_MODELS.map((model) => ({ value: model.id, label: model.label })),
+    selected
+  );
+}
+
 function buildQualityMenu(modelId: string, selected: string): ImageQuality {
   const field = $("qualityField");
   const openai = isOpenAIModel(modelId);
@@ -1862,6 +2053,7 @@ async function onFitNearest(): Promise<void> {
 async function restoreSettings(): Promise<void> {
   setValueSafe($("geminiApiKey"), await loadApiKey());
   setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
+  refreshDescriptionModelSelection();
   // The model menu is generated from the capability table. Only restore a stored
   // model the table still lists — one dropped since last session would otherwise
   // leave the picker blank while still being sent to the API.
@@ -1902,6 +2094,9 @@ function persistSettingsHooks(): void {
   $("includeSelection")?.addEventListener("change", () =>
     saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0")
   );
+  $("describeModel")?.addEventListener("change", () =>
+    saveSetting("describeModel", $("describeModel").value || DEFAULT_OPENAI_DESCRIPTION_MODEL)
+  );
 }
 
 async function init(): Promise<void> {
@@ -1915,6 +2110,7 @@ async function init(): Promise<void> {
       const apiKey = ($("geminiApiKey").value || "").trim();
       try {
         await saveApiKey(apiKey);
+        refreshDescriptionModelSelection();
         setStatus(apiKey ? "Gemini API key saved securely." : "Gemini API key cleared.", "ok");
       } catch (err: any) {
         setStatus("Could not save Gemini API key: " + (err?.message || String(err)), "error");
@@ -1924,6 +2120,7 @@ async function init(): Promise<void> {
       const apiKey = ($("openaiApiKey").value || "").trim();
       try {
         await saveOpenAIApiKey(apiKey);
+        refreshDescriptionModelSelection();
         setStatus(apiKey ? "OpenAI API key saved securely." : "OpenAI API key cleared.", "ok");
       } catch (err: any) {
         setStatus("Could not save OpenAI API key: " + (err?.message || String(err)), "error");
@@ -1937,6 +2134,8 @@ async function init(): Promise<void> {
     });
     setupDropWebview();
     $("generate").addEventListener("click", onGenerateClick);
+    $("describe").addEventListener("click", onDescribe);
+    $("undoDescription").addEventListener("click", onUndoDescription);
     $("copyArchivedPrompt").addEventListener("click", onCopyArchivedPrompt);
     $("loadArchivedSettings").addEventListener("click", onLoadArchivedSettings);
     await setupArchivedGenerationTracking();

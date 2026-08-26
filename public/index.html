@@ -48,24 +48,26 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     .grow { flex: 1; }
     .field { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
     .field > .row { margin: 0; }
+    #describeActions { margin-top: 6px; }
     /* UXP does not reliably render flex gap. Give the adjacent controls explicit
        margins so the spacing also appears inside Photoshop. */
-    #saveGeminiKey, #saveOpenAIKey, #fitSelection, #pasteRef { margin-left: 7px; }
+    #saveGeminiKey, #saveOpenAIKey, #fitSelection, #pasteRef, #undoDescription { margin-left: 7px; }
     #budgetTotal, #budgetCounts { display: block; }
     /* The buttons and the checkbox carry actions, so their labels belong at the
        headings' contrast, not at the mid gray Spectrum's quiet and secondary
        treatments give them. The variants in the markup do that for the buttons;
        this states the label colour too, for the runtimes that let an author
        colour reach into the component — the quiet Clear button and the checkbox
-       have no variant to raise. #generate is left out on purpose: its label sits
-       on the blue CTA fill and is already white in every theme. */
+       have no variant to raise. #generate and #describe are left out on purpose:
+       their labels sit on the blue CTA fill and are already white in every theme. */
     #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
+    #undoDescription,
     #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
     #loadArchivedSettings { color: rgb(255, 255, 255); }
     .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
-    #model, #resolution, #quality { width: 100%; }
+    #model, #resolution, #quality, #describeModel { width: 100%; }
     #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
     /* UXP's Spectrum textarea clips when it becomes very tall. The invisible
@@ -184,6 +186,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       .label { color: rgb(61, 61, 61); }
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
+      #undoDescription,
       #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
       #loadArchivedSettings { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
@@ -249,6 +252,16 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
         <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
       </div>
       <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
+    </div>
+    <div class="field">
+      <span class="label">Describe with</span>
+      <sp-picker id="describeModel" size="s">
+        <sp-menu slot="options"></sp-menu>
+      </sp-picker>
+      <div id="describeActions" class="row">
+        <sp-button id="describe" class="grow" variant="cta" size="s">Describe</sp-button>
+        <sp-button id="undoDescription" variant="primary" size="s" disabled>Undo</sp-button>
+      </div>
     </div>
 
     <sp-divider size="s"></sp-divider>
