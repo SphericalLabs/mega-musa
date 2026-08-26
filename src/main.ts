@@ -97,7 +97,6 @@ const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
 // An override applies only to one exact document mode/profile/depth state in
 // this panel session. Changing any of those properties creates a new warning.
 const acceptedDocumentWarnings = new Set<string>();
-let documentWarningGenerateAnyway = false;
 let running = false;
 let describing = false;
 let promptBeforeDescription: string | null = null;
@@ -285,12 +284,114 @@ function setBusy(on: boolean): void {
   applyStatusClass();
 }
 
+type ModalNoticeKind = "error" | "blocker" | "warning";
+type ModalNoticeAction = "primary" | "cancel";
+
+interface ModalNotice {
+  kind: ModalNoticeKind;
+  title: string;
+  message: string;
+  instruction?: string;
+  primaryLabel: string;
+  cancelLabel?: string;
+}
+
+let modalNoticeOpen = false;
+let modalNoticeKind: ModalNoticeKind | null = null;
+let modalNoticeAction: ModalNoticeAction = "cancel";
+let modalNoticeListenersReady = false;
+let pendingErrorNotice: string | null = null;
+
+function setupModalNoticeListeners(): void {
+  if (modalNoticeListenersReady) return;
+  const dialog = $("noticeDialog");
+  const cancel = $("noticeDialogCancel");
+  const primary = $("noticeDialogPrimary");
+  if (!dialog || !cancel || !primary) {
+    throw new Error("The Mega Musa message dialog is unavailable.");
+  }
+  cancel.addEventListener("click", () => {
+    modalNoticeAction = "cancel";
+    dialog.close();
+  });
+  primary.addEventListener("click", () => {
+    modalNoticeAction = "primary";
+    dialog.close();
+  });
+  modalNoticeListenersReady = true;
+}
+
+async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> {
+  const dialog = $("noticeDialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    throw new Error("The Mega Musa message dialog could not be opened.");
+  }
+
+  // A second error should never stack another modal. Replace an open error's
+  // copy, or hold the latest error until a compatibility decision is closed.
+  if (modalNoticeOpen) {
+    if (notice.kind === "error") {
+      if (modalNoticeKind === "error") {
+        $("noticeDialogMessage").textContent = notice.message;
+        $("noticeDialogInstruction").textContent = "";
+      } else {
+        pendingErrorNotice = notice.message;
+      }
+      return "cancel";
+    }
+    throw new Error("Another Mega Musa message is already open.");
+  }
+
+  setupModalNoticeListeners();
+  $("noticeDialogTitle").textContent = notice.title;
+  $("noticeDialogMessage").textContent = notice.message;
+  $("noticeDialogInstruction").textContent = notice.instruction || "";
+  const cancel = $("noticeDialogCancel");
+  cancel.textContent = notice.cancelLabel || "";
+  cancel.style.display = notice.cancelLabel ? "" : "none";
+  const primary = $("noticeDialogPrimary");
+  primary.textContent = notice.primaryLabel;
+  primary.setAttribute("variant", notice.kind === "warning" ? "warning" : "primary");
+  primary.style.marginLeft = notice.cancelLabel ? "8px" : "0";
+
+  modalNoticeOpen = true;
+  modalNoticeKind = notice.kind;
+  modalNoticeAction = "cancel";
+  try {
+    await dialog.showModal({ lockDocumentFocus: true });
+    return modalNoticeAction;
+  } catch (err: any) {
+    // Escape and the window close button mean Close for notices and Cancel for
+    // warnings. Neither should create another user-facing error.
+    console.log(`[Mega Musa] ${notice.kind} dialog closed:`, err?.message || String(err));
+    return "cancel";
+  } finally {
+    modalNoticeOpen = false;
+    modalNoticeKind = null;
+    const pending = pendingErrorNotice;
+    pendingErrorNotice = null;
+    if (pending) setTimeout(() => showErrorNotice(pending), 0);
+  }
+}
+
+function showErrorNotice(message: string): void {
+  void showModalNotice({
+    kind: "error",
+    title: "Mega Musa error",
+    message,
+    primaryLabel: "Close",
+  }).catch((err: any) => {
+    // The red status remains visible if UXP cannot open the modal.
+    console.log("[Mega Musa] error dialog failed:", err?.message || String(err));
+  });
+}
+
 function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): void {
   const el = $("status");
-  if (!el) return;
-  el.textContent = message;
+  if (el) el.textContent = message;
   statusKind = kind;
   applyStatusClass();
+  if (kind === "error") showErrorNotice(message);
 }
 
 // A second, persistent line under the status box. Status text is replaced on
@@ -471,42 +572,41 @@ function documentBlocker(state: DocumentState): DocumentBlocker | null {
 }
 
 async function showDocumentBlocker(blocker: DocumentBlocker): Promise<void> {
-  const dialog = $("documentBlocker");
-  if (!dialog || typeof dialog.showModal !== "function") {
-    throw new Error("The document compatibility message could not be opened.");
-  }
-  $("documentBlockerTitle").textContent = blocker.title;
-  $("documentBlockerMessage").textContent = blocker.message;
-  $("documentBlockerInstruction").textContent = blocker.instruction;
-  try {
-    await dialog.showModal({ lockDocumentFocus: true });
-  } catch (err: any) {
-    // Closing the window or pressing Escape still leaves generation blocked.
-    console.log("[Mega Musa] document blocker closed:", err?.message || String(err));
-  }
+  await showModalNotice({
+    kind: "blocker",
+    title: blocker.title,
+    message: blocker.message,
+    instruction: blocker.instruction,
+    primaryLabel: "Close",
+  });
 }
 
-async function confirmDocumentWarning(dialogId: string): Promise<boolean> {
-  const dialog = $(dialogId);
-  if (!dialog || typeof dialog.showModal !== "function") {
-    throw new Error("The document compatibility warning could not be opened.");
-  }
-  documentWarningGenerateAnyway = false;
-  try {
-    await dialog.showModal({ lockDocumentFocus: true });
-    return documentWarningGenerateAnyway;
-  } catch (err: any) {
-    // Escape and the window close button are equivalent to explicit Cancel.
-    console.log(`[Mega Musa] ${dialogId} closed:`, err?.message || String(err));
-    return false;
-  }
+async function confirmDocumentWarning(
+  title: string,
+  message: string,
+  instruction: string
+): Promise<boolean> {
+  const action = await showModalNotice({
+    kind: "warning",
+    title,
+    message,
+    instruction,
+    primaryLabel: "Generate Anyway",
+    cancelLabel: "Cancel",
+  });
+  return action === "primary";
 }
 
 async function confirm16BitDocument(state: DocumentState): Promise<boolean> {
   if (state.bitsPerChannel !== 16) return true;
   const key = `16-bit|${state.fingerprint}`;
   if (acceptedDocumentWarnings.has(key)) return true;
-  if (!(await confirmDocumentWarning("bitDepthWarning"))) return false;
+  const confirmed = await confirmDocumentWarning(
+    "16-bit document may lose tonal precision",
+    "Mega Musa processes canvas input and generated results at 8 bits per channel. This document uses 16 bits per channel, so the generated area is limited to 8-bit tonal precision and may show banding in smooth gradients.",
+    "To avoid this, choose Image > Mode > 8 Bits/Channel."
+  );
+  if (!confirmed) return false;
   acceptedDocumentWarnings.add(key);
   return true;
 }
@@ -517,8 +617,12 @@ async function confirmDocumentColorSpace(state: DocumentState): Promise<boolean>
   const key = `color|${state.fingerprint}`;
   if (acceptedDocumentWarnings.has(key)) return true;
 
-  $("colorWarningSpace").textContent = `${state.mode} / ${state.profile}`;
-  if (!(await confirmDocumentWarning("colorWarning"))) return false;
+  const confirmed = await confirmDocumentWarning(
+    "Color conversion may cause visible seams",
+    `Mega Musa generates images in sRGB. This document uses ${state.mode} / ${state.profile}, so converting only the generated area may change colors along its edges.`,
+    `For the best match, choose Edit > Convert to Profile… and select ${SRGB_PROFILE}.`
+  );
+  if (!confirmed) return false;
   acceptedDocumentWarnings.add(key);
   return true;
 }
@@ -2210,25 +2314,6 @@ async function init(): Promise<void> {
     $("copyArchivedPrompt").addEventListener("click", onCopyArchivedPrompt);
     $("loadArchivedSettings").addEventListener("click", onLoadArchivedSettings);
     await setupArchivedGenerationTracking();
-    $("documentBlockerClose").addEventListener("click", () => {
-      $("documentBlocker").close();
-    });
-    $("bitDepthWarningCancel").addEventListener("click", () => {
-      documentWarningGenerateAnyway = false;
-      $("bitDepthWarning").close();
-    });
-    $("bitDepthWarningContinue").addEventListener("click", () => {
-      documentWarningGenerateAnyway = true;
-      $("bitDepthWarning").close();
-    });
-    $("colorWarningCancel").addEventListener("click", () => {
-      documentWarningGenerateAnyway = false;
-      $("colorWarning").close();
-    });
-    $("colorWarningContinue").addEventListener("click", () => {
-      documentWarningGenerateAnyway = true;
-      $("colorWarning").close();
-    });
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
     $("resetBudget").addEventListener("click", () => {
