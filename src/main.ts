@@ -1945,12 +1945,13 @@ async function init(): Promise<void> {
       setStatus("Budget counter reset — counting from today.", "ok");
     });
 
-    // Return in the prompt field fires Generate immediately — the field is
-    // single-line, so Return has nothing else to do. Ignore it mid-composition
-    // so an IME candidate can still be confirmed with Return.
+    // The prompt is multiline, so unmodified Return inserts a line break.
+    // Cmd+Return on macOS or Ctrl+Return on Windows fires Generate. Ignore the
+    // shortcut mid-composition so an IME candidate can still be confirmed.
     $("prompt").addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key !== "Enter" && e.key !== "Return") return;
       if ((e as any).isComposing) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
       e.preventDefault();
       onGenerate();
     });

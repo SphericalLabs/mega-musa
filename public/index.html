@@ -68,7 +68,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #model, #resolution, #quality { width: 100%; }
     #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
-    #prompt { width: 100%; }
+    /* Five lines leave enough room to compose a useful prompt without letting
+       the editor push the rest of the panel away. Longer prompts scroll inside
+       the native Spectrum textarea. */
+    #prompt { width: 100%; height: 108px; }
     #dropWebview { display: block; margin: 6px 0; }
     #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
     .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
@@ -236,8 +239,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <h3>Prompt</h3>
     <div class="field">
-      <sp-textfield id="prompt" placeholder="Enter the image instructions"></sp-textfield>
-      <div class="muted" style="margin-top:6px;">Pressing Enter submits the generation immediately.</div>
+      <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
+      <div class="muted" style="margin-top:6px;">Enter adds a new line. Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
     </div>
 
     <sp-divider size="s"></sp-divider>
