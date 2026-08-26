@@ -19,6 +19,8 @@
 
 import { applyAlphaMask, resampleGray } from "./image-codec";
 import { GenerationArchive, writeLayerGenerationArchive } from "./archive";
+import { archiveReferenceAssetsInActiveDocument } from "./reference-assets";
+import { RefImage } from "./references";
 
 const { app, action, core, imaging } = require("photoshop");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
@@ -396,6 +398,7 @@ export interface PlacementResult {
   clip: PlacementClip;
   layerId: number;
   archiveSaved: boolean;
+  referenceArchiveFailures: number;
 }
 
 function openDocumentById(docId: number): any | null {
@@ -452,7 +455,8 @@ export async function placeResult(
   height: number,
   layerName: string,
   selection: SelectionSnapshot | null,
-  archive: GenerationArchive
+  archive: GenerationArchive,
+  references: RefImage[]
 ): Promise<PlacementResult> {
   return await core.executeAsModal(
     () => withActiveDocument(docId, async () => {
@@ -591,6 +595,19 @@ export async function placeResult(
         }
       }
 
+      let referenceArchiveFailures = 0;
+      try {
+        const assets = await archiveReferenceAssetsInActiveDocument(docId, references, layerId);
+        archive.references = assets.references;
+        referenceArchiveFailures = assets.failures.length;
+      } catch (e: any) {
+        // Asset storage is provenance, not the paid output. Preserve the result
+        // and still mark this as a Stage 2 record with no reusable pointers.
+        archive.references = [];
+        referenceArchiveFailures = references.length;
+        console.log("[Mega Musa] could not archive reference assets:", e?.message || e);
+      }
+
       let archiveSaved = true;
       try {
         await writeLayerGenerationArchive(docId, layerId, archive);
@@ -600,7 +617,7 @@ export async function placeResult(
         archiveSaved = false;
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
-      return { clip, layerId, archiveSaved };
+      return { clip, layerId, archiveSaved, referenceArchiveFailures };
     }),
     { commandName: "Mega Musa: place result" }
   );

@@ -36,6 +36,7 @@ interface PhotoshopSelectionData {
 
 interface PhotoshopModule {
   app: any;
+  constants: any;
   action: {
     batchPlay(commands: any[], options?: any): Promise<any[]>;
     addNotificationListener(events: string[], callback: (eventName: string, descriptor: any) => void): Promise<void>;
@@ -61,6 +62,8 @@ interface UxpModule {
         allowMultiple?: boolean;
         types?: string[];
       }): Promise<any>;
+      getTemporaryFolder(): Promise<any>;
+      createSessionToken(entry: any): string;
     };
     secureStorage: {
       getItem(key: string): Promise<Uint8Array>;

@@ -26,8 +26,28 @@ export const ARCHIVE_SETTINGS_KEY = "io_sphericals_mega_musa";
 
 export interface ArchivedReference {
   id: string;
-  name?: string;
-  hash?: string;
+  hash: string;
+  layerId: number;
+  name: string;
+  mimeType: string;
+  byteLength: number;
+}
+
+export interface ReferenceAssetMetadata {
+  kind: "referenceAsset";
+  v: 1;
+  id: string;
+  hash: string;
+  name: string;
+  mimeType: string;
+  byteLength: number;
+  createdAt: string;
+}
+
+export interface ReferenceAssetPoolMetadata {
+  kind: "referenceAssetPool";
+  v: 1;
+  name: string;
 }
 
 export interface GenerationArchive {
@@ -51,6 +71,17 @@ export interface GenerationArchive {
   references?: ArchivedReference[];
 }
 
+function isArchivedReference(value: any): value is ArchivedReference {
+  return (
+    typeof value?.id === "string" &&
+    typeof value.hash === "string" &&
+    Number.isFinite(value.layerId) &&
+    typeof value.name === "string" &&
+    typeof value.mimeType === "string" &&
+    Number.isFinite(value.byteLength)
+  );
+}
+
 function isGenerationArchive(value: any): value is GenerationArchive {
   return (
     value?.v === 1 &&
@@ -67,17 +98,30 @@ function isGenerationArchive(value: any): value is GenerationArchive {
     typeof value.requestedSize === "string" &&
     Number.isFinite(value.outputWidth) &&
     Number.isFinite(value.outputHeight) &&
+    typeof value.createdAt === "string" &&
+    (value.references === undefined ||
+      (Array.isArray(value.references) && value.references.every(isArchivedReference)))
+  );
+}
+
+function isReferenceAssetMetadata(value: any): value is ReferenceAssetMetadata {
+  return (
+    value?.kind === "referenceAsset" &&
+    value.v === 1 &&
+    typeof value.id === "string" &&
+    typeof value.hash === "string" &&
+    typeof value.name === "string" &&
+    typeof value.mimeType === "string" &&
+    Number.isFinite(value.byteLength) &&
     typeof value.createdAt === "string"
   );
 }
 
-// This runs inside the same executeAsModal operation that creates the layer, so
-// the pixels and their provenance are committed together to the exact layer ID.
-export async function writeLayerGenerationArchive(
-  docId: number,
-  layerId: number,
-  archive: GenerationArchive
-): Promise<void> {
+function isReferenceAssetPoolMetadata(value: any): value is ReferenceAssetPoolMetadata {
+  return value?.kind === "referenceAssetPool" && value.v === 1 && typeof value.name === "string";
+}
+
+async function writeLayerMetadata(docId: number, layerId: number, value: unknown): Promise<void> {
   await action.batchPlay(
     [
       {
@@ -87,7 +131,7 @@ export async function writeLayerGenerationArchive(
           { _ref: "layer", _id: layerId },
           { _ref: "document", _id: docId },
         ],
-        to: { _obj: "null", json: JSON.stringify(archive) },
+        to: { _obj: "null", json: JSON.stringify(value) },
         property: ARCHIVE_SETTINGS_KEY,
         _options: { dialogOptions: "dontDisplay" },
       },
@@ -96,10 +140,7 @@ export async function writeLayerGenerationArchive(
   );
 }
 
-export async function readLayerGenerationArchive(
-  docId: number,
-  layerId: number
-): Promise<GenerationArchive | null> {
+async function readLayerMetadata(docId: number, layerId: number): Promise<unknown | null> {
   let result: any[];
   try {
     result = await action.batchPlay(
@@ -133,11 +174,62 @@ export async function readLayerGenerationArchive(
   if (typeof raw !== "string" || !raw) return null;
 
   try {
-    const archive = JSON.parse(raw);
-    if (isGenerationArchive(archive)) return archive;
+    return JSON.parse(raw);
   } catch {
-    /* handled by the diagnostic below */
+    console.log("[Mega Musa] ignored invalid metadata on a layer.");
+    return null;
   }
+}
+
+// This runs inside the same executeAsModal operation that creates the layer, so
+// the pixels and their provenance are committed together to the exact layer ID.
+export async function writeLayerGenerationArchive(
+  docId: number,
+  layerId: number,
+  archive: GenerationArchive
+): Promise<void> {
+  await writeLayerMetadata(docId, layerId, archive);
+}
+
+export async function readLayerGenerationArchive(
+  docId: number,
+  layerId: number
+): Promise<GenerationArchive | null> {
+  const archive = await readLayerMetadata(docId, layerId);
+  if (isGenerationArchive(archive)) return archive;
+  if (archive === null || isReferenceAssetMetadata(archive) || isReferenceAssetPoolMetadata(archive)) return null;
   console.log("[Mega Musa] ignored invalid generation archive metadata on the selected layer.");
   return null;
+}
+
+export async function writeLayerReferenceAssetMetadata(
+  docId: number,
+  layerId: number,
+  metadata: ReferenceAssetMetadata
+): Promise<void> {
+  await writeLayerMetadata(docId, layerId, metadata);
+}
+
+export async function readLayerReferenceAssetMetadata(
+  docId: number,
+  layerId: number
+): Promise<ReferenceAssetMetadata | null> {
+  const metadata = await readLayerMetadata(docId, layerId);
+  return isReferenceAssetMetadata(metadata) ? metadata : null;
+}
+
+export async function writeLayerReferenceAssetPoolMetadata(
+  docId: number,
+  layerId: number,
+  metadata: ReferenceAssetPoolMetadata
+): Promise<void> {
+  await writeLayerMetadata(docId, layerId, metadata);
+}
+
+export async function readLayerReferenceAssetPoolMetadata(
+  docId: number,
+  layerId: number
+): Promise<ReferenceAssetPoolMetadata | null> {
+  const metadata = await readLayerMetadata(docId, layerId);
+  return isReferenceAssetPoolMetadata(metadata) ? metadata : null;
 }

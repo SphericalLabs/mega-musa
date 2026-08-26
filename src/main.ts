@@ -74,6 +74,7 @@ import {
 } from "./storage";
 import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
 import { GenerationArchive, readLayerGenerationArchive } from "./archive";
+import { restoreReferenceAssets } from "./reference-assets";
 
 const { entrypoints } = require("uxp");
 const { action: photoshopAction } = require("photoshop");
@@ -108,7 +109,12 @@ let cancelRequested = false;
 // await at once. Cleared again the moment the image is back, because from there
 // on the money is spent and cancelling would only throw it away.
 let cancelInFlight: (() => void) | null = null;
-let selectedArchive: { archive: GenerationArchive; layerName: string } | null = null;
+let selectedArchive: {
+  archive: GenerationArchive;
+  layerName: string;
+  docId: number;
+  layerId: number;
+} | null = null;
 let archiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let archiveRefreshSequence = 0;
 
@@ -527,6 +533,7 @@ async function confirmDocumentWarnings(state: DocumentState, coversEntireTarget:
 
 // Photoshop stops accepting a layer name past 255 characters.
 const MAX_LAYER_NAME = 255;
+const MAX_ARCHIVE_LAYER_NAME_DISPLAY = 50;
 
 // Picker labels carry a release year — "Nano Banana Pro (2025)" — which tells the
 // models apart when choosing one and is just noise once it is on a layer.
@@ -551,6 +558,11 @@ function resultLayerName(prompt: string, details: string[]): string {
   return `${cut}…${suffix}`;
 }
 
+function archivedLayerNameDisplay(layerName: string): string {
+  if (layerName.length <= MAX_ARCHIVE_LAYER_NAME_DISPLAY) return layerName;
+  return `${layerName.slice(0, MAX_ARCHIVE_LAYER_NAME_DISPLAY - 1).trimEnd()}…`;
+}
+
 function hideArchivedGeneration(): void {
   selectedArchive = null;
   const panel = $("archivePanel");
@@ -567,18 +579,24 @@ function archiveDateLabel(value: string): string {
   }
 }
 
-function renderArchivedGeneration(archive: GenerationArchive, layerName: string): void {
-  selectedArchive = { archive, layerName };
+function renderArchivedGeneration(
+  archive: GenerationArchive,
+  layerName: string,
+  docId: number,
+  layerId: number
+): void {
+  selectedArchive = { archive, layerName, docId, layerId };
   const panel = $("archivePanel");
   if (panel) panel.style.display = "block";
-  $("archiveLayerName").textContent = layerName;
-  $("archivedPrompt").textContent = archive.prompt;
+  $("archiveLayerName").textContent = archivedLayerNameDisplay(layerName);
 
   const details = [archive.provider, archive.modelLabel || archive.model, archive.ratio];
   if (archive.resolution) {
     details.push(archive.resolution === "auto" ? "Default resolution" : resolutionLabel(archive.resolution));
   }
-  if (archive.quality) {
+  // Quality is an OpenAI API control. Gemini's stored "auto" value is only an
+  // internal placeholder and must not be presented as a generation setting.
+  if (archive.quality && isOpenAIModel(archive.model)) {
     const requestedQuality = imageQualityLabel(normalizeImageQuality(archive.quality));
     const resolvedQuality = archive.resolvedQuality
       ? imageQualityLabel(normalizeImageQuality(archive.resolvedQuality))
@@ -637,7 +655,7 @@ async function refreshArchivedGeneration(): Promise<void> {
     return;
   }
 
-  if (archive) renderArchivedGeneration(archive, layer.name || "Generated layer");
+  if (archive) renderArchivedGeneration(archive, layer.name || "Generated layer", docId, layerId);
   else hideArchivedGeneration();
 }
 
@@ -686,15 +704,16 @@ async function onCopyArchivedPrompt(): Promise<void> {
   }
 }
 
-function onLoadArchivedSettings(): void {
+async function onLoadArchivedSettings(): Promise<void> {
   if (!selectedArchive) return;
-  const archive = selectedArchive.archive;
+  const selected = selectedArchive;
+  const archive = selected.archive;
   const promptField = $("prompt");
   setValueSafe(promptField, archive.prompt);
   try {
     promptField?.dispatchEvent(new Event("input"));
   } catch {
-    /* prompt resizing is cosmetic */
+    /* Prompt resizing is cosmetic. */
   }
   setCheckedSafe($("includeSelection"), archive.includeSelection);
   saveSetting("includeSelection", archive.includeSelection ? "1" : "0");
@@ -713,10 +732,56 @@ function onLoadArchivedSettings(): void {
   } else {
     messages.push(`${archive.modelLabel || archive.model} is not available in this version, so the current model was kept.`);
   }
-  if (archive.referenceNames.length) {
-    messages.push("Reference images were not loaded because Stage 1 stores their names, not their pixels.");
+  if (archive.references === undefined) {
+    if (archive.referenceNames.length) {
+      messages.push("This Stage 1 record stores reference names only, so its images could not be loaded.");
+    }
+    setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
+    return;
   }
-  setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
+
+  if (!archive.references.length && !archive.referenceNames.length) {
+    refs = [];
+    renderThumbs();
+    messages.push("The reference list was cleared because this generation used no references.");
+    setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
+    return;
+  }
+
+  setStatus("Archived prompt and settings loaded. Restoring embedded references…");
+  try {
+    const restored = await restoreReferenceAssets(
+      selected.docId,
+      archive.references,
+      selected.layerId
+    );
+    refs = restored.images.slice(0, MAX_REFS);
+    renderThumbs();
+
+    const neverEmbedded = Math.max(0, archive.referenceNames.length - archive.references.length);
+    const unavailable = neverEmbedded + restored.missing.length + restored.failures.length;
+    messages.push(
+      `${refs.length} embedded reference image${refs.length === 1 ? "" : "s"} restored.`
+    );
+    if (unavailable) {
+      messages.push(
+        `${unavailable} reference image${unavailable === 1 ? " is" : "s are"} missing or unreadable; the prompt and settings were still loaded.`
+      );
+    }
+    setStatus(
+      ["Archived prompt and available settings loaded.", ...messages].join(" "),
+      unavailable ? "error" : "ok"
+    );
+  } catch (err: any) {
+    setStatus(
+      [
+        "Archived prompt and available settings loaded.",
+        ...messages,
+        "Embedded references could not be restored: " + (err?.message || String(err)),
+      ].join(" "),
+      "error"
+    );
+  }
 }
 
 // UXP's DOM does not support setting innerHTML — clear by removing children.
@@ -1737,7 +1802,8 @@ async function onGenerate(): Promise<void> {
       cropH,
       resultLayerName(prompt, layerDetails),
       selectionSnapshot,
-      archive
+      archive,
+      generationRefs
     );
     scheduleArchivedGenerationRefresh();
 
@@ -1748,9 +1814,14 @@ async function onGenerate(): Promise<void> {
       : activeArtboard
         ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
         : "Done — full-image result added as a new layer.";
-    const archivedMessage = placement.archiveSaved
-      ? ""
-      : " Prompt archive could not be saved; see the console.";
+    const archiveMessages: string[] = [];
+    if (!placement.archiveSaved) archiveMessages.push("Prompt archive could not be saved; see the console.");
+    if (placement.referenceArchiveFailures) {
+      archiveMessages.push(
+        `${placement.referenceArchiveFailures} reference image${placement.referenceArchiveFailures === 1 ? " was" : "s were"} not embedded; see the console.`
+      );
+    }
+    const archivedMessage = archiveMessages.length ? ` ${archiveMessages.join(" ")}` : "";
     const completedMessage = usageDetails.length
       ? `${doneMessage} (${usageDetails.join(", ")}).${archivedMessage}`
       : `${doneMessage}${archivedMessage}`;
