@@ -96,7 +96,7 @@ const COLLAPSIBLE_SECTIONS = [
   "prompt",
   "referenceImages",
   "describeWith",
-  "archive",
+  "recall",
   "aspectRatio",
 ] as const;
 
@@ -116,14 +116,14 @@ let cancelRequested = false;
 // await at once. Cleared again the moment the image is back, because from there
 // on the money is spent and cancelling would only throw it away.
 let cancelInFlight: (() => void) | null = null;
-let selectedArchive: {
-  archive: GenerationArchive;
+let selectedRecall: {
+  generation: GenerationArchive;
   layerName: string;
   docId: number;
   layerId: number;
 } | null = null;
-let archiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-let archiveRefreshSequence = 0;
+let recallRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let recallRefreshSequence = 0;
 let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let descriptionInputRefreshSequence = 0;
 let hasDescriptionSelection = false;
@@ -152,7 +152,7 @@ function syncPromptSizer(): void {
 }
 
 function setSectionExpanded(sectionId: (typeof COLLAPSIBLE_SECTIONS)[number], expanded: boolean): void {
-  const section = sectionId === "archive" ? $("archivePanel") : $(`${sectionId}Section`);
+  const section = $(`${sectionId}Section`);
   const toggle = $(`${sectionId}SectionToggle`);
   const content = $(`${sectionId}SectionContent`);
   if (!section || !toggle || !content) return;
@@ -173,7 +173,8 @@ function setupCollapsibleSections(): void {
     if (!toggle) continue;
 
     const settingName = `section.${sectionId}.expanded`;
-    setSectionExpanded(sectionId, loadSetting(settingName, "1") !== "0");
+    const defaultValue = sectionId === "recall" ? loadSetting("section.archive.expanded", "1") : "1";
+    setSectionExpanded(sectionId, loadSetting(settingName, defaultValue) !== "0");
     const toggleSection = () => {
       const expanded = toggle.getAttribute("aria-expanded") !== "true";
       setSectionExpanded(sectionId, expanded);
@@ -711,7 +712,7 @@ async function confirmDocumentWarnings(state: DocumentState, coversEntireTarget:
 
 // Photoshop stops accepting a layer name past 255 characters.
 const MAX_LAYER_NAME = 255;
-const MAX_ARCHIVE_LAYER_NAME_DISPLAY = 50;
+const MAX_RECALL_LAYER_NAME_DISPLAY = 50;
 
 // Picker labels carry a release year — "Nano Banana Pro (2025)" — which tells the
 // models apart when choosing one and is just noise once it is on a layer.
@@ -736,18 +737,18 @@ function resultLayerName(prompt: string, details: string[]): string {
   return `${cut}…${suffix}`;
 }
 
-function archivedLayerNameDisplay(layerName: string): string {
-  if (layerName.length <= MAX_ARCHIVE_LAYER_NAME_DISPLAY) return layerName;
-  return `${layerName.slice(0, MAX_ARCHIVE_LAYER_NAME_DISPLAY - 1).trimEnd()}…`;
+function recallLayerNameDisplay(layerName: string): string {
+  if (layerName.length <= MAX_RECALL_LAYER_NAME_DISPLAY) return layerName;
+  return `${layerName.slice(0, MAX_RECALL_LAYER_NAME_DISPLAY - 1).trimEnd()}…`;
 }
 
-function hideArchivedGeneration(): void {
-  selectedArchive = null;
-  const panel = $("archivePanel");
-  if (panel) panel.style.display = "none";
+function hideGenerationRecall(): void {
+  selectedRecall = null;
+  const section = $("recallSection");
+  if (section) section.style.display = "none";
 }
 
-function archiveDateLabel(value: string): string {
+function recallDateLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   try {
@@ -757,67 +758,67 @@ function archiveDateLabel(value: string): string {
   }
 }
 
-function renderArchivedGeneration(
-  archive: GenerationArchive,
+function renderGenerationRecall(
+  generation: GenerationArchive,
   layerName: string,
   docId: number,
   layerId: number
 ): void {
-  selectedArchive = { archive, layerName, docId, layerId };
-  const panel = $("archivePanel");
-  if (panel) panel.style.display = "block";
-  $("archiveLayerName").textContent = archivedLayerNameDisplay(layerName);
+  selectedRecall = { generation, layerName, docId, layerId };
+  const section = $("recallSection");
+  if (section) section.style.display = "block";
+  $("recallLayerName").textContent = recallLayerNameDisplay(layerName);
 
-  const details = [archive.provider, archive.modelLabel || archive.model, archive.ratio];
-  if (archive.resolution) {
-    details.push(archive.resolution === "auto" ? "Default resolution" : resolutionLabel(archive.resolution));
+  const details = [generation.provider, generation.modelLabel || generation.model, generation.ratio];
+  if (generation.resolution) {
+    details.push(generation.resolution === "auto" ? "Default resolution" : resolutionLabel(generation.resolution));
   }
   // Quality is an OpenAI API control. Gemini's stored "auto" value is only an
   // internal placeholder and must not be presented as a generation setting.
-  if (archive.quality && isOpenAIModel(archive.model)) {
-    const requestedQuality = imageQualityLabel(normalizeImageQuality(archive.quality));
-    const resolvedQuality = archive.resolvedQuality
-      ? imageQualityLabel(normalizeImageQuality(archive.resolvedQuality))
+  if (generation.quality && isOpenAIModel(generation.model)) {
+    const requestedQuality = imageQualityLabel(normalizeImageQuality(generation.quality));
+    const resolvedQuality = generation.resolvedQuality
+      ? imageQualityLabel(normalizeImageQuality(generation.resolvedQuality))
       : "";
     details.push(
-      archive.quality === "auto" && resolvedQuality && resolvedQuality !== requestedQuality
+      generation.quality === "auto" && resolvedQuality && resolvedQuality !== requestedQuality
         ? `${requestedQuality} quality (resolved ${resolvedQuality})`
         : `${requestedQuality} quality`
     );
   }
-  $("archiveDetails").textContent = details.join(" · ");
+  $("recallDetails").textContent = details.join(" · ");
 
-  const sourceParts = [archive.includeSelection ? "Canvas input included" : "Canvas input excluded"];
-  if (archive.referenceNames.length) {
-    sourceParts.push(`References: ${archive.referenceNames.join(", ")}`);
+  const sourceParts = [generation.includeSelection ? "Canvas input included" : "Canvas input excluded"];
+  if (generation.referenceNames.length) {
+    sourceParts.push(`References: ${generation.referenceNames.join(", ")}`);
   } else {
     sourceParts.push("No reference images");
   }
-  sourceParts.push(`placed at ${archive.outputWidth}×${archive.outputHeight}`);
-  sourceParts.push(`Generated ${archiveDateLabel(archive.createdAt)}`);
-  $("archiveSource").textContent = sourceParts.join(" · ");
+  sourceParts.push(`placed at ${generation.outputWidth}×${generation.outputHeight}`);
+  sourceParts.push(`Generated ${recallDateLabel(generation.createdAt)}`);
+  $("recallSource").textContent = sourceParts.join(" · ");
 }
 
-async function refreshArchivedGeneration(): Promise<void> {
-  const sequence = ++archiveRefreshSequence;
+async function refreshGenerationRecall(): Promise<void> {
+  const sequence = ++recallRefreshSequence;
   let doc: any;
   try {
     doc = getActiveDoc();
   } catch {
-    if (sequence === archiveRefreshSequence) hideArchivedGeneration();
+    if (sequence === recallRefreshSequence) hideGenerationRecall();
     return;
   }
 
   const activeLayers: any[] = Array.from(doc.activeLayers || []);
   if (activeLayers.length !== 1) {
-    if (sequence === archiveRefreshSequence) hideArchivedGeneration();
+    if (sequence === recallRefreshSequence) hideGenerationRecall();
     return;
   }
   const layer = activeLayers[0];
   const docId = doc.id;
   const layerId = layer.id;
-  const archive = await readLayerGenerationArchive(docId, layerId);
-  if (sequence !== archiveRefreshSequence) return;
+  const generation = await readLayerGenerationArchive(docId, layerId);
+  if (sequence !== recallRefreshSequence) return;
 
   // A document or layer may have changed while batchPlay was reading. Never
   // render the old layer's metadata under a newer selection.
@@ -825,32 +826,32 @@ async function refreshArchivedGeneration(): Promise<void> {
     const currentDoc = getActiveDoc();
     const currentLayers: any[] = Array.from(currentDoc.activeLayers || []);
     if (currentDoc.id !== docId || currentLayers.length !== 1 || currentLayers[0].id !== layerId) {
-      scheduleArchivedGenerationRefresh();
+      scheduleGenerationRecallRefresh();
       return;
     }
   } catch {
-    hideArchivedGeneration();
+    hideGenerationRecall();
     return;
   }
 
-  if (archive) renderArchivedGeneration(archive, layer.name || "Generated layer", docId, layerId);
-  else hideArchivedGeneration();
+  if (generation) renderGenerationRecall(generation, layer.name || "Generated layer", docId, layerId);
+  else hideGenerationRecall();
 }
 
-function scheduleArchivedGenerationRefresh(): void {
-  if (archiveRefreshTimer !== null) clearTimeout(archiveRefreshTimer);
-  archiveRefreshTimer = setTimeout(() => {
-    archiveRefreshTimer = null;
-    void refreshArchivedGeneration();
+function scheduleGenerationRecallRefresh(): void {
+  if (recallRefreshTimer !== null) clearTimeout(recallRefreshTimer);
+  recallRefreshTimer = setTimeout(() => {
+    recallRefreshTimer = null;
+    void refreshGenerationRecall();
   }, 60);
 }
 
-async function setupArchivedGenerationTracking(): Promise<void> {
+async function setupGenerationRecallTracking(): Promise<void> {
   try {
     await photoshopAction.addNotificationListener(
       ["select", "set", "make", "delete", "open", "close"],
       () => {
-        scheduleArchivedGenerationRefresh();
+        scheduleGenerationRecallRefresh();
         scheduleDescriptionInputRefresh();
       }
     );
@@ -859,90 +860,90 @@ async function setupArchivedGenerationTracking(): Promise<void> {
     // works if an older host cannot register notifications.
     console.log("[Mega Musa] could not watch Photoshop input:", err?.message || err);
   }
-  scheduleArchivedGenerationRefresh();
+  scheduleGenerationRecallRefresh();
   scheduleDescriptionInputRefresh();
 }
 
-async function onCopyArchivedPrompt(): Promise<void> {
-  if (!selectedArchive) return;
+async function onCopyRecallPrompt(): Promise<void> {
+  if (!selectedRecall) return;
   try {
     const clipboard: any = (navigator as any).clipboard;
     if (typeof clipboard?.writeText === "function") {
-      await clipboard.writeText(selectedArchive.archive.prompt);
+      await clipboard.writeText(selectedRecall.generation.prompt);
     } else if (typeof clipboard?.setContent === "function") {
-      await clipboard.setContent({ "text/plain": selectedArchive.archive.prompt });
+      await clipboard.setContent({ "text/plain": selectedRecall.generation.prompt });
     } else {
       throw new Error("Clipboard access is unavailable in this Photoshop version.");
     }
-    setStatus("Archived prompt copied to the clipboard.", "ok");
+    setStatus("Generation prompt copied to the clipboard.", "ok");
   } catch (err: any) {
     const message = err?.message || String(err);
     setStatus(
       /manifest version|clipboard access not supported/i.test(message)
         ? "Photoshop is still using Mega Musa’s old manifest. Remove the plugin from UXP Developer Tool, add dist/manifest.json again, then reload it."
-        : "Could not copy the archived prompt: " + message,
+        : "Could not copy the generation prompt: " + message,
       "error"
     );
   }
 }
 
-async function onLoadArchivedSettings(): Promise<void> {
-  if (!selectedArchive) return;
-  const selected = selectedArchive;
-  const archive = selected.archive;
+async function onLoadRecallSettings(): Promise<void> {
+  if (!selectedRecall) return;
+  const selected = selectedRecall;
+  const generation = selected.generation;
   const promptField = $("prompt");
-  setValueSafe(promptField, archive.prompt);
+  setValueSafe(promptField, generation.prompt);
   try {
     promptField?.dispatchEvent(new Event("input"));
   } catch {
     /* Prompt resizing is cosmetic. */
   }
-  setCheckedSafe($("includeSelection"), archive.includeSelection);
-  saveSetting("includeSelection", archive.includeSelection ? "1" : "0");
+  setCheckedSafe($("includeSelection"), generation.includeSelection);
+  saveSetting("includeSelection", generation.includeSelection ? "1" : "0");
   updateDescriptionControls();
   scheduleDescriptionInputRefresh();
 
   const messages: string[] = [];
-  if (hasOption($("model"), archive.model)) {
-    setPickerSafe($("model"), archive.model);
-    saveSetting("model", archive.model);
+  if (hasOption($("model"), generation.model)) {
+    setPickerSafe($("model"), generation.model);
+    saveSetting("model", generation.model);
     const capabilityNote = applyModelCapabilities(
-      archive.model,
-      archive.ratio,
-      archive.resolution,
-      archive.quality
+      generation.model,
+      generation.ratio,
+      generation.resolution,
+      generation.quality
     );
     if (capabilityNote) messages.push(capabilityNote);
   } else {
-    messages.push(`${archive.modelLabel || archive.model} is not available in this version, so the current model was kept.`);
+    messages.push(`${generation.modelLabel || generation.model} is not available in this version, so the current model was kept.`);
   }
-  if (archive.references === undefined) {
-    if (archive.referenceNames.length) {
+  if (generation.references === undefined) {
+    if (generation.referenceNames.length) {
       messages.push("This Stage 1 record stores reference names only, so its images could not be loaded.");
     }
-    setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
+    setStatus(["Generation prompt and available settings loaded.", ...messages].join(" "), "ok");
     return;
   }
 
-  if (!archive.references.length && !archive.referenceNames.length) {
+  if (!generation.references.length && !generation.referenceNames.length) {
     refs = [];
     renderThumbs();
     messages.push("The reference list was cleared because this generation used no references.");
-    setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
+    setStatus(["Generation prompt and available settings loaded.", ...messages].join(" "), "ok");
     return;
   }
 
-  setStatus("Archived prompt and settings loaded. Restoring embedded references…");
+  setStatus("Generation prompt and settings loaded. Restoring embedded references…");
   try {
     const restored = await restoreReferenceAssets(
       selected.docId,
-      archive.references,
+      generation.references,
       selected.layerId
     );
     refs = restored.images.slice(0, MAX_REFS);
     renderThumbs();
 
-    const neverEmbedded = Math.max(0, archive.referenceNames.length - archive.references.length);
+    const neverEmbedded = Math.max(0, generation.referenceNames.length - generation.references.length);
     const unavailable = neverEmbedded + restored.missing.length + restored.failures.length;
     messages.push(
       `${refs.length} embedded reference image${refs.length === 1 ? "" : "s"} restored.`
@@ -953,13 +954,13 @@ async function onLoadArchivedSettings(): Promise<void> {
       );
     }
     setStatus(
-      ["Archived prompt and available settings loaded.", ...messages].join(" "),
+      ["Generation prompt and available settings loaded.", ...messages].join(" "),
       unavailable ? "error" : "ok"
     );
   } catch (err: any) {
     setStatus(
       [
-        "Archived prompt and available settings loaded.",
+        "Generation prompt and available settings loaded.",
         ...messages,
         "Embedded references could not be restored: " + (err?.message || String(err)),
       ].join(" "),
@@ -1991,7 +1992,7 @@ async function onGenerate(): Promise<void> {
       archive,
       generationRefs
     );
-    scheduleArchivedGenerationRefresh();
+    scheduleGenerationRecallRefresh();
 
     if (placement.smartObject) {
       notes.push(
@@ -2381,7 +2382,7 @@ async function init(): Promise<void> {
       panels: {
         nbpEditorPanel: {
           show() {
-            scheduleArchivedGenerationRefresh();
+            scheduleGenerationRecallRefresh();
             scheduleDescriptionInputRefresh();
           },
         },
@@ -2419,9 +2420,9 @@ async function init(): Promise<void> {
     $("generate").addEventListener("click", onGenerateClick);
     $("describe").addEventListener("click", onDescribe);
     $("undoDescription").addEventListener("click", onUndoDescription);
-    $("copyArchivedPrompt").addEventListener("click", onCopyArchivedPrompt);
-    $("loadArchivedSettings").addEventListener("click", onLoadArchivedSettings);
-    await setupArchivedGenerationTracking();
+    $("copyRecallPrompt").addEventListener("click", onCopyRecallPrompt);
+    $("loadRecallSettings").addEventListener("click", onLoadRecallSettings);
+    await setupGenerationRecallTracking();
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
     $("resetBudget").addEventListener("click", () => {

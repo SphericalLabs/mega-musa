@@ -111,8 +111,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        on the blue CTA fill and is already white in every theme. */
     #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
     #describe, #undoDescription,
-    #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
-    #loadArchivedSettings { color: rgb(255, 255, 255); }
+    #fitSelection, #fitNearest, #includeSelection, #copyRecallPrompt,
+    #loadRecallSettings { color: rgb(255, 255, 255); }
     .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
@@ -144,10 +144,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                      color: rgb(255, 255, 255); font-size: 10px; cursor: pointer;
                      display: flex; align-items: center; justify-content: center; }
     .thumb .remove:hover { background: rgb(0, 0, 0); }
-    #archivePanel { display: none; }
-    #archiveLayerName { margin: 5px 0 2px; overflow-wrap: break-word; }
-    #archiveDetails, #archiveSource { margin-top: 5px; overflow-wrap: break-word; }
-    #loadArchivedSettings { margin-left: 7px; }
+    #recallSection { display: none; }
+    #recallLayerName { margin: 5px 0 2px; overflow-wrap: break-word; }
+    #recallDetails, #recallSource { margin-top: 5px; overflow-wrap: break-word; }
+    #loadRecallSettings { margin-left: 7px; }
     /* The lines that close each section explain the controls above them rather
        than saying anything new, so they sit well below the labels — 30% of the
        way from a medium gray into the panel behind them, which lands at ~3.3:1
@@ -233,8 +233,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
       #describe, #undoDescription,
-      #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
-      #loadArchivedSettings { color: rgb(0, 0, 0); }
+      #fitSelection, #fitNearest, #includeSelection, #copyRecallPrompt,
+      #loadRecallSettings { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
     }
   </style>
@@ -377,19 +377,19 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <sp-divider size="s"></sp-divider>
 
-    <div id="archivePanel" class="collapsible-section">
-      <div id="archiveSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="archiveSectionContent">
+    <div id="recallSection" class="collapsible-section">
+      <div id="recallSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="recallSectionContent">
         <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
         <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
-        <span>Archived Images</span>
+        <span>Recall Generations</span>
       </div>
-      <div id="archiveSectionContent" class="section-content" role="region" aria-labelledby="archiveSectionToggle">
-        <div id="archiveLayerName" class="label"></div>
-        <div id="archiveDetails" class="label"></div>
-        <div id="archiveSource" class="muted"></div>
+      <div id="recallSectionContent" class="section-content" role="region" aria-labelledby="recallSectionToggle">
+        <div id="recallLayerName" class="label"></div>
+        <div id="recallDetails" class="label"></div>
+        <div id="recallSource" class="muted"></div>
         <div class="row">
-          <sp-button id="copyArchivedPrompt" variant="primary" size="s">Copy Prompt</sp-button>
-          <sp-button id="loadArchivedSettings" variant="primary" size="s">Load Settings</sp-button>
+          <sp-button id="copyRecallPrompt" variant="primary" size="s">Copy Prompt</sp-button>
+          <sp-button id="loadRecallSettings" variant="primary" size="s">Load Settings</sp-button>
         </div>
       </div>
       <sp-divider size="s"></sp-divider>
