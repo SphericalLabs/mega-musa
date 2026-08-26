@@ -18,6 +18,7 @@
  */
 
 import { applyAlphaMask, resampleGray } from "./image-codec";
+import { GenerationArchive, writeLayerGenerationArchive } from "./archive";
 
 const { app, action, core, imaging } = require("photoshop");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
@@ -391,11 +392,17 @@ function isFrontOfContainer(layer: any, layerId: number): boolean {
 
 export type PlacementClip = "none" | "mask" | "alpha";
 
+export interface PlacementResult {
+  clip: PlacementClip;
+  layerId: number;
+  archiveSaved: boolean;
+}
+
 function openDocumentById(docId: number): any | null {
   return Array.from(app.documents || []).find((doc: any) => doc.id === docId) || null;
 }
 
-async function withActiveDocument(docId: number, run: () => Promise<PlacementClip>): Promise<PlacementClip> {
+async function withActiveDocument<T>(docId: number, run: () => Promise<T>): Promise<T> {
   const previousDocument = app.activeDocument;
   const targetDocument = openDocumentById(docId);
   if (!targetDocument) {
@@ -444,8 +451,9 @@ export async function placeResult(
   width: number,
   height: number,
   layerName: string,
-  selection: SelectionSnapshot | null
-): Promise<PlacementClip> {
+  selection: SelectionSnapshot | null,
+  archive: GenerationArchive
+): Promise<PlacementResult> {
   return await core.executeAsModal(
     () => withActiveDocument(docId, async () => {
       const selectionStillMatches = selection ? await liveSelectionMatches(docId, selection) : false;
@@ -582,7 +590,17 @@ export async function placeResult(
           console.log("[Mega Musa] could not restore the selection after masking:", e?.message || e);
         }
       }
-      return clip;
+
+      let archiveSaved = true;
+      try {
+        await writeLayerGenerationArchive(docId, layerId, archive);
+      } catch (e: any) {
+        // The generated pixels are already placed. A metadata failure should be
+        // visible to the caller, but must not discard a paid result.
+        archiveSaved = false;
+        console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
+      }
+      return { clip, layerId, archiveSaved };
     }),
     { commandName: "Mega Musa: place result" }
   );

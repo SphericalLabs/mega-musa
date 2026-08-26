@@ -9,6 +9,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 ## Features
 
 - Edit a selection, the full document or the active artboard. Results are placed on a new layer at the top of the stack — of the artboard or group they belong to, if any — named after the prompt, with the model, resolution and quality in brackets. Selected regions keep their shape and feathering through a layer mask.
+- Each generated layer stores its complete prompt and generation settings in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Stage 1 records reference names but does not embed reference image pixels.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
 - Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste. References are normalized to sRGB before they are sent.
 - Choose Nano Banana Pro, Nano Banana 2 or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
@@ -39,6 +40,8 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 2. Open a Photoshop document. Select a region or leave no selection to use the full image or active artboard.
 3. Enter a prompt. Add references if needed.
 4. Choose the model and settings, then click **Generate**.
+
+To reuse a generation later, select its result layer in Photoshop's Layers panel. **Archived Generation** appears in Mega Musa without changing the current controls. **Copy Prompt** copies the complete prompt. **Load Settings** explicitly restores the prompt, model and supported controls. Reference file names are shown for documentation, but their image pixels are not available to reload in Stage 1.
 
 **Generate** becomes **Cancel** for the length of a run. Cancelling before the request is sent costs nothing; cancelling after it has gone out frees the panel but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as cancelled. Once the image is back, the button stops offering the cancel: the money is spent, so the result is placed.
 

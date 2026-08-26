@@ -10,6 +10,7 @@
   },
   "requiredPermissions": {
     "localFileSystem": "request",
+    "clipboard": "readAndWrite",
     "network": {
       "domains": [
         "https://generativelanguage.googleapis.com",

@@ -60,7 +60,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        have no variant to raise. #generate is left out on purpose: its label sits
        on the blue CTA fill and is already white in every theme. */
     #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
-    #fitSelection, #fitNearest, #includeSelection { color: rgb(255, 255, 255); }
+    #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
+    #loadArchivedSettings { color: rgb(255, 255, 255); }
     .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
@@ -84,6 +85,15 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                      color: rgb(255, 255, 255); font-size: 10px; cursor: pointer;
                      display: flex; align-items: center; justify-content: center; }
     .thumb .remove:hover { background: rgb(0, 0, 0); }
+    #archivePanel { display: none; }
+    #archiveLayerName { margin: 5px 0 2px; overflow-wrap: break-word; }
+    #archivedPrompt { min-height: 54px; max-height: 180px; overflow-y: auto;
+                      white-space: pre-wrap; overflow-wrap: break-word;
+                      margin-top: 6px; padding: 7px 8px; border-radius: 4px;
+                      background: rgba(128,128,128,0.12);
+                      border: 1px solid rgba(128,128,128,0.28); }
+    #archiveDetails, #archiveSource { margin-top: 5px; overflow-wrap: break-word; }
+    #loadArchivedSettings { margin-left: 7px; }
     /* The lines that close each section explain the controls above them rather
        than saying anything new, so they sit well below the labels — 30% of the
        way from a medium gray into the panel behind them, which lands at ~3.3:1
@@ -166,7 +176,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       .label { color: rgb(61, 61, 61); }
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
-      #fitSelection, #fitNearest, #includeSelection { color: rgb(0, 0, 0); }
+      #fitSelection, #fitNearest, #includeSelection, #copyArchivedPrompt,
+      #loadArchivedSettings { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
     }
   </style>
@@ -230,6 +241,19 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     </div>
 
     <sp-divider size="s"></sp-divider>
+
+    <div id="archivePanel">
+      <h3>Archived Generation</h3>
+      <div id="archiveLayerName" class="label"></div>
+      <div id="archivedPrompt"></div>
+      <div id="archiveDetails" class="label"></div>
+      <div id="archiveSource" class="muted"></div>
+      <div class="row">
+        <sp-button id="copyArchivedPrompt" variant="primary" size="s">Copy Prompt</sp-button>
+        <sp-button id="loadArchivedSettings" variant="primary" size="s">Load Settings</sp-button>
+      </div>
+      <sp-divider size="s"></sp-divider>
+    </div>
 
     <h3>Reference Images</h3>
     <div class="row spread">

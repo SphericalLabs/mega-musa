@@ -38,6 +38,7 @@ interface PhotoshopModule {
   app: any;
   action: {
     batchPlay(commands: any[], options?: any): Promise<any[]>;
+    addNotificationListener(events: string[], callback: (eventName: string, descriptor: any) => void): Promise<void>;
   };
   core: {
     executeAsModal(

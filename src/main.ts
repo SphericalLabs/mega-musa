@@ -65,8 +65,10 @@ import {
   saveSetting,
 } from "./storage";
 import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
+import { GenerationArchive, readLayerGenerationArchive } from "./archive";
 
 const { entrypoints } = require("uxp");
+const { action: photoshopAction } = require("photoshop");
 
 const MAX_REFS = 10;
 const PICKERS = ["model", "resolution", "quality", "selRatio"];
@@ -93,6 +95,9 @@ let cancelRequested = false;
 // await at once. Cleared again the moment the image is back, because from there
 // on the money is spent and cancelling would only throw it away.
 let cancelInFlight: (() => void) | null = null;
+let selectedArchive: { archive: GenerationArchive; layerName: string } | null = null;
+let archiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let archiveRefreshSequence = 0;
 
 function $(id: string): any {
   return document.getElementById(id);
@@ -490,6 +495,174 @@ function resultLayerName(prompt: string, details: string[]): string {
   // its first few words would lose more than ending mid-word does.
   const cut = lastSpace > room * 0.6 ? clipped.slice(0, lastSpace) : clipped;
   return `${cut}…${suffix}`;
+}
+
+function hideArchivedGeneration(): void {
+  selectedArchive = null;
+  const panel = $("archivePanel");
+  if (panel) panel.style.display = "none";
+}
+
+function archiveDateLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return date.toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function renderArchivedGeneration(archive: GenerationArchive, layerName: string): void {
+  selectedArchive = { archive, layerName };
+  const panel = $("archivePanel");
+  if (panel) panel.style.display = "block";
+  $("archiveLayerName").textContent = layerName;
+  $("archivedPrompt").textContent = archive.prompt;
+
+  const details = [archive.provider, archive.modelLabel || archive.model, archive.ratio];
+  if (archive.resolution) {
+    details.push(archive.resolution === "auto" ? "Default resolution" : resolutionLabel(archive.resolution));
+  }
+  if (archive.quality) {
+    const requestedQuality = imageQualityLabel(normalizeImageQuality(archive.quality));
+    const resolvedQuality = archive.resolvedQuality
+      ? imageQualityLabel(normalizeImageQuality(archive.resolvedQuality))
+      : "";
+    details.push(
+      archive.quality === "auto" && resolvedQuality && resolvedQuality !== requestedQuality
+        ? `${requestedQuality} quality (resolved ${resolvedQuality})`
+        : `${requestedQuality} quality`
+    );
+  }
+  $("archiveDetails").textContent = details.join(" · ");
+
+  const sourceParts = [archive.includeSelection ? "Canvas input included" : "Canvas input excluded"];
+  if (archive.referenceNames.length) {
+    sourceParts.push(`References: ${archive.referenceNames.join(", ")}`);
+  } else {
+    sourceParts.push("No reference images");
+  }
+  sourceParts.push(`placed at ${archive.outputWidth}×${archive.outputHeight}`);
+  sourceParts.push(`Generated ${archiveDateLabel(archive.createdAt)}`);
+  $("archiveSource").textContent = sourceParts.join(" · ");
+}
+
+async function refreshArchivedGeneration(): Promise<void> {
+  const sequence = ++archiveRefreshSequence;
+  let doc: any;
+  try {
+    doc = getActiveDoc();
+  } catch {
+    if (sequence === archiveRefreshSequence) hideArchivedGeneration();
+    return;
+  }
+
+  const activeLayers: any[] = Array.from(doc.activeLayers || []);
+  if (activeLayers.length !== 1) {
+    if (sequence === archiveRefreshSequence) hideArchivedGeneration();
+    return;
+  }
+  const layer = activeLayers[0];
+  const docId = doc.id;
+  const layerId = layer.id;
+  const archive = await readLayerGenerationArchive(docId, layerId);
+  if (sequence !== archiveRefreshSequence) return;
+
+  // A document or layer may have changed while batchPlay was reading. Never
+  // render the old layer's metadata under a newer selection.
+  try {
+    const currentDoc = getActiveDoc();
+    const currentLayers: any[] = Array.from(currentDoc.activeLayers || []);
+    if (currentDoc.id !== docId || currentLayers.length !== 1 || currentLayers[0].id !== layerId) {
+      scheduleArchivedGenerationRefresh();
+      return;
+    }
+  } catch {
+    hideArchivedGeneration();
+    return;
+  }
+
+  if (archive) renderArchivedGeneration(archive, layer.name || "Generated layer");
+  else hideArchivedGeneration();
+}
+
+function scheduleArchivedGenerationRefresh(): void {
+  if (archiveRefreshTimer !== null) clearTimeout(archiveRefreshTimer);
+  archiveRefreshTimer = setTimeout(() => {
+    archiveRefreshTimer = null;
+    void refreshArchivedGeneration();
+  }, 60);
+}
+
+async function setupArchivedGenerationTracking(): Promise<void> {
+  try {
+    await photoshopAction.addNotificationListener(
+      ["select", "make", "delete", "open", "close"],
+      () => scheduleArchivedGenerationRefresh()
+    );
+  } catch (err: any) {
+    // Manual refresh on panel show and after generation still works if an older
+    // host cannot register notifications.
+    console.log("[Mega Musa] could not watch layer selection:", err?.message || err);
+  }
+  scheduleArchivedGenerationRefresh();
+}
+
+async function onCopyArchivedPrompt(): Promise<void> {
+  if (!selectedArchive) return;
+  try {
+    const clipboard: any = (navigator as any).clipboard;
+    if (typeof clipboard?.writeText === "function") {
+      await clipboard.writeText(selectedArchive.archive.prompt);
+    } else if (typeof clipboard?.setContent === "function") {
+      await clipboard.setContent({ "text/plain": selectedArchive.archive.prompt });
+    } else {
+      throw new Error("Clipboard access is unavailable in this Photoshop version.");
+    }
+    setStatus("Archived prompt copied to the clipboard.", "ok");
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    setStatus(
+      /manifest version|clipboard access not supported/i.test(message)
+        ? "Photoshop is still using Mega Musa’s old manifest. Remove the plugin from UXP Developer Tool, add dist/manifest.json again, then reload it."
+        : "Could not copy the archived prompt: " + message,
+      "error"
+    );
+  }
+}
+
+function onLoadArchivedSettings(): void {
+  if (!selectedArchive) return;
+  const archive = selectedArchive.archive;
+  const promptField = $("prompt");
+  setValueSafe(promptField, archive.prompt);
+  try {
+    promptField?.dispatchEvent(new Event("input"));
+  } catch {
+    /* prompt resizing is cosmetic */
+  }
+  setCheckedSafe($("includeSelection"), archive.includeSelection);
+  saveSetting("includeSelection", archive.includeSelection ? "1" : "0");
+
+  const messages: string[] = [];
+  if (hasOption($("model"), archive.model)) {
+    setPickerSafe($("model"), archive.model);
+    saveSetting("model", archive.model);
+    const capabilityNote = applyModelCapabilities(
+      archive.model,
+      archive.ratio,
+      archive.resolution,
+      archive.quality
+    );
+    if (capabilityNote) messages.push(capabilityNote);
+  } else {
+    messages.push(`${archive.modelLabel || archive.model} is not available in this version, so the current model was kept.`);
+  }
+  if (archive.referenceNames.length) {
+    messages.push("Reference images were not loaded because Stage 1 stores their names, not their pixels.");
+  }
+  setStatus(["Archived prompt and available settings loaded.", ...messages].join(" "), "ok");
 }
 
 // UXP's DOM does not support setting innerHTML — clear by removing children.
@@ -1092,6 +1265,9 @@ async function onGenerate(): Promise<void> {
   // images either, that makes this a plain text-to-image generation which is
   // still placed into the selection's area and shape.
   const includeSelection = isChecked($("includeSelection"));
+  // Freeze the reference set for this run so the request and its archive still
+  // agree if the user edits the thumbnail list while the provider is working.
+  const generationRefs = refs.slice();
 
   // Once the request is out the provider bills it whatever happens next, so the
   // estimate is frozen at that moment for the cancel path to charge.
@@ -1219,8 +1395,8 @@ async function onGenerate(): Promise<void> {
     }
     if (!includeSelection) {
       notes.push(
-        refs.length
-          ? `“Include Photoshop selection” is off — generating from the prompt and ${refs.length} reference image${refs.length === 1 ? "" : "s"} only.`
+        generationRefs.length
+          ? `“Include Photoshop selection” is off — generating from the prompt and ${generationRefs.length} reference image${generationRefs.length === 1 ? "" : "s"} only.`
           : "“Include Photoshop selection” is off and there are no references — plain text-to-image from the prompt."
       );
     }
@@ -1246,16 +1422,16 @@ async function onGenerate(): Promise<void> {
     }
 
     const requestReferences: RequestReference[] = [];
-    for (let index = 0; index < refs.length; index += 1) {
+    for (let index = 0; index < generationRefs.length; index += 1) {
       throwIfCancelled();
-      setStatus(`Preparing reference image ${index + 1}/${refs.length}…`);
-      requestReferences.push(await resizeReference(refs[index], requestMaxEdge));
+      setStatus(`Preparing reference image ${index + 1}/${generationRefs.length}…`);
+      requestReferences.push(await resizeReference(generationRefs[index], requestMaxEdge));
     }
 
     const sizeLabel = frame.geminiAspect ?? frame.openaiSize ?? "auto";
     const modeLabel = includeSelection
       ? "editing the canvas"
-      : refs.length
+      : generationRefs.length
         ? "from references"
         : "text-to-image";
     const qualitySuffix = isOpenAIModel(model) ? `, ${imageQualityLabel(quality)} quality` : "";
@@ -1343,27 +1519,49 @@ async function onGenerate(): Promise<void> {
     const resolutionDetail = frame.openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
     if (resolutionDetail) layerDetails.push(resolutionDetail);
     if (resolvedQuality) layerDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
-    const clip = await placeResult(
+    const archive: GenerationArchive = {
+      v: 1,
+      prompt,
+      provider,
+      model,
+      modelLabel: spec.label,
+      resolution,
+      ratio: ratioLabel,
+      quality,
+      resolvedQuality,
+      includeSelection,
+      referenceNames: generationRefs.map((reference) => reference.name),
+      requestedSize: exactOutputSize || outputFrameNote,
+      outputWidth: cropW,
+      outputHeight: cropH,
+      createdAt: new Date().toISOString(),
+    };
+    const placement = await placeResult(
       docId,
       region,
       rgba,
       cropW,
       cropH,
       resultLayerName(prompt, layerDetails),
-      selectionSnapshot
+      selectionSnapshot,
+      archive
     );
+    scheduleArchivedGenerationRefresh();
 
     const doneMessage = isRegion
-      ? clip === "alpha"
+      ? placement.clip === "alpha"
         ? "Done — result clipped to the selection captured at the start (new layer with baked transparency)."
         : "Done — result clipped to your selection (new layer with editable mask)."
       : activeArtboard
         ? `Done — result added to active artboard “${activeArtboard.name}” as a new layer.`
         : "Done — full-image result added as a new layer.";
-    setStatus(
-      usageDetails.length ? `${doneMessage} (${usageDetails.join(", ")}).` : doneMessage,
-      "ok"
-    );
+    const archivedMessage = placement.archiveSaved
+      ? ""
+      : " Prompt archive could not be saved; see the console.";
+    const completedMessage = usageDetails.length
+      ? `${doneMessage} (${usageDetails.join(", ")}).${archivedMessage}`
+      : `${doneMessage}${archivedMessage}`;
+    setStatus(completedMessage, "ok");
   } catch (err: any) {
     if (isCancelledError(err)) {
       // Stopping the wait does not stop the provider: once the request is out it
@@ -1688,7 +1886,9 @@ function persistSettingsHooks(): void {
 async function init(): Promise<void> {
   try {
     // Register the panel entrypoint declared in manifest.json.
-    entrypoints.setup({ panels: { nbpEditorPanel: { show() {} } } });
+    entrypoints.setup({
+      panels: { nbpEditorPanel: { show() { scheduleArchivedGenerationRefresh(); } } },
+    });
 
     $("saveGeminiKey").addEventListener("click", async () => {
       const apiKey = ($("geminiApiKey").value || "").trim();
@@ -1716,6 +1916,9 @@ async function init(): Promise<void> {
     });
     setupDropWebview();
     $("generate").addEventListener("click", onGenerateClick);
+    $("copyArchivedPrompt").addEventListener("click", onCopyArchivedPrompt);
+    $("loadArchivedSettings").addEventListener("click", onLoadArchivedSettings);
+    await setupArchivedGenerationTracking();
     $("documentBlockerClose").addEventListener("click", () => {
       $("documentBlocker").close();
     });
