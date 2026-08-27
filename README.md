@@ -42,6 +42,14 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 3. Enter a prompt. Add references if needed.
 4. Choose the model and settings, then click **Generate**.
 
+### Prompt expansion
+
+Brace groups add multiple concrete prompts to the existing generation queue. Alternatives expand recursively and combine as a Cartesian product: `a {red, blue} {balloon, car}` produces four prompts.
+
+A final positive integer repeats every concrete result before it. `{a photo of a {banana, strawberry}, 3}` queues three banana prompts followed by three strawberry prompts. A click can expand to at most 10 images; a larger or malformed expression reports an error and queues nothing.
+
+Use `\{`, `\}`, `\,` and `\\` for literal braces, commas and backslashes. Commas outside brace groups are already literal. Queue rows and generated layer archives store the concrete expanded prompt, while the prompt field keeps the original template.
+
 To reuse a generation later, select its result layer in Photoshop's Layers panel. **Recall Generations** appears in Mega Musa without changing the current controls. **Copy Prompt** copies the complete prompt. **Load Settings** explicitly restores the prompt, model, supported controls and embedded reference images. Mega Musa stores each unique reference once as an embedded Smart Object in a locked, eye-off `Mega Musa Reference Archive` group, deduplicated by a SHA-256 hash of its original file bytes. Result layers point to those assets in their per-layer metadata. If an asset was removed or changed, the remaining settings still load and the panel reports the missing reference. Older Stage 1 records remain readable but contain reference names only.
 
 **Generate** stays blue and adds a new row to the generation queue. Each row shows its frozen prompt, model, quality, reference count and current state, with its own **Cancel** button. Completed and canceled rows disappear; failed rows remain until dismissed. Canceling before the request is sent costs nothing. Canceling after it has gone out frees that queue slot but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as canceled. Once an image is back, that row finishes placing it because the money is already spent. Every arriving result is placed at the top of the document, artboard or group captured when its job was added.

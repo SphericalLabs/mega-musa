@@ -76,6 +76,7 @@ import {
 import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
 import { GenerationArchive, readLayerGenerationArchive } from "./archive";
 import { restoreReferenceAssets } from "./reference-assets";
+import { expandPromptTemplate, MAX_PROMPT_EXPANSIONS } from "./prompt-expansion";
 
 const { entrypoints } = require("uxp");
 const { action: photoshopAction } = require("photoshop");
@@ -1948,7 +1949,7 @@ async function onGenerate(): Promise<void> {
   if (describing) return;
   setStatus("Starting…"); // immediate feedback that the click was received
 
-  const prompt = ($("prompt").value || "").trim();
+  const promptTemplate = ($("prompt").value || "").trim();
   const model = $("model").value || "gemini-3-pro-image";
   const provider = modelProviderLabel(model);
   const quality: ImageQuality = isOpenAIModel(model)
@@ -1961,8 +1962,15 @@ async function onGenerate(): Promise<void> {
     setStatus(`Enter your ${provider} API key and press Save.`, "error");
     return;
   }
-  if (!prompt) {
+  if (!promptTemplate) {
     setStatus("Enter a prompt describing the edit.", "error");
+    return;
+  }
+  let expandedPrompts: string[];
+  try {
+    expandedPrompts = expandPromptTemplate(promptTemplate, MAX_PROMPT_EXPANSIONS);
+  } catch (err: any) {
+    setStatus("Prompt expansion error: " + (err?.message || String(err)), "error");
     return;
   }
 
@@ -1995,9 +2003,9 @@ async function onGenerate(): Promise<void> {
   const activeLayers: any[] = Array.from(doc.activeLayers || []);
   const anchorId = Number(activeLayers[0]?.id);
   const anchorLayerId = Number.isFinite(anchorId) ? anchorId : null;
-  const jobId = ++generationJobSequence;
-  latestGenerationJobId = jobId;
-  pendingGenerationJobIds.add(jobId);
+  const jobIds = expandedPrompts.map(() => ++generationJobSequence);
+  latestGenerationJobId = jobIds[jobIds.length - 1];
+  for (const jobId of jobIds) pendingGenerationJobIds.add(jobId);
   let activeArtboard: ActiveArtboard | null;
   let rawSelection: Bounds | null;
   try {
@@ -2006,13 +2014,13 @@ async function onGenerate(): Promise<void> {
       getSelectionBounds(Number(doc.id)),
     ]);
   } catch (err: any) {
-    pendingGenerationJobIds.delete(jobId);
+    for (const jobId of jobIds) pendingGenerationJobIds.delete(jobId);
     pumpGenerationSlots();
     setStatus("Error: " + (err?.message || String(err)), "error");
     return;
   }
-  const job: GenerationJob = {
-    id: jobId,
+  const jobs: GenerationJob[] = expandedPrompts.map((prompt, index) => ({
+    id: jobIds[index],
     prompt,
     model,
     provider,
@@ -2038,13 +2046,17 @@ async function onGenerate(): Promise<void> {
     slotAcquired: false,
     requestSent: false,
     sentCharge: null,
-  };
-  pendingGenerationJobIds.delete(jobId);
-  generationJobs.push(job);
+  }));
+  for (const jobId of jobIds) pendingGenerationJobIds.delete(jobId);
+  generationJobs.push(...jobs);
   setNote("");
   renderGenerationQueue();
-  setStatus(`Generation ${job.id} added to the queue.`);
-  void runGenerationJob(job);
+  setStatus(
+    jobs.length === 1
+      ? `Generation ${jobs[0].id} added to the queue.`
+      : `${jobs.length} expanded generations added to the queue.`
+  );
+  for (const job of jobs) void runGenerationJob(job);
 }
 
 async function runGenerationJob(job: GenerationJob): Promise<void> {
