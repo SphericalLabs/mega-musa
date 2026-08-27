@@ -233,16 +233,35 @@ async function getOrCreateAssetPool(doc: any): Promise<any> {
 }
 
 function setPoolEditable(group: any, editable: boolean): void {
-  try {
-    group.allLocked = !editable;
-  } catch (error: any) {
-    console.log("[Mega Musa] could not change the asset group lock:", error?.message || error);
+  if (editable) {
+    try {
+      group.allLocked = false;
+    } catch (error: any) {
+      console.log("[Mega Musa] could not unlock the asset group:", error?.message || error);
+    }
   }
+
+  // The group and every archived reference keep their own eye disabled. Hiding
+  // only the parent protects the composite but leaves newly placed children
+  // visibly enabled when the archive group is expanded.
+  for (const layer of descendantLayers(group)) {
+    try {
+      layer.visible = false;
+    } catch (error: any) {
+      console.log("[Mega Musa] could not hide an archived reference:", error?.message || error);
+    }
+  }
+  try {
+    group.visible = false;
+  } catch (error: any) {
+    console.log("[Mega Musa] could not hide the asset group:", error?.message || error);
+  }
+
   if (!editable) {
     try {
-      group.visible = false;
+      group.allLocked = true;
     } catch (error: any) {
-      console.log("[Mega Musa] could not hide the asset group:", error?.message || error);
+      console.log("[Mega Musa] could not lock the asset group:", error?.message || error);
     }
   }
 }
@@ -322,6 +341,7 @@ export async function archiveReferenceAssetsInActiveDocument(
         const hash = await hashReferenceBytes(bytes);
         const match = existing.get(hash);
         if (match) {
+          match.layer.visible = false;
           archived.push(pointerFor(match.metadata, match.layer.id, reference.name));
           continue;
         }
@@ -365,6 +385,7 @@ export async function archiveReferenceAssetsInActiveDocument(
         if (!placedLayer || placedLayer.id === group.id) {
           throw new Error("Photoshop did not return the embedded reference layer.");
         }
+        placedLayer.visible = false;
         placedLayer.name = assetLayerName(hash, reference.name);
         if (placedLayer.parent?.id !== group.id) {
           placedLayer.move(group, constants.ElementPlacement.PLACEINSIDE);
