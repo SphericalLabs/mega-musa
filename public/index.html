@@ -92,6 +92,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     .section-toggle[aria-expanded="false"] .section-chevron-expanded { display: none; }
     .section-toggle[aria-expanded="false"] .section-chevron-collapsed { display: flex; }
     .collapsible-section.collapsed .section-content { display: none; }
+    .section-content { margin: 0 2px 0 4px;  }
     .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
     .grow { flex: 1; }
@@ -452,18 +453,20 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <sp-divider size="s"></sp-divider>
 
-    <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
-    <div class="row">
-      <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
-    </div>
-    <div id="status">Loading…</div>
-    <div id="note"></div>
-    <div id="generationQueue">
-      <div id="generationQueueHeader" class="row spread">
-        <span id="generationQueueSummary">Generation Queue</span>
-        <sp-button id="cancelAllGenerations" variant="warning" size="s">Cancel All</sp-button>
+    <div class="section-content">
+      <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
+      <div class="row">
+        <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
       </div>
-      <div id="generationQueueList"></div>
+      <div id="status">Loading…</div>
+      <div id="note"></div>
+      <div id="generationQueue">
+        <div id="generationQueueHeader" class="row spread">
+          <span id="generationQueueSummary">Generation Queue</span>
+          <sp-button id="cancelAllGenerations" variant="warning" size="s">Cancel All</sp-button>
+        </div>
+        <div id="generationQueueList"></div>
+      </div>
     </div>
   </div>
 
