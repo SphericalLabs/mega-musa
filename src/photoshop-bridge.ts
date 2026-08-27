@@ -940,6 +940,7 @@ export async function placeResult(
   layerName: string,
   selection: SelectionSnapshot | null,
   maskOnlyWhenOverflow: boolean,
+  placeAsSmartObject: boolean,
   archive: GenerationArchive,
   references: RefImage[]
 ): Promise<PlacementResult> {
@@ -950,48 +951,53 @@ export async function placeResult(
       const anchorLayerId = anchorLayer?.id;
       let resultLayer: any;
       let clip: PlacementClip = "none";
-      let smartObject = true;
+      let smartObject = placeAsSmartObject;
       let incompleteSmartObject: any | null = null;
 
-      try {
-        incompleteSmartObject = await createNativeSmartObject(
-          document,
-          anchorLayer,
-          rgba,
-          width,
-          height,
-          layerName
-        );
-        const transformedBounds = await coverTransformSmartObject(incompleteSmartObject, bounds);
-        await bringResultToFront(incompleteSmartObject);
+      if (placeAsSmartObject) {
+        try {
+          incompleteSmartObject = await createNativeSmartObject(
+            document,
+            anchorLayer,
+            rgba,
+            width,
+            height,
+            layerName
+          );
+          const transformedBounds = await coverTransformSmartObject(incompleteSmartObject, bounds);
+          await bringResultToFront(incompleteSmartObject);
 
-        const maskRequired =
-          !!selection && (!maskOnlyWhenOverflow || extendsPastTarget(transformedBounds, bounds));
-        if (maskRequired) {
-          if (!(await liveSelectionMatches(docId, selection))) {
-            throw new Error("The selection changed before the linked Smart Object mask could be created.");
+          const maskRequired =
+            !!selection && (!maskOnlyWhenOverflow || extendsPastTarget(transformedBounds, bounds));
+          if (maskRequired) {
+            if (!(await liveSelectionMatches(docId, selection))) {
+              throw new Error("The selection changed before the linked Smart Object mask could be created.");
+            }
+            await selectLayerById(incompleteSmartObject.id);
+            await makeSelectionMask();
+            clip = "mask";
+            await restoreSelectionFromMask();
           }
-          await selectLayerById(incompleteSmartObject.id);
-          await makeSelectionMask();
-          clip = "mask";
-          await restoreSelectionFromMask();
-        }
-        resultLayer = incompleteSmartObject;
-      } catch (error: any) {
-        smartObject = false;
-        console.log("[Mega Musa] Smart Object placement failed; using raster fallback:", error?.message || error);
-        if (incompleteSmartObject) {
-          try {
-            await deleteResultLayer(incompleteSmartObject.id);
-          } catch (cleanupError: any) {
-            console.log("[Mega Musa] could not remove the incomplete Smart Object:", cleanupError?.message || cleanupError);
+          resultLayer = incompleteSmartObject;
+        } catch (error: any) {
+          smartObject = false;
+          console.log("[Mega Musa] Smart Object placement failed; using raster fallback:", error?.message || error);
+          if (incompleteSmartObject) {
             try {
-              incompleteSmartObject.visible = false;
-            } catch {
-              /* the raster fallback remains the visible paid result */
+              await deleteResultLayer(incompleteSmartObject.id);
+            } catch (cleanupError: any) {
+              console.log("[Mega Musa] could not remove the incomplete Smart Object:", cleanupError?.message || cleanupError);
+              try {
+                incompleteSmartObject.visible = false;
+              } catch {
+                /* the raster fallback remains the visible paid result */
+              }
             }
           }
         }
+      }
+
+      if (!smartObject) {
         if (anchorLayerId) await selectLayerById(anchorLayerId);
         // A raster layer is already exactly `bounds`, so a rectangular overflow
         // mask is unnecessary. Irregular/feathered original selections still use

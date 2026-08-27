@@ -111,7 +111,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        on the blue CTA fill and is already white in every theme. */
     #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
     #describe, #undoDescription,
-    #fitSelection, #fitNearest, #includeSelection, #copyRecallPrompt,
+    #fitSelection, #fitNearest, #includeSelection, #placeAsSmartObject, #copyRecallPrompt,
     #loadRecallSettings { color: rgb(255, 255, 255); }
     .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
@@ -240,7 +240,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       .muted, #note { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
       #describe, #undoDescription,
-      #fitSelection, #fitNearest, #includeSelection, #copyRecallPrompt,
+      #fitSelection, #fitNearest, #includeSelection, #placeAsSmartObject, #copyRecallPrompt,
       #loadRecallSettings { color: rgb(0, 0, 0); }
       #themeProbe { color: rgb(0, 0, 0); }
     }
@@ -434,6 +434,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <sp-divider size="s"></sp-divider>
 
     <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
+    <div class="row">
+      <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
+    </div>
     <div id="status">Loading…</div>
     <div id="note"></div>
   </div>

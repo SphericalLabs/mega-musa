@@ -61,6 +61,7 @@ export interface GenerationArchive {
   quality: string;
   resolvedQuality?: string;
   includeSelection: boolean;
+  placeAsSmartObject?: boolean;
   referenceNames: string[];
   requestedSize: string;
   outputWidth: number;
@@ -93,6 +94,7 @@ function isGenerationArchive(value: any): value is GenerationArchive {
     typeof value.ratio === "string" &&
     typeof value.quality === "string" &&
     typeof value.includeSelection === "boolean" &&
+    (value.placeAsSmartObject === undefined || typeof value.placeAsSmartObject === "boolean") &&
     Array.isArray(value.referenceNames) &&
     value.referenceNames.every((name: unknown) => typeof name === "string") &&
     typeof value.requestedSize === "string" &&

@@ -937,6 +937,10 @@ async function onLoadRecallSettings(): Promise<void> {
   }
   setCheckedSafe($("includeSelection"), generation.includeSelection);
   saveSetting("includeSelection", generation.includeSelection ? "1" : "0");
+  if (generation.placeAsSmartObject !== undefined) {
+    setCheckedSafe($("placeAsSmartObject"), generation.placeAsSmartObject);
+    saveSetting("placeAsSmartObject", generation.placeAsSmartObject ? "1" : "0");
+  }
   updateDescriptionControls();
   scheduleDescriptionInputRefresh();
 
@@ -1753,6 +1757,7 @@ async function onGenerate(): Promise<void> {
   // images either, that makes this a plain text-to-image generation which is
   // still placed into the selection's area and shape.
   const includeSelection = isChecked($("includeSelection"));
+  const placeAsSmartObject = isChecked($("placeAsSmartObject"));
   // Freeze the reference set for this run so the request and its archive still
   // agree if the user edits the thumbnail list while the provider is working.
   const generationRefs = refs.slice();
@@ -2011,6 +2016,7 @@ async function onGenerate(): Promise<void> {
       quality,
       resolvedQuality,
       includeSelection,
+      placeAsSmartObject,
       referenceNames: generationRefs.map((reference) => reference.name),
       requestedSize: exactOutputSize || outputFrameNote,
       outputWidth: cropW,
@@ -2026,6 +2032,7 @@ async function onGenerate(): Promise<void> {
       resultLayerName(prompt, layerDetails),
       selectionSnapshot,
       !isRegion,
+      placeAsSmartObject,
       archive,
       generationRefs
     );
@@ -2052,7 +2059,7 @@ async function onGenerate(): Promise<void> {
           ? "Done — native full-image result embedded as a Smart Object."
           : "Done — full-image result added as a raster layer.";
     const archiveMessages: string[] = [];
-    if (!placement.smartObject) {
+    if (placeAsSmartObject && !placement.smartObject) {
       archiveMessages.push("Smart Object placement failed; the paid result was preserved as a raster layer.");
     }
     if (!placement.archiveSaved) archiveMessages.push("Prompt archive could not be saved; see the console.");
@@ -2382,6 +2389,7 @@ async function restoreSettings(): Promise<void> {
   );
   // Defaults to on — only an explicit "0" from a previous session turns it off.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
+  setCheckedSafe($("placeAsSmartObject"), loadSetting("placeAsSmartObject", "1") !== "0");
 }
 
 function persistSettingsHooks(): void {
@@ -2407,6 +2415,9 @@ function persistSettingsHooks(): void {
     updateDescriptionControls();
     scheduleDescriptionInputRefresh();
   });
+  $("placeAsSmartObject")?.addEventListener("change", () =>
+    saveSetting("placeAsSmartObject", isChecked($("placeAsSmartObject")) ? "1" : "0")
+  );
   $("describeModel")?.addEventListener("change", () =>
     saveSetting("describeModel", $("describeModel").value || DEFAULT_OPENAI_DESCRIPTION_MODEL)
   );
