@@ -192,7 +192,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse14 { background: rgba(128,128,128,0.320); }
     #note { margin-top: 6px; }
     #note:empty { display: none; }
-    #generationQueue { display: none; margin-top: 8px; }
+    #generationQueue { display: none; margin-top: 16px; }
     #generationQueueHeader { min-height: 24px; margin: 0; }
     #generationQueueSummary { font-size: 11px; font-weight: 600; }
     #generationQueueList { margin-top: 2px; }
@@ -452,6 +452,11 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <sp-divider size="s"></sp-divider>
 
     <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
+    <div class="row">
+      <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="note"></div>
     <div id="generationQueue">
       <div id="generationQueueHeader" class="row spread">
         <span id="generationQueueSummary">Generation Queue</span>
@@ -459,11 +464,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       </div>
       <div id="generationQueueList"></div>
     </div>
-    <div class="row">
-      <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
-    </div>
-    <div id="status">Loading…</div>
-    <div id="note"></div>
   </div>
 
   <dialog id="noticeDialog" class="notice-dialog" aria-labelledby="noticeDialogTitle">
