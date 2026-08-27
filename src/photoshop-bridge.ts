@@ -1074,8 +1074,13 @@ export async function placeResult(
   archive: GenerationArchive,
   references: RefImage[]
 ): Promise<PlacementResult> {
+  const historyName = "Mega Musa: place result";
   return await core.executeAsModal(
-    () => withActiveDocument(docId, async () => {
+    async (executionContext) => withActiveDocument(docId, async () => {
+      const historySuspension = await executionContext.hostControl.suspendHistory({
+        documentID: docId,
+        name: historyName,
+      });
       const document = app.activeDocument;
       const anchorLayer = document.activeLayers?.[0] || null;
       const anchorLayerId = anchorLayer?.id;
@@ -1160,9 +1165,11 @@ export async function placeResult(
         archiveSaved = false;
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
-      return { clip, layerId, smartObject, archiveSaved, referenceArchiveFailures };
+      const placement = { clip, layerId, smartObject, archiveSaved, referenceArchiveFailures };
+      await executionContext.hostControl.resumeHistory(historySuspension);
+      return placement;
     }),
-    { commandName: "Mega Musa: place result" }
+    { commandName: historyName }
   );
 }
 

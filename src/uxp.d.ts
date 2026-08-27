@@ -34,6 +34,18 @@ interface PhotoshopSelectionData {
   sourceBounds?: any;
 }
 
+interface PhotoshopHistorySuspension {
+  historySuspensionID: number;
+  finalName?: string;
+}
+
+interface PhotoshopExecutionContext {
+  hostControl: {
+    suspendHistory(options: { documentID: number; name: string }): Promise<PhotoshopHistorySuspension>;
+    resumeHistory(suspension: PhotoshopHistorySuspension, commit?: boolean): Promise<void>;
+  };
+}
+
 interface PhotoshopModule {
   app: any;
   constants: any;
@@ -43,7 +55,7 @@ interface PhotoshopModule {
   };
   core: {
     executeAsModal(
-      fn: (executionContext: any) => Promise<any>,
+      fn: (executionContext: PhotoshopExecutionContext) => Promise<any>,
       options?: { commandName?: string; interactive?: boolean }
     ): Promise<any>;
   };
