@@ -124,13 +124,14 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
     parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.base64 } });
   }
 
-  const body: any = { contents: [{ role: "user", parts }] };
+  const generationConfig: any = { responseModalities: ["IMAGE"] };
   if (opts.aspectRatio || opts.imageSize) {
     const imageConfig: any = {};
     if (opts.aspectRatio) imageConfig.aspectRatio = opts.aspectRatio;
     if (opts.imageSize) imageConfig.imageSize = opts.imageSize;
-    body.generationConfig = { imageConfig };
+    generationConfig.imageConfig = imageConfig;
   }
+  const body: any = { contents: [{ role: "user", parts }], generationConfig };
 
   // Build the request init without a `signal` key unless one is provided —
   // UXP's fetch throws on `signal: undefined` (it calls addEventListener on it).

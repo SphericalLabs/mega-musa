@@ -413,7 +413,7 @@ function setBusy(on: boolean): void {
   applyStatusClass();
 }
 
-type ModalNoticeKind = "error" | "blocker" | "warning";
+type ModalNoticeKind = "blocker" | "warning";
 type ModalNoticeAction = "primary" | "cancel";
 
 interface ModalNotice {
@@ -426,10 +426,8 @@ interface ModalNotice {
 }
 
 let modalNoticeOpen = false;
-let modalNoticeKind: ModalNoticeKind | null = null;
 let modalNoticeAction: ModalNoticeAction = "cancel";
 let modalNoticeListenersReady = false;
-let pendingErrorNotice: string | null = null;
 
 function setupModalNoticeListeners(): void {
   if (modalNoticeListenersReady) return;
@@ -456,18 +454,7 @@ async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> 
     throw new Error("The Mega Musa message dialog could not be opened.");
   }
 
-  // A second error should never stack another modal. Replace an open error's
-  // copy, or hold the latest error until a compatibility decision is closed.
   if (modalNoticeOpen) {
-    if (notice.kind === "error") {
-      if (modalNoticeKind === "error") {
-        $("noticeDialogMessage").textContent = notice.message;
-        $("noticeDialogInstruction").textContent = "";
-      } else {
-        pendingErrorNotice = notice.message;
-      }
-      return "cancel";
-    }
     throw new Error("Another Mega Musa message is already open.");
   }
 
@@ -484,35 +471,18 @@ async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> 
   primary.style.marginLeft = notice.cancelLabel ? "8px" : "0";
 
   modalNoticeOpen = true;
-  modalNoticeKind = notice.kind;
   modalNoticeAction = "cancel";
   try {
     await dialog.showModal({ lockDocumentFocus: true });
     return modalNoticeAction;
   } catch (err: any) {
-    // Escape and the window close button mean Close for notices and Cancel for
+    // Escape and the window close button mean Close for blockers and Cancel for
     // warnings. Neither should create another user-facing error.
     console.log(`[Mega Musa] ${notice.kind} dialog closed:`, err?.message || String(err));
     return "cancel";
   } finally {
     modalNoticeOpen = false;
-    modalNoticeKind = null;
-    const pending = pendingErrorNotice;
-    pendingErrorNotice = null;
-    if (pending) setTimeout(() => showErrorNotice(pending), 0);
   }
-}
-
-function showErrorNotice(message: string): void {
-  void showModalNotice({
-    kind: "error",
-    title: "Mega Musa error",
-    message,
-    primaryLabel: "Close",
-  }).catch((err: any) => {
-    // The red status remains visible if UXP cannot open the modal.
-    console.log("[Mega Musa] error dialog failed:", err?.message || String(err));
-  });
 }
 
 function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): void {
@@ -520,7 +490,6 @@ function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): voi
   if (el) el.textContent = message;
   statusKind = kind;
   applyStatusClass();
-  if (kind === "error") showErrorNotice(message);
 }
 
 // A second, persistent line under the status box. Status text is replaced on
