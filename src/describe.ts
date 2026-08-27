@@ -119,9 +119,18 @@ export interface DescribeImagesOptions {
   signal?: AbortSignal;
 }
 
-const DESCRIPTION_INSTRUCTIONS = `You write precise, visually actionable descriptions for an image-generation or image-editing prompt field.
+const DESCRIPTION_INSTRUCTIONS = `Write precise, visually actionable descriptions for an image-generation or image-editing prompt field.
 
-Describe every supplied visual input in high detail regarding all relevant elements, composition, style, lighting, color palette, contrast, materials, textures, spatial relationships, viewpoint, framing, depth of field, environment and legible text. Cover subjects, objects, poses, expressions and distinctive fine details whenever present.
+Describe every supplied visual input in high detail. Cover the relevant subjects, objects, poses, expressions, composition, style, lighting, color palette, contrast, materials, textures, spatial relationships, viewpoint, framing, depth of field, environment, legible text and distinctive fine details.
+
+Format each description as 4–8 labeled paragraphs. Choose only aspects that are relevant to the image. Start every paragraph with a concise uppercase aspect label followed by a colon. Put exactly one blank line between paragraphs. Never combine multiple labeled aspects in one paragraph. Use plain text without Markdown bullets or Markdown headings.
+
+Use this layout:
+COMPOSITION: The main subject is centered within a balanced, tightly framed scene.
+
+LIGHTING: Soft directional light creates gentle highlights and restrained shadows.
+
+COLOR PALETTE: Muted warm tones dominate, with a small cool accent providing contrast.
 
 State only what is visibly supported. Do not invent identities, brands, artist names, hidden details, camera settings or intended edits. When something is uncertain, describe it conservatively. Describe the visual content rather than critiquing it, explaining it or proposing changes.
 

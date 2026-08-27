@@ -1608,10 +1608,21 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
   return inputs;
 }
 
+function formatDescriptionParagraphs(description: string): string {
+  return description
+    .replace(/\r\n?/g, "\n")
+    .replace(/(^|[.!?]["')\]]?)\s+([A-Z][A-Z0-9 &/-]{2,}:)/g, (_match: string, boundary: string, label: string) =>
+      boundary ? `${boundary}\n\n${label}` : label
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function formatDescriptions(inputs: PreparedDescriptionInput[], descriptions: string[]): string {
-  if (descriptions.length === 1) return descriptions[0].trim();
-  return descriptions
-    .map((description, index) => `Image ${index + 1} — ${inputs[index].source}\n${description.trim()}`)
+  const formatted = descriptions.map(formatDescriptionParagraphs);
+  if (formatted.length === 1) return formatted[0];
+  return formatted
+    .map((description, index) => `Image ${index + 1} — ${inputs[index].source}\n${description}`)
     .join("\n\n");
 }
 
