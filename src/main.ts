@@ -94,11 +94,8 @@ const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
 const RECALL_THUMBNAIL_MAX_EDGE = 96;
-// Internal builds exercise five provider requests at once. Set this flag for a
-// teaching build to keep the same queue behavior while sending only one request
-// at a time.
-const TEACHING_MODE = false;
-const MAX_CONCURRENT_GENERATIONS = TEACHING_MODE ? 1 : 5;
+const MAX_MANUAL_GENERATION_JOBS = 4;
+const MAX_CONCURRENT_GENERATIONS = 2;
 const COLLAPSIBLE_SECTIONS = [
   "apiKeys",
   "modelSelection",
@@ -308,6 +305,21 @@ function hasActiveGenerationJobs(): boolean {
   return generationJobs.some((job) => job.state !== "failed");
 }
 
+function queuedGenerationJobCount(): number {
+  const activeJobs = generationJobs.filter((job) => job.state !== "failed").length;
+  return activeJobs + pendingGenerationJobIds.size;
+}
+
+function updateGenerateControl(): void {
+  const generate = $("generate");
+  if (!generate) return;
+  const queueFull = queuedGenerationJobCount() >= MAX_MANUAL_GENERATION_JOBS;
+  generate.disabled = describing || queueFull;
+  generate.title = queueFull
+    ? `The manual generation queue is limited to ${MAX_MANUAL_GENERATION_JOBS} active jobs.`
+    : "";
+}
+
 function updateDescriptionControls(): void {
   const busy = hasActiveGenerationJobs() || describing;
   const describeButton = $("describe");
@@ -327,8 +339,7 @@ function setDescriptionBusy(on: boolean): void {
   if (describeButton) describeButton.textContent = on ? "Describing…" : "Describe";
   const prompt = $("prompt");
   if (prompt) prompt.disabled = on;
-  const generate = $("generate");
-  if (generate) generate.disabled = on;
+  updateGenerateControl();
   updateDescriptionControls();
 }
 
@@ -1131,6 +1142,7 @@ function renderGenerationQueue(): void {
   }
 
   setBusy(hasActiveGenerationJobs() || describing);
+  updateGenerateControl();
   updateDescriptionControls();
 }
 
@@ -1947,6 +1959,13 @@ function onGenerateClick(): void {
 
 async function onGenerate(): Promise<void> {
   if (describing) return;
+  if (queuedGenerationJobCount() >= MAX_MANUAL_GENERATION_JOBS) {
+    updateGenerateControl();
+    setStatus(
+      `Generation queue is full. Wait for an active job to finish or cancel one (${MAX_MANUAL_GENERATION_JOBS} maximum).`
+    );
+    return;
+  }
   setStatus("Starting…"); // immediate feedback that the click was received
 
   const promptTemplate = ($("prompt").value || "").trim();
@@ -2006,6 +2025,7 @@ async function onGenerate(): Promise<void> {
   const jobIds = expandedPrompts.map(() => ++generationJobSequence);
   latestGenerationJobId = jobIds[jobIds.length - 1];
   for (const jobId of jobIds) pendingGenerationJobIds.add(jobId);
+  updateGenerateControl();
   let activeArtboard: ActiveArtboard | null;
   let rawSelection: Bounds | null;
   try {
@@ -2015,6 +2035,7 @@ async function onGenerate(): Promise<void> {
     ]);
   } catch (err: any) {
     for (const jobId of jobIds) pendingGenerationJobIds.delete(jobId);
+    updateGenerateControl();
     pumpGenerationSlots();
     setStatus("Error: " + (err?.message || String(err)), "error");
     return;
