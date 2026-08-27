@@ -76,7 +76,12 @@ import {
 import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
 import { GenerationArchive, readLayerGenerationArchive } from "./archive";
 import { restoreReferenceAssets } from "./reference-assets";
-import { expandPromptTemplate, MAX_PROMPT_EXPANSIONS } from "./prompt-expansion";
+import { expandPromptTemplate } from "./prompt-expansion";
+import {
+  MAX_MANUAL_GENERATION_JOBS,
+  MAX_CONCURRENT_GENERATIONS,
+  MAX_BRACKET_GENERATION_JOBS,
+} from "./generation-limits";
 
 const { entrypoints } = require("uxp");
 const { action: photoshopAction } = require("photoshop");
@@ -94,8 +99,6 @@ const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
 const RECALL_THUMBNAIL_MAX_EDGE = 96;
-const MAX_MANUAL_GENERATION_JOBS = 4;
-const MAX_CONCURRENT_GENERATIONS = 2;
 const COLLAPSIBLE_SECTIONS = [
   "apiKeys",
   "modelSelection",
@@ -1987,7 +1990,7 @@ async function onGenerate(): Promise<void> {
   }
   let expandedPrompts: string[];
   try {
-    expandedPrompts = expandPromptTemplate(promptTemplate, MAX_PROMPT_EXPANSIONS);
+    expandedPrompts = expandPromptTemplate(promptTemplate, MAX_BRACKET_GENERATION_JOBS);
   } catch (err: any) {
     setStatus("Prompt expansion error: " + (err?.message || String(err)), "error");
     return;

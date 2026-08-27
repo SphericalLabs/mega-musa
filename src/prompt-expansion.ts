@@ -17,7 +17,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-export const MAX_PROMPT_EXPANSIONS = 10;
+import { MAX_BRACKET_GENERATION_JOBS } from "./generation-limits";
 
 export class PromptExpansionError extends Error {
   constructor(message: string) {
@@ -213,7 +213,7 @@ function expandGroup(group: GroupNode, limit: number): string[] {
 
 export function expandPromptTemplate(
   prompt: string,
-  limit: number = MAX_PROMPT_EXPANSIONS
+  limit: number = MAX_BRACKET_GENERATION_JOBS
 ): string[] {
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new PromptExpansionError("The prompt expansion limit must be a positive integer.");
