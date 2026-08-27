@@ -145,6 +145,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                      display: flex; align-items: center; justify-content: center; }
     .thumb .remove:hover { background: rgb(0, 0, 0); }
     #recallSection { display: none; }
+    #recallSummary { display: flex; align-items: flex-start; }
+    #recallThumbnailFrame { display: none; flex: 0 0 52px; box-sizing: border-box; margin-top: 7px;
+                            width: 52px; height: 52px; overflow: hidden;
+                            border: 1px solid rgba(128,128,128,0.4); border-radius: 4px;
+                            background: rgba(128,128,128,0.15); }
+    #recallThumbnail { display: block; width: 100%; height: 100%; object-fit: contain; }
+    #recallText { flex: 1 1 auto; min-width: 0; margin-left: 8px; }
     #recallLayerName { margin: 5px 0 2px; overflow-wrap: break-word; }
     #recallDetails, #recallSource { margin-top: 5px; overflow-wrap: break-word; }
     #loadRecallSettings { margin-left: 7px; }
@@ -384,9 +391,16 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
         <span>Recall Generations</span>
       </div>
       <div id="recallSectionContent" class="section-content" role="region" aria-labelledby="recallSectionToggle">
-        <div id="recallLayerName" class="label"></div>
-        <div id="recallDetails" class="label"></div>
-        <div id="recallSource" class="muted"></div>
+        <div id="recallSummary">
+          <div id="recallThumbnailFrame" aria-hidden="true">
+            <img id="recallThumbnail" alt="">
+          </div>
+          <div id="recallText">
+            <div id="recallLayerName" class="label"></div>
+            <div id="recallDetails" class="label"></div>
+            <div id="recallSource" class="muted"></div>
+          </div>
+        </div>
         <div class="row">
           <sp-button id="copyRecallPrompt" variant="primary" size="s">Copy Prompt</sp-button>
           <sp-button id="loadRecallSettings" variant="primary" size="s">Load Settings</sp-button>

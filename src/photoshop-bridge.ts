@@ -375,6 +375,54 @@ export async function readRegion(
   );
 }
 
+// Read a small, proportional preview of one layer. Supplying layerID keeps the
+// thumbnail isolated from the rest of the document composite, while targetSize
+// lets Photoshop use its optimized thumbnail path instead of returning the
+// layer at full resolution.
+export async function readLayerThumbnail(docId: number, layer: any, maxEdge: number): Promise<ImageBuffer> {
+  const layerId = layer?.id;
+  const bounds = boundsFrom(layer?.boundsNoEffects) || boundsFrom(layer?.bounds);
+  if (!Number.isFinite(layerId) || !bounds) throw new Error("The selected layer has no previewable pixels.");
+
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  const longest = Math.max(width, height);
+  const safeMaxEdge = Math.max(1, Math.round(maxEdge));
+  const targetSize =
+    longest > safeMaxEdge
+      ? width >= height
+        ? { width: safeMaxEdge }
+        : { height: safeMaxEdge }
+      : undefined;
+
+  return await core.executeAsModal(
+    async () => {
+      const { imageData } = await imaging.getPixels({
+        documentID: docId,
+        layerID: layerId,
+        sourceBounds: bounds,
+        targetSize,
+        colorSpace: "RGB",
+        colorProfile: SRGB_PROFILE,
+        componentSize: 8,
+        applyAlpha: false,
+      });
+      try {
+        const raw = await imageData.getData({ chunky: true });
+        return {
+          data: new Uint8Array(raw),
+          width: imageData.width,
+          height: imageData.height,
+          components: imageData.components || 4,
+        };
+      } finally {
+        imageData.dispose();
+      }
+    },
+    { commandName: "Mega Musa: preview generated layer" }
+  );
+}
+
 // Is this layer already the topmost one inside whatever holds it — a group, an
 // artboard, or the document itself? `parent` is the containing group or artboard,
 // or the document for a top-level layer, and each exposes the sibling list with

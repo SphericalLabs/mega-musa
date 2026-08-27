@@ -29,6 +29,7 @@ import {
   placeResult,
   setRectSelection,
   readClipboardImage,
+  readLayerThumbnail,
   Bounds,
   SelectionSnapshot,
 } from "./photoshop-bridge";
@@ -90,6 +91,7 @@ const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
+const RECALL_THUMBNAIL_MAX_EDGE = 96;
 const COLLAPSIBLE_SECTIONS = [
   "apiKeys",
   "modelSelection",
@@ -746,6 +748,36 @@ function hideGenerationRecall(): void {
   selectedRecall = null;
   const section = $("recallSection");
   if (section) section.style.display = "none";
+  clearGenerationRecallThumbnail();
+}
+
+function clearGenerationRecallThumbnail(): void {
+  const frame = $("recallThumbnailFrame");
+  const image = $("recallThumbnail");
+  if (frame) frame.style.display = "none";
+  if (image) {
+    image.removeAttribute("src");
+    image.removeAttribute("title");
+  }
+}
+
+async function renderGenerationRecallThumbnail(docId: number, layer: any, sequence: number): Promise<void> {
+  try {
+    const thumbnail = await readLayerThumbnail(docId, layer, RECALL_THUMBNAIL_MAX_EDGE);
+    if (sequence !== recallRefreshSequence || selectedRecall?.layerId !== layer.id) return;
+
+    const rgba = toRGBA(thumbnail.data, thumbnail.width, thumbnail.height, thumbnail.components);
+    const png = encodePng(rgba, thumbnail.width, thumbnail.height, 4);
+    const image = $("recallThumbnail");
+    const frame = $("recallThumbnailFrame");
+    if (!image || !frame) return;
+    image.src = `data:image/png;base64,${bytesToBase64(png)}`;
+    image.title = layer.name || "Generated layer";
+    frame.style.display = "block";
+  } catch (err: any) {
+    // Recall remains useful when a host cannot preview a particular layer kind.
+    console.log("[Mega Musa] could not preview the recalled layer:", err?.message || err);
+  }
 }
 
 function recallDateLabel(value: string): string {
@@ -767,6 +799,7 @@ function renderGenerationRecall(
   selectedRecall = { generation, layerName, docId, layerId };
   const section = $("recallSection");
   if (section) section.style.display = "block";
+  clearGenerationRecallThumbnail();
   $("recallLayerName").textContent = recallLayerNameDisplay(layerName);
 
   const details = [generation.provider, generation.modelLabel || generation.model, generation.ratio];
@@ -834,8 +867,12 @@ async function refreshGenerationRecall(): Promise<void> {
     return;
   }
 
-  if (generation) renderGenerationRecall(generation, layer.name || "Generated layer", docId, layerId);
-  else hideGenerationRecall();
+  if (generation) {
+    renderGenerationRecall(generation, layer.name || "Generated layer", docId, layerId);
+    void renderGenerationRecallThumbnail(docId, layer, sequence);
+  } else {
+    hideGenerationRecall();
+  }
 }
 
 function scheduleGenerationRecallRefresh(): void {
