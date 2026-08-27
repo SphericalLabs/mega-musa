@@ -1862,10 +1862,6 @@ async function onGenerate(): Promise<void> {
       // user's selection, and before anything has been sent.
       throwIfCancelled();
       await setRectSelection(region);
-      // Keep the fitted rectangle as an overflow mask source. It is used only
-      // when an unexpected provider ratio makes the native Smart Object extend
-      // outside this region; normal full-frame results need no extra mask.
-      selectionSnapshot = await captureSelection(docId, region);
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
       const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
@@ -1985,11 +1981,11 @@ async function onGenerate(): Promise<void> {
     if (returnedRatioDiffers) {
       notes.push(
         exactOutputSize
-          ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It is cover-fitted without stretching.`
-          : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It is cover-fitted without stretching.`
+          ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It is sized to the exact placement bounds.`
+          : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It is sized to the exact placement bounds.`
       );
     } else if (returnedSizeDiffers) {
-      notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It is transformed to fit without stretching.`);
+      notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It is sized to fit without stretching.`);
     }
     if (returnedRatioDiffers || returnedSizeDiffers) {
       setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
@@ -2031,7 +2027,6 @@ async function onGenerate(): Promise<void> {
       decoded.height,
       resultLayerName(prompt, layerDetails),
       selectionSnapshot,
-      !isRegion,
       placeAsSmartObject,
       archive,
       generationRefs
@@ -2040,7 +2035,7 @@ async function onGenerate(): Promise<void> {
 
     if (placement.smartObject) {
       notes.push(
-        `The complete native ${returnedSize} result is embedded for nondestructive scaling${returnedRatioDiffers ? "; unlink its mask to reframe inside the fixed target" : ""}.`
+        `The complete native ${returnedSize} result is embedded and sized nondestructively to the raster placement bounds.`
       );
       setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
     }

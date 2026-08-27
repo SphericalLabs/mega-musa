@@ -479,20 +479,6 @@ async function withActiveDocument<T>(docId: number, run: () => Promise<T>): Prom
   }
 }
 
-async function liveSelectionMatches(docId: number, snapshot: SelectionSnapshot): Promise<boolean> {
-  try {
-    const current = await readSelectionMask(docId, snapshot.bounds);
-    if (current.length !== snapshot.data.length) return false;
-    for (let i = 0; i < current.length; i++) {
-      if (current[i] !== snapshot.data[i]) return false;
-    }
-    return true;
-  } catch (e: any) {
-    console.log("[Mega Musa] live selection is unavailable or changed:", e?.message || e);
-    return false;
-  }
-}
-
 function preciseBoundsFrom(value: any): Bounds | null {
   if (!value) return null;
   const bounds = {
@@ -505,7 +491,7 @@ function preciseBoundsFrom(value: any): Bounds | null {
 }
 
 async function selectLayerById(layerId: number): Promise<void> {
-  await action.batchPlay(
+  const result = await action.batchPlay(
     [
       {
         _obj: "select",
@@ -516,6 +502,11 @@ async function selectLayerById(layerId: number): Promise<void> {
     ],
     {}
   );
+  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
+  if (actionError) throw new Error(actionError.message || "Photoshop could not select the layer.");
+  if (!app.activeDocument?.activeLayers?.some((layer: any) => Number(layer.id) === Number(layerId))) {
+    throw new Error("Photoshop did not activate the requested layer.");
+  }
 }
 
 async function renameActiveLayer(name: string): Promise<void> {
@@ -571,6 +562,101 @@ async function makeSelectionMask(): Promise<void> {
   );
   // Photoshop creates layer masks linked by default. Keeping that default makes
   // later Move/Free Transform operations scale the result and mask as one unit.
+}
+
+async function loadLayerTransparencyAsSelection(layerId: number): Promise<void> {
+  const result = await action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "channel", _property: "selection" }],
+        to: {
+          _ref: [
+            { _ref: "channel", _enum: "channel", _value: "transparencyEnum" },
+            { _ref: "layer", _id: layerId },
+          ],
+        },
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    { propagateErrorToDefaultHandler: false }
+  );
+  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
+  if (actionError) throw new Error(actionError.message || "Photoshop could not restore the selection.");
+}
+
+// Placement can change Photoshop's live marquee while switching documents or
+// moving the new layer. Rebuild the exact captured 8-bit selection through a
+// temporary layer's transparency, then create the result layer mask from it.
+async function makeLayerMaskFromSnapshot(
+  docId: number,
+  resultLayerId: number,
+  snapshot: SelectionSnapshot
+): Promise<void> {
+  const width = snapshot.bounds.right - snapshot.bounds.left;
+  const height = snapshot.bounds.bottom - snapshot.bounds.top;
+  if (snapshot.data.length !== width * height) {
+    throw new Error("The captured selection does not match its placement bounds.");
+  }
+
+  let maskSource: any | null = null;
+  try {
+    const makeResult = await action.batchPlay(
+      [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
+      { propagateErrorToDefaultHandler: false }
+    );
+    const makeError = makeResult?.[0]?._obj === "error" ? makeResult[0] : null;
+    if (makeError) throw new Error(makeError.message || "Photoshop could not prepare the selection mask.");
+    maskSource = app.activeDocument?.activeLayers?.[0] || null;
+    if (!maskSource) throw new Error("Photoshop did not expose the temporary selection layer.");
+
+    const rgba = new Uint8Array(snapshot.data.length * 4);
+    for (let i = 0; i < snapshot.data.length; i++) {
+      const offset = i * 4;
+      rgba[offset] = 255;
+      rgba[offset + 1] = 255;
+      rgba[offset + 2] = 255;
+      rgba[offset + 3] = snapshot.data[i];
+    }
+    const imageData = await imaging.createImageDataFromBuffer(rgba, {
+      width,
+      height,
+      components: 4,
+      componentSize: 8,
+      colorSpace: "RGB",
+      colorProfile: SRGB_PROFILE,
+      chunky: true,
+    });
+    try {
+      await imaging.putPixels({
+        documentID: docId,
+        layerID: maskSource.id,
+        targetBounds: snapshot.bounds,
+        imageData,
+      });
+    } finally {
+      imageData.dispose();
+    }
+
+    await loadLayerTransparencyAsSelection(maskSource.id);
+    await deleteResultLayer(maskSource.id);
+    maskSource = null;
+    await selectLayerById(resultLayerId);
+    await makeSelectionMask();
+    await restoreSelectionFromMask();
+  } finally {
+    if (maskSource) {
+      try {
+        await deleteResultLayer(maskSource.id);
+      } catch {
+        try {
+          maskSource.visible = false;
+        } catch {
+          /* never leave the temporary white mask source visible */
+        }
+      }
+    }
+  }
 }
 
 async function restoreSelectionFromMask(): Promise<void> {
@@ -652,8 +738,14 @@ async function createNativeSmartObject(
   rgba: Uint8Array,
   width: number,
   height: number,
+  targetBounds: Bounds,
   layerName: string
 ): Promise<any> {
+  const targetWidth = targetBounds.right - targetBounds.left;
+  const targetHeight = targetBounds.bottom - targetBounds.top;
+  if (targetWidth <= 0 || targetHeight <= 0) {
+    throw new Error("The Smart Object destination is empty.");
+  }
   const destinationParent = anchorLayer?.parent || null;
   const existingTargetLayerIds = new Set(
     descendantLayers(targetDocument).map((layer) => Number(layer.id)).filter(Number.isFinite)
@@ -703,7 +795,31 @@ async function createNativeSmartObject(
     if (!embeddedSource) throw new Error("Photoshop did not create the embedded Smart Object.");
     await renameActiveLayer(sourceMarker);
 
-    await scratch.duplicateLayers([embeddedSource], targetDocument);
+    // Size the document around the embedded Smart Object before copying it.
+    // Image Size changes the Smart Object's outer transform but preserves its
+    // original full-resolution pixels inside the embedded source.
+    if (width !== targetWidth || height !== targetHeight) {
+      const resizeResult = await action.batchPlay(
+        [
+          {
+            _obj: "imageSize",
+            width: { _unit: "pixelsUnit", _value: targetWidth },
+            height: { _unit: "pixelsUnit", _value: targetHeight },
+            constrainProportions: false,
+            interpolation: { _enum: "interpolationType", _value: "bicubic" },
+            _options: { dialogOptions: "dontDisplay" },
+          },
+        ],
+        { propagateErrorToDefaultHandler: false }
+      );
+      const resizeError = resizeResult?.[0]?._obj === "error" ? resizeResult[0] : null;
+      if (resizeError) {
+        throw new Error(resizeError.message || "Photoshop could not size the Smart Object source.");
+      }
+    }
+
+    const sizedSource = scratch.activeLayers?.[0] || embeddedSource;
+    await scratch.duplicateLayers([sizedSource], targetDocument);
 
     app.activeDocument = targetDocument;
     const createdLayers = newDocumentLayers(targetDocument, existingTargetLayerIds);
@@ -803,47 +919,64 @@ async function smartObjectBounds(layer: any): Promise<Bounds | null> {
   return preciseBoundsFrom(layer.boundsNoEffects) || preciseBoundsFrom(layer.bounds);
 }
 
-// Uniformly cover the target without rasterizing. Any excess source area stays
-// inside the Smart Object and can be revealed later by moving or rescaling it.
-async function coverTransformSmartObject(layer: any, target: Bounds): Promise<Bounds> {
-  const initial = await smartObjectBounds(layer);
-  if (!initial) throw new Error("Photoshop did not report the Smart Object bounds.");
-  const initialW = initial.right - initial.left;
-  const initialH = initial.bottom - initial.top;
-  const targetW = target.right - target.left;
-  const targetH = target.bottom - target.top;
-  const scale = Math.max(targetW / initialW, targetH / initialH);
-  if (!Number.isFinite(scale) || scale <= 0) throw new Error("The Smart Object transform is invalid.");
-
-  if (Math.abs(scale - 1) > 0.000001) await layer.scale(scale * 100, scale * 100);
-  const scaled = await smartObjectBounds(layer);
-  if (!scaled) throw new Error("Photoshop did not report the scaled Smart Object bounds.");
-  const dx = (target.left + target.right - scaled.left - scaled.right) / 2;
-  const dy = (target.top + target.bottom - scaled.top - scaled.bottom) / 2;
-  if (Math.abs(dx) > 0.000001 || Math.abs(dy) > 0.000001) await layer.translate(dx, dy);
-
-  const transformed = await smartObjectBounds(layer);
-  if (!transformed) throw new Error("Photoshop did not report the positioned Smart Object bounds.");
-  const tolerance = 0.75;
-  if (
-    transformed.left > target.left + tolerance ||
-    transformed.top > target.top + tolerance ||
-    transformed.right < target.right - tolerance ||
-    transformed.bottom < target.bottom - tolerance
-  ) {
-    throw new Error("The Smart Object transform did not cover the result region.");
-  }
-  return transformed;
+async function moveActiveLayer(offsetX: number, offsetY: number): Promise<void> {
+  const result = await action.batchPlay(
+    [
+      {
+        _obj: "move",
+        _target: [{ _enum: "ordinal", _ref: "layer" }],
+        to: {
+          _obj: "offset",
+          horizontal: { _unit: "pixelsUnit", _value: offsetX },
+          vertical: { _unit: "pixelsUnit", _value: offsetY },
+        },
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    { propagateErrorToDefaultHandler: false }
+  );
+  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
+  if (actionError) throw new Error(actionError.message || "Photoshop could not position the Smart Object.");
 }
 
-function extendsPastTarget(layerBounds: Bounds, target: Bounds): boolean {
-  const tolerance = 0.75;
-  return (
-    layerBounds.left < target.left - tolerance ||
-    layerBounds.top < target.top - tolerance ||
-    layerBounds.right > target.right + tolerance ||
-    layerBounds.bottom > target.bottom + tolerance
-  );
+// The scratch document already sized the Smart Object to the raster placement
+// rectangle. Only translate it here; Photoshop 2026 can reject Transform while
+// a freshly duplicated Smart Object is still in the placement modal operation.
+async function positionSmartObjectAtBounds(layer: any, target: Bounds): Promise<void> {
+  const targetW = target.right - target.left;
+  const targetH = target.bottom - target.top;
+  const tolerance = 1;
+  const current = await smartObjectBounds(layer);
+  if (!current) throw new Error("Photoshop did not report the Smart Object bounds.");
+  const currentW = current.right - current.left;
+  const currentH = current.bottom - current.top;
+  if (Math.abs(currentW - targetW) > tolerance || Math.abs(currentH - targetH) > tolerance) {
+    throw new Error(
+      "Photoshop did not preserve the pre-sized Smart Object dimensions: " +
+        `target ${targetW}x${targetH}; actual ${currentW}x${currentH}.`
+    );
+  }
+
+  await selectLayerById(layer.id);
+  const dx = target.left - current.left;
+  const dy = target.top - current.top;
+  if (Math.abs(dx) > tolerance || Math.abs(dy) > tolerance) await moveActiveLayer(dx, dy);
+
+  const positioned = await smartObjectBounds(layer);
+  if (!positioned) throw new Error("Photoshop did not report the positioned Smart Object bounds.");
+  const errors = [
+    positioned.left - target.left,
+    positioned.top - target.top,
+    positioned.right - target.right,
+    positioned.bottom - target.bottom,
+  ];
+  if (errors.some((error) => Math.abs(error) > tolerance)) {
+    throw new Error(
+      "The Smart Object did not match the raster placement bounds: " +
+        `target ${target.left},${target.top},${target.right},${target.bottom}; ` +
+        `actual ${positioned.left},${positioned.top},${positioned.right},${positioned.bottom}.`
+    );
+  }
 }
 
 async function placeRasterFallback(
@@ -853,8 +986,7 @@ async function placeRasterFallback(
   sourceWidth: number,
   sourceHeight: number,
   layerName: string,
-  selection: SelectionSnapshot | null,
-  selectionStillMatches: boolean
+  selection: SelectionSnapshot | null
 ): Promise<{ layer: any; clip: PlacementClip }> {
   const width = bounds.right - bounds.left;
   const height = bounds.bottom - bounds.top;
@@ -880,13 +1012,13 @@ async function placeRasterFallback(
 
   let clip: PlacementClip = "none";
   let masked = false;
-  if (selection && selectionStillMatches) {
+  if (selection) {
     try {
-      await makeSelectionMask();
+      await makeLayerMaskFromSnapshot(docId, layer.id, selection);
       masked = true;
       clip = "mask";
     } catch (e: any) {
-      console.log("[Mega Musa] could not create the selection mask; using layer alpha:", e?.message || e);
+      console.log("[Mega Musa] could not rebuild the editable selection mask; using layer alpha:", e?.message || e);
     }
   }
 
@@ -923,14 +1055,13 @@ async function placeRasterFallback(
   } finally {
     imageData.dispose();
   }
-  if (masked) await restoreSelectionFromMask();
   return { layer, clip };
 }
 
 // Modal step 2: preserve the complete native provider image inside an embedded
-// Smart Object, cover-transform it into `bounds` and attach a linked layer mask
-// when the target shape needs clipping. Any Smart Object failure falls back to
-// the previous raster placement so a paid result is never discarded.
+// Smart Object, pre-size it to the raster-equivalent `bounds` and attach a
+// linked layer mask afterwards when the target shape needs clipping. Any Smart
+// Object failure falls back to raster placement so a paid result is preserved.
 export async function placeResult(
   docId: number,
   bounds: Bounds,
@@ -939,7 +1070,6 @@ export async function placeResult(
   height: number,
   layerName: string,
   selection: SelectionSnapshot | null,
-  maskOnlyWhenOverflow: boolean,
   placeAsSmartObject: boolean,
   archive: GenerationArchive,
   references: RefImage[]
@@ -962,21 +1092,15 @@ export async function placeResult(
             rgba,
             width,
             height,
+            bounds,
             layerName
           );
-          const transformedBounds = await coverTransformSmartObject(incompleteSmartObject, bounds);
+          await positionSmartObjectAtBounds(incompleteSmartObject, bounds);
           await bringResultToFront(incompleteSmartObject);
 
-          const maskRequired =
-            !!selection && (!maskOnlyWhenOverflow || extendsPastTarget(transformedBounds, bounds));
-          if (maskRequired) {
-            if (!(await liveSelectionMatches(docId, selection))) {
-              throw new Error("The selection changed before the linked Smart Object mask could be created.");
-            }
-            await selectLayerById(incompleteSmartObject.id);
-            await makeSelectionMask();
+          if (selection) {
+            await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, selection);
             clip = "mask";
-            await restoreSelectionFromMask();
           }
           resultLayer = incompleteSmartObject;
         } catch (error: any) {
@@ -999,13 +1123,6 @@ export async function placeResult(
 
       if (!smartObject) {
         if (anchorLayerId) await selectLayerById(anchorLayerId);
-        // A raster layer is already exactly `bounds`, so a rectangular overflow
-        // mask is unnecessary. Irregular/feathered original selections still use
-        // the normal editable-mask-or-alpha fallback.
-        const rasterSelection = maskOnlyWhenOverflow ? null : selection;
-        const selectionStillMatches = rasterSelection
-          ? await liveSelectionMatches(docId, rasterSelection)
-          : false;
         const fallback = await placeRasterFallback(
           docId,
           bounds,
@@ -1013,8 +1130,7 @@ export async function placeResult(
           width,
           height,
           layerName,
-          rasterSelection,
-          selectionStillMatches
+          selection
         );
         resultLayer = fallback.layer;
         clip = fallback.clip;
