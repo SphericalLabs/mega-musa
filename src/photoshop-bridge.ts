@@ -109,13 +109,16 @@ async function exactArtboardBounds(docId: number, artboard: any): Promise<Bounds
 // Resolve Photoshop's active artboard from the selected layer and its parents.
 // Returns null for ordinary, non-artboard documents. In a multi-artboard
 // document, refusing to guess prevents an accidental full-spread generation.
-export async function getActiveArtboard(doc: any): Promise<ActiveArtboard | null> {
+export async function getActiveArtboard(doc: any, anchorLayerId?: number | null): Promise<ActiveArtboard | null> {
   const artboards: any[] = Array.from(doc.artboards || []);
   if (!artboards.length) return null;
 
   const byId = new Map<number, any>(artboards.map((artboard) => [artboard.id, artboard]));
   let active: any | null = null;
-  const activeLayers: any[] = Array.from(doc.activeLayers || []);
+  const frozenAnchor = Number.isFinite(anchorLayerId)
+    ? descendantLayers(doc).find((layer) => Number(layer?.id) === Number(anchorLayerId))
+    : null;
+  const activeLayers: any[] = frozenAnchor ? [frozenAnchor] : Array.from(doc.activeLayers || []);
   for (const selected of activeLayers) {
     let layer: any | null = selected;
     while (layer) {
@@ -141,9 +144,9 @@ export async function getActiveArtboard(doc: any): Promise<ActiveArtboard | null
 
 // Replace the current selection with an exact rectangle (document pixels).
 // Used to snap a freely-drawn selection to a chosen aspect ratio.
-export async function setRectSelection(b: Bounds): Promise<void> {
+export async function setRectSelection(b: Bounds, docId?: number): Promise<void> {
   await core.executeAsModal(
-    async () => {
+    async () => withActiveDocument(docId ?? app.activeDocument?.id, async () => {
       await action.batchPlay(
         [
           {
@@ -161,19 +164,22 @@ export async function setRectSelection(b: Bounds): Promise<void> {
         ],
         {}
       );
-    },
+    }),
     { commandName: "Mega Musa: snap selection" }
   );
 }
 
-export async function getSelectionBounds(): Promise<Bounds | null> {
+export async function getSelectionBounds(docId?: number): Promise<Bounds | null> {
+  const documentTarget = Number.isFinite(docId)
+    ? { _ref: "document", _id: docId }
+    : { _ref: "document", _enum: "ordinal", _value: "targetEnum" };
   const result = await action.batchPlay(
     [
       {
         _obj: "get",
         _target: [
           { _property: "selection" },
-          { _ref: "document", _enum: "ordinal", _value: "targetEnum" },
+          documentTarget,
         ],
         _options: { dialogOptions: "dontDisplay" },
       },
@@ -1072,7 +1078,8 @@ export async function placeResult(
   selection: SelectionSnapshot | null,
   placeAsSmartObject: boolean,
   archive: GenerationArchive,
-  references: RefImage[]
+  references: RefImage[],
+  anchorLayerId?: number | null
 ): Promise<PlacementResult> {
   const historyName = "Mega Musa: place result";
   return await core.executeAsModal(
@@ -1082,8 +1089,13 @@ export async function placeResult(
         name: historyName,
       });
       const document = app.activeDocument;
-      const anchorLayer = document.activeLayers?.[0] || null;
-      const anchorLayerId = anchorLayer?.id;
+      const frozenAnchor = Number.isFinite(anchorLayerId)
+        ? descendantLayers(document).find((layer) => Number(layer?.id) === Number(anchorLayerId))
+        : null;
+      const fallbackAnchor = Array.from(document.layers || [])[0] || null;
+      const anchorLayer = frozenAnchor || fallbackAnchor;
+      if (anchorLayer) await selectLayerById(anchorLayer.id);
+      const resolvedAnchorLayerId = anchorLayer?.id;
       let resultLayer: any;
       let clip: PlacementClip = "none";
       let smartObject = placeAsSmartObject;
@@ -1127,7 +1139,7 @@ export async function placeResult(
       }
 
       if (!smartObject) {
-        if (anchorLayerId) await selectLayerById(anchorLayerId);
+        if (resolvedAnchorLayerId) await selectLayerById(resolvedAnchorLayerId);
         const fallback = await placeRasterFallback(
           docId,
           bounds,
@@ -1165,6 +1177,11 @@ export async function placeResult(
         archiveSaved = false;
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
+      // Reference archiving temporarily selects and may create other layers.
+      // Reassert the result's final stack position after every placement-side
+      // effect so the latest arriving image is the frontmost layer in its
+      // frozen document, artboard or group.
+      await bringResultToFront(resultLayer);
       const placement = { clip, layerId, smartObject, archiveSaved, referenceArchiveFailures };
       await executionContext.hostControl.resumeHistory(historySuspension);
       return placement;

@@ -117,7 +117,7 @@ export function formatDate(iso: string): string {
 export function budgetText(b: Budget): { total: string; counts: string } {
   const counts = [`${b.images} images`];
   if (b.unpriced) counts.push(`${b.unpriced} unpriced`);
-  if (b.cancelled) counts.push(`${b.cancelled} cancelled but billed`);
+  if (b.cancelled) counts.push(`${b.cancelled} canceled but billed`);
   return {
     total: `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)}`,
     counts: `(${counts.join(", ")})`,

@@ -192,6 +192,23 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #status.pulse14 { background: rgba(128,128,128,0.320); }
     #note { margin-top: 6px; }
     #note:empty { display: none; }
+    #generationQueue { display: none; margin-top: 8px; }
+    #generationQueueHeader { min-height: 24px; margin: 0; }
+    #generationQueueSummary { font-size: 11px; font-weight: 600; }
+    #generationQueueList { margin-top: 2px; }
+    .generation-job { display: flex; align-items: flex-start; box-sizing: border-box;
+                      width: 100%; margin-top: 6px; padding: 8px;
+                      border: 1px solid rgba(128,128,128,0.28); border-radius: 4px;
+                      background: rgba(128,128,128,0.10); }
+    .generation-job.failed { border-color: rgba(226,75,74,0.38); background: rgba(226,75,74,0.12); }
+    .generation-job-body { flex: 1 1 auto; min-width: 0; }
+    .generation-job-prompt { max-height: 32px; overflow: hidden; overflow-wrap: break-word;
+                             font-size: 12px; line-height: 16px; }
+    .generation-job-meta, .generation-job-status { margin-top: 4px; overflow-wrap: break-word;
+                                                    color: rgb(128,128,128); font-size: 10px;
+                                                    line-height: 13px; }
+    .generation-job-status { margin-top: 2px; }
+    .generation-job-action { flex: 0 0 auto; margin: 0 0 0 8px; }
     .notice-dialog { width: 360px; padding: 16px; }
     /* Plain HTML inside UXP dialogs does not inherit the panel's theme-aware
        body colour. Give dialog copy the same body/heading ladder as the panel;
@@ -221,7 +238,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        this block simply never matches. */
     @media (prefers-color-scheme: medium) {
       .label { color: rgb(212, 212, 212); }
-      .muted, #note { color: rgb(190, 190, 190); }
+      .muted, #note, .generation-job-meta, .generation-job-status { color: rgb(190, 190, 190); }
     }
     /* The same four ranks, going the other way: the explanations get brighter
        here rather than darker, since receding on a light panel means moving
@@ -237,7 +254,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       .notice-dialog .dialog-copy { color: rgb(30, 30, 30); }
       .notice-dialog .dialog-copy strong { color: rgb(0, 0, 0); }
       .label { color: rgb(61, 61, 61); }
-      .muted, #note { color: rgb(120, 120, 120); }
+      .muted, #note, .generation-job-meta, .generation-job-status { color: rgb(120, 120, 120); }
       #saveGeminiKey, #saveOpenAIKey, #resetBudget, #addRefs, #pasteRef, #clearRefs,
       #describe, #undoDescription,
       #fitSelection, #fitNearest, #includeSelection, #placeAsSmartObject, #copyRecallPrompt,
@@ -434,6 +451,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     <sp-divider size="s"></sp-divider>
 
     <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
+    <div id="generationQueue">
+      <div id="generationQueueHeader" class="row spread">
+        <span id="generationQueueSummary">Generation Queue</span>
+        <sp-button id="cancelAllGenerations" variant="warning" size="s">Cancel All</sp-button>
+      </div>
+      <div id="generationQueueList"></div>
+    </div>
     <div class="row">
       <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
     </div>

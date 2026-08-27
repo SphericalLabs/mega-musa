@@ -30,6 +30,7 @@ import {
   setRectSelection,
   readClipboardImage,
   readLayerThumbnail,
+  ActiveArtboard,
   Bounds,
   SelectionSnapshot,
 } from "./photoshop-bridge";
@@ -92,6 +93,11 @@ const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
 const RECALL_THUMBNAIL_MAX_EDGE = 96;
+// Internal builds exercise five provider requests at once. Set this flag for a
+// teaching build to keep the same queue behavior while sending only one request
+// at a time.
+const TEACHING_MODE = false;
+const MAX_CONCURRENT_GENERATIONS = TEACHING_MODE ? 1 : 5;
 const COLLAPSIBLE_SECTIONS = [
   "apiKeys",
   "modelSelection",
@@ -107,17 +113,52 @@ const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
 // An override applies only to one exact document mode/profile/depth state in
 // this panel session. Changing any of those properties creates a new warning.
 const acceptedDocumentWarnings = new Set<string>();
-let running = false;
 let describing = false;
 let promptBeforeDescription: string | null = null;
-// Set by the Cancel button. The run itself decides what that costs: stopping
-// before the request goes out is free, stopping after it has reached the
-// provider is not (see onGenerate's catch).
-let cancelRequested = false;
-// Set only while the HTTP request is out — aborts it and releases the run's
-// await at once. Cleared again the moment the image is back, because from there
-// on the money is spent and cancelling would only throw it away.
-let cancelInFlight: (() => void) | null = null;
+
+type GenerationJobState = "preparing" | "waiting" | "generating" | "placing" | "cancelling" | "failed";
+
+interface GenerationJob {
+  id: number;
+  prompt: string;
+  model: string;
+  provider: string;
+  quality: ImageQuality;
+  apiKey: string;
+  resolution: string;
+  includeSelection: boolean;
+  placeAsSmartObject: boolean;
+  references: RefImage[];
+  doc: any;
+  docId: number;
+  docWidth: number;
+  docHeight: number;
+  anchorLayerId: number | null;
+  activeArtboard: ActiveArtboard | null;
+  rawSelection: Bounds | null;
+  documentState: DocumentState;
+  state: GenerationJobState;
+  status: string;
+  cancelRequested: boolean;
+  cancelInFlight: (() => void) | null;
+  cancelSlotWait: (() => void) | null;
+  slotAcquired: boolean;
+  requestSent: boolean;
+  sentCharge: number | null;
+}
+
+const generationJobs: GenerationJob[] = [];
+const pendingGenerationJobIds = new Set<number>();
+let generationJobSequence = 0;
+let latestGenerationJobId = 0;
+let activeGenerationRequests = 0;
+let generationWarningTail: Promise<void> = Promise.resolve();
+let generationPhotoshopTail: Promise<void> = Promise.resolve();
+const generationSlotWaiters: Array<{
+  job: GenerationJob;
+  resolve: () => void;
+  reject: (error: any) => void;
+}> = [];
 let selectedRecall: {
   generation: GenerationArchive;
   layerName: string;
@@ -203,8 +244,8 @@ function isCancelledError(err: any): boolean {
   return !!err?.nbpCancelled || err?.name === "AbortError";
 }
 
-function throwIfCancelled(): void {
-  if (cancelRequested) throw cancelledError();
+function throwIfCancelled(job: GenerationJob): void {
+  if (job.cancelRequested) throw cancelledError();
 }
 
 // Best-effort teardown of the in-flight request. UXP's fetch reads `signal`, but
@@ -228,9 +269,16 @@ function newAbortController(): { signal?: any; abort(): void } {
 // settles first wins; the loser's later settlement is handled here, so an
 // abandoned request cannot reach the global unhandledrejection hook and overwrite
 // the status the user is reading.
-function awaitCancellable<T>(request: Promise<T>, controller: { abort(): void }): Promise<T> {
+function awaitCancellable<T>(
+  job: GenerationJob,
+  request: Promise<T>,
+  controller: { abort(): void }
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    cancelInFlight = () => {
+    let settled = false;
+    job.cancelInFlight = () => {
+      if (settled) return;
+      settled = true;
       try {
         controller.abort();
       } catch {
@@ -238,40 +286,29 @@ function awaitCancellable<T>(request: Promise<T>, controller: { abort(): void })
       }
       reject(cancelledError());
     };
-    request.then(resolve, reject);
+    request.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        job.cancelInFlight = null;
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        job.cancelInFlight = null;
+        reject(error);
+      }
+    );
   });
 }
 
-// The one button carries the whole run. "cancel" is the only state the user can
-// act on; "cancelling" and "finishing" are the two short unwinds where there is
-// nothing left to press.
-type GenerateButtonMode = "generate" | "cancel" | "cancelling" | "finishing";
-
-const GENERATE_BUTTON_LABELS: Record<GenerateButtonMode, string> = {
-  generate: "Generate",
-  cancel: "Cancel",
-  cancelling: "Cancelling…",
-  finishing: "Finishing…",
-};
-
-function setGenerateButton(mode: GenerateButtonMode): void {
-  const el = $("generate");
-  if (!el) return;
-  try {
-    el.textContent = GENERATE_BUTTON_LABELS[mode];
-    // Red while the click would stop something, back to the call-to-action blue
-    // once it would start something.
-    el.setAttribute("variant", mode === "generate" ? "cta" : "warning");
-  } catch {
-    /* Label and colour are cosmetic. This also runs from the run's `finally`,
-       where a throw would mask the run's own outcome — so never throw. */
-  }
-  el.disabled = mode === "cancelling" || mode === "finishing";
-  updateDescriptionControls();
+function hasActiveGenerationJobs(): boolean {
+  return generationJobs.some((job) => job.state !== "failed");
 }
 
 function updateDescriptionControls(): void {
-  const busy = running || describing;
+  const busy = hasActiveGenerationJobs() || describing;
   const describeButton = $("describe");
   if (describeButton) {
     const hasInput = refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection);
@@ -1015,6 +1052,207 @@ function clearChildren(el: any): void {
   while (el && el.firstChild) el.removeChild(el.firstChild);
 }
 
+function generationJobMeta(job: GenerationJob): string {
+  const quality = isOpenAIModel(job.model) ? imageQualityLabel(job.quality) : "Auto";
+  const referenceCount = `${job.references.length} reference image${job.references.length === 1 ? "" : "s"}`;
+  return `${modelSpec(job.model).label} · ${quality} quality · ${referenceCount}`;
+}
+
+function renderGenerationQueue(): void {
+  const section = $("generationQueue");
+  const list = $("generationQueueList");
+  const summary = $("generationQueueSummary");
+  const cancelAll = $("cancelAllGenerations");
+  if (!section || !list || !summary || !cancelAll) return;
+
+  section.style.display = generationJobs.length ? "block" : "none";
+  clearChildren(list);
+
+  const active = generationJobs.filter((job) => job.state !== "failed");
+  const waiting = active.filter((job) => job.state === "waiting").length;
+  const failed = generationJobs.length - active.length;
+  const summaryParts = [`${active.length} active`];
+  if (waiting) summaryParts.push(`${waiting} waiting`);
+  if (failed) summaryParts.push(`${failed} failed`);
+  summary.textContent = `Generation Queue · ${summaryParts.join(" · ")}`;
+
+  const cancelable = active.filter((job) => job.state !== "placing" && job.state !== "cancelling");
+  cancelAll.style.display = cancelable.length ? "inline-flex" : "none";
+  cancelAll.disabled = cancelable.length === 0;
+
+  for (const job of generationJobs) {
+    const row = document.createElement("div");
+    row.className = `generation-job${job.state === "failed" ? " failed" : ""}`;
+
+    const body = document.createElement("div");
+    body.className = "generation-job-body";
+
+    const prompt = document.createElement("div");
+    prompt.className = "generation-job-prompt";
+    prompt.textContent = job.prompt;
+    prompt.title = job.prompt;
+
+    const meta = document.createElement("div");
+    meta.className = "generation-job-meta";
+    meta.textContent = generationJobMeta(job);
+
+    const status = document.createElement("div");
+    status.className = "generation-job-status";
+    status.textContent = job.status;
+
+    const action: any = document.createElement("sp-button");
+    action.className = "generation-job-action";
+    action.setAttribute("size", "s");
+    action.setAttribute(
+      "variant",
+      job.state === "failed" || job.state === "placing" || job.state === "cancelling" ? "secondary" : "warning"
+    );
+    action.textContent =
+      job.state === "failed"
+        ? "Dismiss"
+        : job.state === "placing"
+          ? "Finishing…"
+          : job.state === "cancelling"
+            ? "Canceling…"
+            : "Cancel";
+    action.disabled = job.state === "placing" || job.state === "cancelling";
+    action.addEventListener("click", () => {
+      if (job.state === "failed") removeGenerationJob(job);
+      else cancelGenerationJob(job);
+    });
+
+    body.appendChild(prompt);
+    body.appendChild(meta);
+    body.appendChild(status);
+    row.appendChild(body);
+    row.appendChild(action);
+    list.appendChild(row);
+  }
+
+  setBusy(hasActiveGenerationJobs() || describing);
+  updateDescriptionControls();
+}
+
+function updateGenerationJob(job: GenerationJob, state: GenerationJobState, status: string): void {
+  job.state = state;
+  job.status = status;
+  renderGenerationQueue();
+}
+
+function setGenerationNote(job: GenerationJob, message: string): void {
+  if (job.id === latestGenerationJobId) setNote(message);
+}
+
+function removeGenerationJob(job: GenerationJob): void {
+  const index = generationJobs.indexOf(job);
+  if (index >= 0) generationJobs.splice(index, 1);
+  renderGenerationQueue();
+}
+
+function pumpGenerationSlots(): void {
+  let changed = false;
+  generationSlotWaiters.sort((a, b) => a.job.id - b.job.id);
+  while (activeGenerationRequests < MAX_CONCURRENT_GENERATIONS && generationSlotWaiters.length) {
+    const waiter = generationSlotWaiters[0];
+    const { job } = waiter;
+    const earlierSnapshotPending = Array.from(pendingGenerationJobIds).some((id) => id < job.id);
+    const earlierPreparationPending = generationJobs.some(
+      (candidate) =>
+        candidate.id < job.id &&
+        (candidate.state === "preparing" || (candidate.state === "cancelling" && !candidate.requestSent))
+    );
+    if (earlierSnapshotPending || earlierPreparationPending) break;
+    generationSlotWaiters.shift();
+    job.cancelSlotWait = null;
+    if (job.cancelRequested) {
+      waiter.reject(cancelledError());
+      continue;
+    }
+    activeGenerationRequests += 1;
+    job.slotAcquired = true;
+    job.state = "generating";
+    job.status = "Starting provider request…";
+    changed = true;
+    waiter.resolve();
+  }
+  if (changed) renderGenerationQueue();
+}
+
+function waitForGenerationSlot(job: GenerationJob): Promise<void> {
+  throwIfCancelled(job);
+  updateGenerationJob(
+    job,
+    "waiting",
+    activeGenerationRequests >= MAX_CONCURRENT_GENERATIONS
+      ? `Waiting for a generation slot (${MAX_CONCURRENT_GENERATIONS} in use)…`
+      : "Waiting for a generation slot…"
+  );
+  return new Promise<void>((resolve, reject) => {
+    const waiter = { job, resolve, reject };
+    generationSlotWaiters.push(waiter);
+    job.cancelSlotWait = () => {
+      const index = generationSlotWaiters.indexOf(waiter);
+      if (index >= 0) generationSlotWaiters.splice(index, 1);
+      reject(cancelledError());
+    };
+    pumpGenerationSlots();
+  });
+}
+
+function releaseGenerationSlot(job: GenerationJob): void {
+  if (!job.slotAcquired) return;
+  job.slotAcquired = false;
+  activeGenerationRequests = Math.max(0, activeGenerationRequests - 1);
+  pumpGenerationSlots();
+}
+
+function cancelGenerationJob(job: GenerationJob): void {
+  if (job.state === "failed" || job.state === "placing" || job.state === "cancelling") return;
+  job.cancelRequested = true;
+  updateGenerationJob(job, "cancelling", "Canceling…");
+
+  const stopWaiting = job.cancelSlotWait;
+  job.cancelSlotWait = null;
+  if (stopWaiting) stopWaiting();
+
+  const stopRequest = job.cancelInFlight;
+  job.cancelInFlight = null;
+  if (stopRequest) stopRequest();
+}
+
+function cancelAllGenerations(): void {
+  for (const job of generationJobs.slice()) cancelGenerationJob(job);
+}
+
+async function waitForGenerationPhotoshop(job: GenerationJob, cancellable = true): Promise<() => void> {
+  const previous = generationPhotoshopTail;
+  let release!: () => void;
+  generationPhotoshopTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  if (cancellable && job.cancelRequested) {
+    release();
+    throw cancelledError();
+  }
+  return release;
+}
+
+async function confirmGenerationWarnings(job: GenerationJob, coversEntireTarget: boolean): Promise<boolean> {
+  const previous = generationWarningTail;
+  let release!: () => void;
+  generationWarningTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    throwIfCancelled(job);
+    return await confirmDocumentWarnings(job.documentState, coversEntireTarget);
+  } finally {
+    release();
+  }
+}
+
 function renderThumbs(): void {
   const wrap = $("thumbs");
   clearChildren(wrap);
@@ -1633,7 +1871,7 @@ function descriptionUsageText(totalTokens?: number, reasoningTokens?: number): s
 }
 
 async function onDescribe(): Promise<void> {
-  if (running || describing) return;
+  if (hasActiveGenerationJobs() || describing) return;
   if (!(refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection))) {
     setStatus("Add a reference image or draw and include a Photoshop selection.", "error");
     return;
@@ -1689,7 +1927,7 @@ async function onDescribe(): Promise<void> {
 }
 
 function onUndoDescription(): void {
-  if (promptBeforeDescription === null || running || describing) return;
+  if (promptBeforeDescription === null || hasActiveGenerationJobs() || describing) return;
   const prompt = $("prompt");
   setValueSafe(prompt, promptBeforeDescription);
   promptBeforeDescription = null;
@@ -1702,29 +1940,13 @@ function onUndoDescription(): void {
   setStatus("Previous prompt restored.", "ok");
 }
 
-// The Generate button is also the Cancel button — one click target for the one
-// thing a run can be told to do at any moment.
 function onGenerateClick(): void {
-  if (running) onCancel();
-  else onGenerate();
-}
-
-function onCancel(): void {
-  if (!running || cancelRequested) return;
-  cancelRequested = true;
-  setGenerateButton("cancelling");
-  setStatus("Cancelling…");
-  const stop = cancelInFlight;
-  cancelInFlight = null;
-  // With a request out this ends the wait now; without one the run stops at its
-  // next checkpoint, before anything is sent.
-  if (stop) stop();
+  void onGenerate();
 }
 
 async function onGenerate(): Promise<void> {
-  if (running) return;
+  if (describing) return;
   setStatus("Starting…"); // immediate feedback that the click was received
-  setNote(""); // drop the previous run's framing note
 
   const prompt = ($("prompt").value || "").trim();
   const model = $("model").value || "gemini-3-pro-image";
@@ -1769,25 +1991,89 @@ async function onGenerate(): Promise<void> {
   // still placed into the selection's area and shape.
   const includeSelection = isChecked($("includeSelection"));
   const placeAsSmartObject = isChecked($("placeAsSmartObject"));
-  // Freeze the reference set for this run so the request and its archive still
-  // agree if the user edits the thumbnail list while the provider is working.
   const generationRefs = refs.slice();
-
-  // Once the request is out the provider bills it whatever happens next, so the
-  // estimate is frozen at that moment for the cancel path to charge.
-  let requestSent = false;
-  let sentCharge: number | null = null;
+  const activeLayers: any[] = Array.from(doc.activeLayers || []);
+  const anchorId = Number(activeLayers[0]?.id);
+  const anchorLayerId = Number.isFinite(anchorId) ? anchorId : null;
+  const jobId = ++generationJobSequence;
+  latestGenerationJobId = jobId;
+  pendingGenerationJobIds.add(jobId);
+  let activeArtboard: ActiveArtboard | null;
+  let rawSelection: Bounds | null;
   try {
-    const docId: number = doc.id;
-    const docW: number = doc.width;
-    const docH: number = doc.height;
+    [activeArtboard, rawSelection] = await Promise.all([
+      getActiveArtboard(doc, anchorLayerId),
+      getSelectionBounds(Number(doc.id)),
+    ]);
+  } catch (err: any) {
+    pendingGenerationJobIds.delete(jobId);
+    pumpGenerationSlots();
+    setStatus("Error: " + (err?.message || String(err)), "error");
+    return;
+  }
+  const job: GenerationJob = {
+    id: jobId,
+    prompt,
+    model,
+    provider,
+    quality,
+    apiKey,
+    resolution,
+    includeSelection,
+    placeAsSmartObject,
+    references: generationRefs,
+    doc,
+    docId: Number(doc.id),
+    docWidth: Number(doc.width),
+    docHeight: Number(doc.height),
+    anchorLayerId,
+    activeArtboard,
+    rawSelection,
+    documentState,
+    state: "preparing",
+    status: "Freezing Photoshop input…",
+    cancelRequested: false,
+    cancelInFlight: null,
+    cancelSlotWait: null,
+    slotAcquired: false,
+    requestSent: false,
+    sentCharge: null,
+  };
+  pendingGenerationJobIds.delete(jobId);
+  generationJobs.push(job);
+  setNote("");
+  renderGenerationQueue();
+  setStatus(`Generation ${job.id} added to the queue.`);
+  void runGenerationJob(job);
+}
+
+async function runGenerationJob(job: GenerationJob): Promise<void> {
+  const {
+    prompt,
+    model,
+    provider,
+    quality,
+    apiKey,
+    resolution,
+    includeSelection,
+    placeAsSmartObject,
+    references: generationRefs,
+    doc,
+    docId,
+    docWidth: docW,
+    docHeight: docH,
+    activeArtboard,
+    rawSelection,
+  } = job;
+  const spec = modelSpec(model);
+  let releasePhotoshop: (() => void) | null = null;
+  try {
+    throwIfCancelled(job);
     const documentBounds: Bounds = { left: 0, top: 0, right: docW, bottom: docH };
-    const activeArtboard = await getActiveArtboard(doc);
     const targetBounds = activeArtboard?.bounds || documentBounds;
     const targetW = targetBounds.right - targetBounds.left;
     const targetH = targetBounds.bottom - targetBounds.top;
 
-    const rawSelection = await getSelectionBounds();
     const hasSelection =
       !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
     const sel = hasSelection ? intersectBounds(rawSelection as Bounds, targetBounds) : null;
@@ -1811,27 +2097,15 @@ async function onGenerate(): Promise<void> {
     const frame = outputFrame(spec, resolution, baseW, baseH);
     const ratioLabel = frame.label;
     const region = fitRegionToRatio(baseRegion, frame.ratio, targetBounds);
-    setPickerSafe($("selRatio"), ratioLabel);
-    saveSetting("selRatio", ratioLabel);
-    refreshResolutionLabels();
     const cropW = region.right - region.left;
     const cropH = region.bottom - region.top;
 
-    if (isRegion) setStatus("Capturing selection…");
+    updateGenerationJob(job, "preparing", "Waiting to freeze Photoshop input…");
+    releasePhotoshop = await waitForGenerationPhotoshop(job);
+    if (isRegion) updateGenerationJob(job, "preparing", "Capturing selection…");
     let selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
+    throwIfCancelled(job);
     const coversEntireTarget = placementCoversEntireTarget(region, targetBounds, selectionSnapshot);
-    if (!(await confirmDocumentWarnings(documentState, coversEntireTarget))) {
-      setStatus("Cancelled before anything was sent — nothing was charged.");
-      return;
-    }
-
-    running = true;
-    cancelRequested = false;
-    cancelInFlight = null;
-    // Geometry checks and compatibility dialogs above are preflight. The button
-    // becomes Cancel only once the actual generation run begins.
-    setGenerateButton("cancel");
-    setBusy(true);
 
     const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
     const exactOutputSize =
@@ -1871,8 +2145,8 @@ async function onGenerate(): Promise<void> {
     if (!isRegion) {
       // Cancelled while the document was being read: stop before touching the
       // user's selection, and before anything has been sent.
-      throwIfCancelled();
-      await setRectSelection(region);
+      throwIfCancelled(job);
+      await setRectSelection(region, docId);
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
       const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
@@ -1904,11 +2178,13 @@ async function onGenerate(): Promise<void> {
           : "“Include Photoshop selection” is off and there are no references — plain text-to-image from the prompt."
       );
     }
-    setNote(notes.join(" "));
+    setGenerationNote(job, notes.join(" "));
 
     let basePng: Uint8Array | undefined;
     if (includeSelection) {
-      setStatus(
+      updateGenerationJob(
+        job,
+        "preparing",
         isRegion
           ? "Reading selected region…"
           : activeArtboard
@@ -1923,12 +2199,25 @@ async function onGenerate(): Promise<void> {
       }
       basePng = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
       console.log("[Mega Musa]", read.debug);
+      throwIfCancelled(job);
     }
+
+    releasePhotoshop();
+    releasePhotoshop = null;
+    if (!(await confirmGenerationWarnings(job, coversEntireTarget))) {
+      job.cancelRequested = true;
+      throw cancelledError();
+    }
+    throwIfCancelled(job);
 
     const requestReferences: RequestReference[] = [];
     for (let index = 0; index < generationRefs.length; index += 1) {
-      throwIfCancelled();
-      setStatus(`Preparing reference image ${index + 1}/${generationRefs.length}…`);
+      throwIfCancelled(job);
+      updateGenerationJob(
+        job,
+        "preparing",
+        `Preparing reference image ${index + 1}/${generationRefs.length}…`
+      );
       requestReferences.push(await resizeReference(generationRefs[index], requestMaxEdge));
     }
 
@@ -1940,10 +2229,8 @@ async function onGenerate(): Promise<void> {
         : "text-to-image";
     const qualitySuffix = isOpenAIModel(model) ? `, ${imageQualityLabel(quality)} quality` : "";
     // Last free exit: after this the request is on its way and is billed.
-    throwIfCancelled();
-    setStatus(
-      `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…  (10–60s, cancellable)`
-    );
+    throwIfCancelled(job);
+    await waitForGenerationSlot(job);
     const baseReq = {
       apiKey,
       model,
@@ -1951,37 +2238,50 @@ async function onGenerate(): Promise<void> {
       baseImagePng: basePng,
       references: requestReferences,
     };
-    const controller = newAbortController();
-    sentCharge = estimatedCHF(spec, resolution, frame.openaiSize, quality);
-    requestSent = true;
-    const request = isOpenAIModel(model)
-      ? generateOpenAIImage({ ...baseReq, size: frame.openaiSize as string, quality, signal: controller.signal })
-      : generateEdit({
-          ...baseReq,
-          aspectRatio: frame.geminiAspect,
-          imageSize: resolution === "auto" ? undefined : resolution,
-          signal: controller.signal,
-        });
-    const result = await awaitCancellable(request, controller);
+    let result: any;
+    try {
+      throwIfCancelled(job);
+      updateGenerationJob(
+        job,
+        "generating",
+        `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…`
+      );
+      const controller = newAbortController();
+      job.sentCharge = estimatedCHF(spec, resolution, frame.openaiSize, quality);
+      job.requestSent = true;
+      const request = isOpenAIModel(model)
+        ? generateOpenAIImage({ ...baseReq, size: frame.openaiSize as string, quality, signal: controller.signal })
+        : generateEdit({
+            ...baseReq,
+            aspectRatio: frame.geminiAspect,
+            imageSize: resolution === "auto" ? undefined : resolution,
+            signal: controller.signal,
+          });
+      result = await awaitCancellable(job, request, controller);
+    } finally {
+      releaseGenerationSlot(job);
+    }
     // The image is here and paid for. Cancelling from now on could only throw it
-    // away, so the button stops offering it for the rest of the run.
-    cancelInFlight = null;
-    setGenerateButton("finishing");
+    // away, so its queue action is disabled while the paid result is placed.
+    job.cancelInFlight = null;
+    updateGenerationJob(job, "placing", "Preparing returned image…");
 
     // Charged the moment the image comes back, not once it lands on the canvas —
     // a failure in the scaling or placing below still costs money. GPT Image 2
     // can replace the preflight estimate with its completed-event usage.
     const actualCost = result.usage ? actualUsageCHF(spec, result.usage) : null;
-    const budgetCharge = actualCost ?? sentCharge;
+    const budgetCharge = actualCost ?? job.sentCharge;
     renderBudget(addToBudget(budgetCharge));
     const resolvedQuality = isOpenAIModel(model) ? result.usage?.quality || quality : undefined;
     const usageDetails: string[] = [];
     if (resolvedQuality) usageDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
     if (actualCost !== null) usageDetails.push(`actual ca. CHF ${formatCHF(actualCost)}`);
-    else if (isOpenAIModel(model) && sentCharge !== null) {
-      usageDetails.push(`estimate ca. CHF ${formatCHF(sentCharge)}`);
+    else if (isOpenAIModel(model) && job.sentCharge !== null) {
+      usageDetails.push(`estimate ca. CHF ${formatCHF(job.sentCharge)}`);
     }
-    if (usageDetails.length) setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+    if (usageDetails.length) {
+      setGenerationNote(job, [notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+    }
 
     const decoded = decodeImage(result.mimeType, result.bytes);
     const returnedSize = pixelSize(decoded.width, decoded.height);
@@ -1999,11 +2299,11 @@ async function onGenerate(): Promise<void> {
       notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It is sized to fit without stretching.`);
     }
     if (returnedRatioDiffers || returnedSizeDiffers) {
-      setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+      setGenerationNote(job, [notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
     }
     const rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
 
-    setStatus("Placing result…");
+    updateGenerationJob(job, "placing", "Placing result at the top of its layer container…");
     // What produced this layer, for the bracketed tail of its name. The OpenAI
     // models return one fixed size, so their exact output is more use than the
     // requested tier; the Gemini models frame to a ratio, so there the tier is
@@ -2030,6 +2330,7 @@ async function onGenerate(): Promise<void> {
       outputHeight: cropH,
       createdAt: new Date().toISOString(),
     };
+    releasePhotoshop = await waitForGenerationPhotoshop(job, false);
     const placement = await placeResult(
       docId,
       region,
@@ -2040,15 +2341,18 @@ async function onGenerate(): Promise<void> {
       selectionSnapshot,
       placeAsSmartObject,
       archive,
-      generationRefs
+      generationRefs,
+      job.anchorLayerId
     );
+    releasePhotoshop();
+    releasePhotoshop = null;
     scheduleGenerationRecallRefresh();
 
     if (placement.smartObject) {
       notes.push(
         `The complete native ${returnedSize} result is embedded and sized nondestructively to the raster placement bounds.`
       );
-      setNote([notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
+      setGenerationNote(job, [notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
     }
 
     const doneMessage = isRegion
@@ -2079,32 +2383,36 @@ async function onGenerate(): Promise<void> {
       ? `${doneMessage} (${usageDetails.join(", ")}).${archivedMessage}`
       : `${doneMessage}${archivedMessage}`;
     setStatus(completedMessage, "ok");
+    removeGenerationJob(job);
   } catch (err: any) {
     if (isCancelledError(err)) {
       // Stopping the wait does not stop the provider: once the request is out it
       // is generated and billed whether or not the answer is ever collected. So a
       // cancel from that point on is charged like any other image, at the frozen
       // estimate — the real usage figure only ever arrives with the response.
-      if (requestSent) {
-        renderBudget(addToBudget(sentCharge, true));
+      if (job.requestSent) {
+        renderBudget(addToBudget(job.sentCharge, true));
         setStatus(
-          sentCharge === null
-            ? "Cancelled — the request was already sent, so it counts as billed. This tier has no published price, so no amount was added."
-            : `Cancelled — the request was already sent, so it counts as billed: ca. CHF ${formatCHF(sentCharge)} added to the budget.`
+          job.sentCharge === null
+            ? "Canceled — the request was already sent, so it counts as billed. This tier has no published price, so no amount was added."
+            : `Canceled — the request was already sent, so it counts as billed: ca. CHF ${formatCHF(job.sentCharge)} added to the budget.`
         );
       } else {
-        setStatus("Cancelled before anything was sent — nothing was charged.");
+        setStatus("Canceled before anything was sent — nothing was charged.");
       }
+      removeGenerationJob(job);
     } else {
-      setStatus("Error: " + (err?.message || String(err)), "error");
+      const message = err?.message || String(err);
+      updateGenerationJob(job, "failed", "Error: " + message);
+      setStatus("Error: " + message, "error");
     }
   } finally {
-    running = false;
-    cancelRequested = false;
-    cancelInFlight = null;
-    setGenerateButton("generate");
-    // After the catch above, so the resting colour is the run's final ok/error tint.
-    setBusy(false);
+    if (releasePhotoshop) releasePhotoshop();
+    releaseGenerationSlot(job);
+    pumpGenerationSlots();
+    job.cancelInFlight = null;
+    job.cancelSlotWait = null;
+    renderGenerationQueue();
   }
 }
 
@@ -2472,6 +2780,7 @@ async function init(): Promise<void> {
     });
     setupDropWebview();
     $("generate").addEventListener("click", onGenerateClick);
+    $("cancelAllGenerations").addEventListener("click", cancelAllGenerations);
     $("describe").addEventListener("click", onDescribe);
     $("undoDescription").addEventListener("click", onUndoDescription);
     $("copyRecallPrompt").addEventListener("click", onCopyRecallPrompt);
@@ -2513,6 +2822,7 @@ async function init(): Promise<void> {
     await restoreSettings();
     persistSettingsHooks();
     renderThumbs();
+    renderGenerationQueue();
     renderBudget();
     setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
   } catch (err: any) {
