@@ -208,7 +208,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                                                     color: rgb(128,128,128); font-size: 10px;
                                                     line-height: 13px; }
     .generation-job-status { margin-top: 2px; }
-    .generation-job-action { flex: 0 0 auto; margin: 0 0 0 8px; }
+    .generation-job-actions { display: flex; flex: 0 0 auto; flex-direction: column;
+                              align-items: stretch; gap: 4px; margin-left: 8px; }
+    .generation-job-action { margin: 0; }
     .notice-dialog { width: 360px; padding: 16px; }
     /* Plain HTML inside UXP dialogs does not inherit the panel's theme-aware
        body colour. Give dialog copy the same body/heading ladder as the panel;
@@ -344,7 +346,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
             <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
           </div>
           <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
-          <div class="muted" style="margin-top:4px;"><b>Batch syntax:</b> {banana, strawberry} or {a photo of a {banana, strawberry}, 3}. Maximum 10 images; use \ before literal braces, commas or backslashes.</div>
         </div>
       </div>
     </div>

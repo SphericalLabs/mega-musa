@@ -56,7 +56,7 @@ interface PhotoshopModule {
   core: {
     executeAsModal(
       fn: (executionContext: PhotoshopExecutionContext) => Promise<any>,
-      options?: { commandName?: string; interactive?: boolean }
+      options?: { commandName?: string; interactive?: boolean; timeOut?: number }
     ): Promise<any>;
   };
   imaging: {

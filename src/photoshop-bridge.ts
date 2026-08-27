@@ -21,9 +21,27 @@ import { applyAlphaMask, coverResampleRGBA, resampleGray } from "./image-codec";
 import { GenerationArchive, writeLayerGenerationArchive } from "./archive";
 import { archiveReferenceAssetsInActiveDocument } from "./reference-assets";
 import { RefImage } from "./references";
+import {
+  DEFAULT_HOST_MODAL_TIMEOUT_SECONDS,
+  executeHostModal,
+  HostModalLease,
+  runHostModalTask,
+} from "./host-modal";
 
 const { app, action, constants, core, imaging } = require("photoshop");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
+
+function runModal<T>(
+  commandName: string,
+  target: (executionContext: any) => Promise<T> | T,
+  lease?: HostModalLease,
+  timeoutSeconds: number = DEFAULT_HOST_MODAL_TIMEOUT_SECONDS
+): Promise<T> {
+  return runHostModalTask(
+    () => executeHostModal(core, target, commandName, timeoutSeconds),
+    lease
+  );
+}
 
 export interface Bounds {
   left: number;
@@ -144,8 +162,13 @@ export async function getActiveArtboard(doc: any, anchorLayerId?: number | null)
 
 // Replace the current selection with an exact rectangle (document pixels).
 // Used to snap a freely-drawn selection to a chosen aspect ratio.
-export async function setRectSelection(b: Bounds, docId?: number): Promise<void> {
-  await core.executeAsModal(
+export async function setRectSelection(
+  b: Bounds,
+  docId?: number,
+  lease?: HostModalLease
+): Promise<void> {
+  await runModal(
+    "snap selection",
     async () => withActiveDocument(docId ?? app.activeDocument?.id, async () => {
       await action.batchPlay(
         [
@@ -165,7 +188,7 @@ export async function setRectSelection(b: Bounds, docId?: number): Promise<void>
         {}
       );
     }),
-    { commandName: "Mega Musa: snap selection" }
+    lease
   );
 }
 
@@ -260,8 +283,13 @@ async function readSelectionMask(docId: number, bounds: Bounds): Promise<Uint8Ar
 
 // Capture the final placement region before the provider request. Failure is
 // intentionally propagated so no request is billed without a usable fallback.
-export async function captureSelection(docId: number, bounds: Bounds): Promise<SelectionSnapshot> {
-  return await core.executeAsModal(
+export async function captureSelection(
+  docId: number,
+  bounds: Bounds,
+  lease?: HostModalLease
+): Promise<SelectionSnapshot> {
+  return await runModal(
+    "capture selection",
     async () => {
       const data = await readSelectionMask(docId, bounds);
       if (!data.some((coverage) => coverage > 0)) {
@@ -269,7 +297,7 @@ export async function captureSelection(docId: number, bounds: Bounds): Promise<S
       }
       return { bounds, data };
     },
-    { commandName: "Mega Musa: capture selection" }
+    lease
   );
 }
 
@@ -326,7 +354,8 @@ export async function readRegion(
   docId: number,
   bounds: Bounds,
   withMask: boolean,
-  maxEdge?: number
+  maxEdge?: number,
+  lease?: HostModalLease
 ): Promise<RegionRead> {
   const cropW = bounds.right - bounds.left;
   const cropH = bounds.bottom - bounds.top;
@@ -339,7 +368,8 @@ export async function readRegion(
         ? { width: maxEdge }
         : { height: maxEdge }
       : undefined;
-  return await core.executeAsModal(
+  return await runModal(
+    "read region",
     async () => {
       const { imageData } = await imaging.getPixels({
         documentID: docId,
@@ -377,7 +407,7 @@ export async function readRegion(
 
       return { image: { data, width: imageW, height: imageH, components }, mask, debug };
     },
-    { commandName: "Mega Musa: read region" }
+    lease
   );
 }
 
@@ -385,7 +415,12 @@ export async function readRegion(
 // thumbnail isolated from the rest of the document composite, while targetSize
 // lets Photoshop use its optimized thumbnail path instead of returning the
 // layer at full resolution.
-export async function readLayerThumbnail(docId: number, layer: any, maxEdge: number): Promise<ImageBuffer> {
+export async function readLayerThumbnail(
+  docId: number,
+  layer: any,
+  maxEdge: number,
+  lease?: HostModalLease
+): Promise<ImageBuffer> {
   const layerId = layer?.id;
   const bounds = boundsFrom(layer?.boundsNoEffects) || boundsFrom(layer?.bounds);
   if (!Number.isFinite(layerId) || !bounds) throw new Error("The selected layer has no previewable pixels.");
@@ -401,7 +436,8 @@ export async function readLayerThumbnail(docId: number, layer: any, maxEdge: num
         : { height: safeMaxEdge }
       : undefined;
 
-  return await core.executeAsModal(
+  return await runModal(
+    "preview generated layer",
     async () => {
       const { imageData } = await imaging.getPixels({
         documentID: docId,
@@ -425,7 +461,7 @@ export async function readLayerThumbnail(docId: number, layer: any, maxEdge: num
         imageData.dispose();
       }
     },
-    { commandName: "Mega Musa: preview generated layer" }
+    lease
   );
 }
 
@@ -1079,10 +1115,13 @@ export async function placeResult(
   placeAsSmartObject: boolean,
   archive: GenerationArchive,
   references: RefImage[],
-  anchorLayerId?: number | null
+  anchorLayerId?: number | null,
+  lease?: HostModalLease,
+  timeoutSeconds: number = DEFAULT_HOST_MODAL_TIMEOUT_SECONDS
 ): Promise<PlacementResult> {
   const historyName = "Mega Musa: place result";
-  return await core.executeAsModal(
+  return await runModal(
+    "place result",
     async (executionContext) => withActiveDocument(docId, async () => {
       const historySuspension = await executionContext.hostControl.suspendHistory({
         documentID: docId,
@@ -1186,7 +1225,8 @@ export async function placeResult(
       await executionContext.hostControl.resumeHistory(historySuspension);
       return placement;
     }),
-    { commandName: historyName }
+    lease,
+    timeoutSeconds
   );
 }
 
@@ -1210,9 +1250,10 @@ export interface PastedImage extends ImageBuffer {
 // side effect like layer count — a paste can quietly do nothing. Whatever
 // happened along the way is attached to the error, so a failure names the step
 // that failed instead of a generic "nothing on the clipboard".
-export async function readClipboardImage(): Promise<PastedImage> {
+export async function readClipboardImage(lease?: HostModalLease): Promise<PastedImage> {
   // Creating, modifying and closing documents all need modal scope.
-  return await core.executeAsModal(
+  return await runModal(
+    "paste reference",
     async () => {
       const trace: string[] = [];
       // The user's own document: never closed, never read from. Guards the
@@ -1338,7 +1379,7 @@ export async function readClipboardImage(): Promise<PastedImage> {
         }
       }
     },
-    { commandName: "Mega Musa: paste reference" }
+    lease
   );
 }
 
@@ -1454,13 +1495,15 @@ export async function scaleViaPhotoshop(
   srcW: number,
   srcH: number,
   dstW: number,
-  dstH: number
+  dstH: number,
+  lease?: HostModalLease
 ): Promise<Uint8Array> {
   // Creating and closing the scratch document both modify Photoshop's state, so
   // they belong inside modal scope alongside the pixel work — outside it,
   // createDocument is rejected with "make may modify the state of Photoshop".
-  return await core.executeAsModal(
+  return await runModal(
+    "scale result",
     () => scaleViaPhotoshopInModal(rgba, srcW, srcH, dstW, dstH),
-    { commandName: "Mega Musa: scale result" }
+    lease
   );
 }

@@ -27,6 +27,7 @@ import {
   writeLayerReferenceAssetPoolMetadata,
 } from "./archive";
 import { RefImage, referenceImageFromBase64 } from "./references";
+import { executeHostModal, HostModalLease, runHostModalTask } from "./host-modal";
 
 const { app, action, core, constants } = require("photoshop");
 const { storage } = require("uxp");
@@ -455,7 +456,8 @@ function openDocumentById(docId: number): any | null {
 export async function restoreReferenceAssets(
   docId: number,
   references: ArchivedReference[],
-  selectedLayerId: number
+  selectedLayerId: number,
+  lease?: HostModalLease
 ): Promise<RestoredReferenceResult> {
   const previousDocument = app.activeDocument;
   const targetDocument = openDocumentById(docId);
@@ -467,8 +469,8 @@ export async function restoreReferenceAssets(
     };
   }
 
-  return await core.executeAsModal(
-    async () => {
+  return await runHostModalTask(
+    () => executeHostModal(core, async () => {
       const switched = previousDocument?.id !== docId;
       if (switched) app.activeDocument = targetDocument;
       const images: RefImage[] = [];
@@ -531,7 +533,7 @@ export async function restoreReferenceAssets(
         }
       }
       return { images, missing, failures };
-    },
-    { commandName: "Mega Musa: restore references" }
+    }, "restore references"),
+    lease
   );
 }

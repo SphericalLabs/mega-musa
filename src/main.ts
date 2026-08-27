@@ -82,6 +82,13 @@ import {
   MAX_CONCURRENT_GENERATIONS,
   MAX_BRACKET_GENERATION_JOBS,
 } from "./generation-limits";
+import {
+  acquireHostModalTask,
+  HostModalReservation,
+  HostModalTimeoutError,
+  PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS,
+  runHostModalTask,
+} from "./host-modal";
 
 const { entrypoints } = require("uxp");
 const { action: photoshopAction } = require("photoshop");
@@ -117,7 +124,29 @@ const acceptedDocumentWarnings = new Set<string>();
 let describing = false;
 let promptBeforeDescription: string | null = null;
 
-type GenerationJobState = "preparing" | "waiting" | "generating" | "placing" | "cancelling" | "failed";
+type GenerationJobState =
+  | "preparing"
+  | "waiting"
+  | "generating"
+  | "placing"
+  | "cancelling"
+  | "placement-failed"
+  | "failed";
+
+interface PendingGenerationPlacement {
+  region: Bounds;
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+  layerName: string;
+  selectionSnapshot: SelectionSnapshot | null;
+  archive: GenerationArchive;
+  returnedSize: string;
+  notes: string[];
+  usageDetails: string[];
+  isRegion: boolean;
+  activeArtboard: ActiveArtboard | null;
+}
 
 interface GenerationJob {
   id: number;
@@ -146,6 +175,7 @@ interface GenerationJob {
   slotAcquired: boolean;
   requestSent: boolean;
   sentCharge: number | null;
+  pendingPlacement: PendingGenerationPlacement | null;
 }
 
 const generationJobs: GenerationJob[] = [];
@@ -153,8 +183,6 @@ const pendingGenerationJobIds = new Set<number>();
 let generationJobSequence = 0;
 let latestGenerationJobId = 0;
 let activeGenerationRequests = 0;
-let generationWarningTail: Promise<void> = Promise.resolve();
-let generationPhotoshopTail: Promise<void> = Promise.resolve();
 const generationSlotWaiters: Array<{
   job: GenerationJob;
   resolve: () => void;
@@ -168,6 +196,7 @@ let selectedRecall: {
 } | null = null;
 let recallRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let recallRefreshSequence = 0;
+let recallRefreshDeferred = false;
 let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let descriptionInputRefreshSequence = 0;
 let hasDescriptionSelection = false;
@@ -304,12 +333,16 @@ function awaitCancellable<T>(
   });
 }
 
+function generationJobIsActive(job: GenerationJob): boolean {
+  return job.state !== "failed" && job.state !== "placement-failed";
+}
+
 function hasActiveGenerationJobs(): boolean {
-  return generationJobs.some((job) => job.state !== "failed");
+  return generationJobs.some(generationJobIsActive);
 }
 
 function queuedGenerationJobCount(): number {
-  const activeJobs = generationJobs.filter((job) => job.state !== "failed").length;
+  const activeJobs = generationJobs.filter(generationJobIsActive).length;
   return activeJobs + pendingGenerationJobIds.size;
 }
 
@@ -897,11 +930,25 @@ async function refreshGenerationRecall(): Promise<void> {
 }
 
 function scheduleGenerationRecallRefresh(): void {
+  if (hasActiveGenerationJobs()) {
+    recallRefreshDeferred = true;
+    if (recallRefreshTimer !== null) {
+      clearTimeout(recallRefreshTimer);
+      recallRefreshTimer = null;
+    }
+    return;
+  }
+  recallRefreshDeferred = false;
   if (recallRefreshTimer !== null) clearTimeout(recallRefreshTimer);
   recallRefreshTimer = setTimeout(() => {
     recallRefreshTimer = null;
     void refreshGenerationRecall();
   }, 60);
+}
+
+function flushDeferredGenerationRecallRefresh(): void {
+  if (!recallRefreshDeferred || hasActiveGenerationJobs()) return;
+  scheduleGenerationRecallRefresh();
 }
 
 async function setupGenerationRecallTracking(): Promise<void> {
@@ -1052,7 +1099,7 @@ function renderGenerationQueue(): void {
   section.style.display = generationJobs.length ? "block" : "none";
   clearChildren(list);
 
-  const active = generationJobs.filter((job) => job.state !== "failed");
+  const active = generationJobs.filter(generationJobIsActive);
   const waiting = active.filter((job) => job.state === "waiting").length;
   const failed = generationJobs.length - active.length;
   const summaryParts = [`${active.length} active`];
@@ -1066,7 +1113,7 @@ function renderGenerationQueue(): void {
 
   for (const job of generationJobs) {
     const row = document.createElement("div");
-    row.className = `generation-job${job.state === "failed" ? " failed" : ""}`;
+    row.className = `generation-job${generationJobIsActive(job) ? "" : " failed"}`;
 
     const body = document.createElement("div");
     body.className = "generation-job-body";
@@ -1084,38 +1131,44 @@ function renderGenerationQueue(): void {
     status.className = "generation-job-status";
     status.textContent = job.status;
 
-    const action: any = document.createElement("sp-button");
-    action.className = "generation-job-action";
-    action.setAttribute("size", "s");
-    action.setAttribute(
-      "variant",
-      job.state === "failed" || job.state === "placing" || job.state === "cancelling" ? "secondary" : "warning"
-    );
-    action.textContent =
-      job.state === "failed"
-        ? "Dismiss"
-        : job.state === "placing"
-          ? "Finishing…"
-          : job.state === "cancelling"
-            ? "Canceling…"
-            : "Cancel";
-    action.disabled = job.state === "placing" || job.state === "cancelling";
-    action.addEventListener("click", () => {
-      if (job.state === "failed") removeGenerationJob(job);
-      else cancelGenerationJob(job);
-    });
+    const actions = document.createElement("div");
+    actions.className = "generation-job-actions";
+    const addAction = (label: string, variant: string, disabled: boolean, onClick: () => void) => {
+      const action: any = document.createElement("sp-button");
+      action.className = "generation-job-action";
+      action.setAttribute("size", "s");
+      action.setAttribute("variant", variant);
+      action.textContent = label;
+      action.disabled = disabled;
+      action.addEventListener("click", onClick);
+      actions.appendChild(action);
+    };
+
+    if (job.state === "placement-failed") {
+      addAction("Retry Placement", "primary", false, () => void retryGenerationPlacement(job));
+      addAction("Dismiss", "secondary", false, () => removeGenerationJob(job));
+    } else if (job.state === "failed") {
+      addAction("Dismiss", "secondary", false, () => removeGenerationJob(job));
+    } else if (job.state === "placing") {
+      addAction("Finishing…", "secondary", true, () => {});
+    } else if (job.state === "cancelling") {
+      addAction("Canceling…", "secondary", true, () => {});
+    } else {
+      addAction("Cancel", "warning", false, () => cancelGenerationJob(job));
+    }
 
     body.appendChild(prompt);
     body.appendChild(meta);
     body.appendChild(status);
     row.appendChild(body);
-    row.appendChild(action);
+    row.appendChild(actions);
     list.appendChild(row);
   }
 
   setBusy(hasActiveGenerationJobs() || describing);
   updateGenerateControl();
   updateDescriptionControls();
+  flushDeferredGenerationRecallRefresh();
 }
 
 function updateGenerationJob(job: GenerationJob, state: GenerationJobState, status: string): void {
@@ -1129,6 +1182,7 @@ function setGenerationNote(job: GenerationJob, message: string): void {
 }
 
 function removeGenerationJob(job: GenerationJob): void {
+  job.pendingPlacement = null;
   const index = generationJobs.indexOf(job);
   if (index >= 0) generationJobs.splice(index, 1);
   renderGenerationQueue();
@@ -1192,7 +1246,12 @@ function releaseGenerationSlot(job: GenerationJob): void {
 }
 
 function cancelGenerationJob(job: GenerationJob): void {
-  if (job.state === "failed" || job.state === "placing" || job.state === "cancelling") return;
+  if (
+    job.state === "failed" ||
+    job.state === "placement-failed" ||
+    job.state === "placing" ||
+    job.state === "cancelling"
+  ) return;
   job.cancelRequested = true;
   updateGenerationJob(job, "cancelling", "Canceling…");
 
@@ -1209,33 +1268,9 @@ function cancelAllGenerations(): void {
   for (const job of generationJobs.slice()) cancelGenerationJob(job);
 }
 
-async function waitForGenerationPhotoshop(job: GenerationJob, cancellable = true): Promise<() => void> {
-  const previous = generationPhotoshopTail;
-  let release!: () => void;
-  generationPhotoshopTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  if (cancellable && job.cancelRequested) {
-    release();
-    throw cancelledError();
-  }
-  return release;
-}
-
 async function confirmGenerationWarnings(job: GenerationJob, coversEntireTarget: boolean): Promise<boolean> {
-  const previous = generationWarningTail;
-  let release!: () => void;
-  generationWarningTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    throwIfCancelled(job);
-    return await confirmDocumentWarnings(job.documentState, coversEntireTarget);
-  } finally {
-    release();
-  }
+  throwIfCancelled(job);
+  return await confirmDocumentWarnings(job.documentState, coversEntireTarget);
 }
 
 function renderThumbs(): void {
@@ -1972,7 +2007,7 @@ async function onGenerate(): Promise<void> {
     documentState = getDocumentState(doc);
     const blocker = documentBlocker(documentState);
     if (blocker) {
-      await showDocumentBlocker(blocker);
+      await runHostModalTask(() => showDocumentBlocker(blocker));
       setStatus("Generation blocked before anything was sent — nothing was charged.");
       return;
     }
@@ -2039,6 +2074,7 @@ async function onGenerate(): Promise<void> {
     slotAcquired: false,
     requestSent: false,
     sentCharge: null,
+    pendingPlacement: null,
   }));
   for (const jobId of jobIds) pendingGenerationJobIds.delete(jobId);
   generationJobs.push(...jobs);
@@ -2050,6 +2086,93 @@ async function onGenerate(): Promise<void> {
       : `${jobs.length} expanded generations added to the queue.`
   );
   for (const job of jobs) void runGenerationJob(job);
+}
+
+function preserveTimedOutPlacement(job: GenerationJob, error: any): boolean {
+  if (!(error instanceof HostModalTimeoutError) || !job.pendingPlacement) return false;
+  const message = `Paid result preserved. ${error.message}`;
+  updateGenerationJob(job, "placement-failed", message);
+  setStatus(`Placement paused — ${message}`, "error");
+  return true;
+}
+
+async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
+  const pending = job.pendingPlacement;
+  if (!pending) throw new Error("The generated image is no longer available for placement.");
+
+  updateGenerationJob(job, "placing", "Waiting to place the paid result in Photoshop…");
+  const placement = await placeResult(
+    job.docId,
+    pending.region,
+    pending.rgba,
+    pending.width,
+    pending.height,
+    pending.layerName,
+    pending.selectionSnapshot,
+    job.placeAsSmartObject,
+    pending.archive,
+    job.references,
+    job.anchorLayerId,
+    undefined,
+    PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS
+  );
+  scheduleGenerationRecallRefresh();
+
+  if (placement.smartObject) {
+    pending.notes.push(
+      `The complete native ${pending.returnedSize} result is embedded and sized nondestructively to the raster placement bounds.`
+    );
+    setGenerationNote(
+      job,
+      [pending.notes.join(" "), pending.usageDetails.join("; ")].filter(Boolean).join(" ")
+    );
+  }
+
+  const doneMessage = pending.isRegion
+    ? placement.clip === "alpha"
+      ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
+      : placement.smartObject
+        ? "Done — native result embedded as a Smart Object with an editable linked mask."
+        : "Done — raster fallback clipped to your selection with an editable mask."
+    : pending.activeArtboard
+      ? placement.smartObject
+        ? `Done — native result embedded in active artboard “${pending.activeArtboard.name}” as a Smart Object.`
+        : `Done — result added to active artboard “${pending.activeArtboard.name}” as a raster layer.`
+      : placement.smartObject
+        ? "Done — native full-image result embedded as a Smart Object."
+        : "Done — full-image result added as a raster layer.";
+  const archiveMessages: string[] = [];
+  if (job.placeAsSmartObject && !placement.smartObject) {
+    archiveMessages.push("Smart Object placement failed; the paid result was preserved as a raster layer.");
+  }
+  if (!placement.archiveSaved) archiveMessages.push("Prompt archive could not be saved; see the console.");
+  if (placement.referenceArchiveFailures) {
+    archiveMessages.push(
+      `${placement.referenceArchiveFailures} reference image${placement.referenceArchiveFailures === 1 ? " was" : "s were"} not embedded; see the console.`
+    );
+  }
+  const archivedMessage = archiveMessages.length ? ` ${archiveMessages.join(" ")}` : "";
+  const completedMessage = pending.usageDetails.length
+    ? `${doneMessage} (${pending.usageDetails.join(", ")}).${archivedMessage}`
+    : `${doneMessage}${archivedMessage}`;
+  setStatus(completedMessage, "ok");
+  removeGenerationJob(job);
+}
+
+async function retryGenerationPlacement(job: GenerationJob): Promise<void> {
+  if (job.state !== "placement-failed" || !job.pendingPlacement) return;
+  try {
+    await completeGenerationPlacement(job);
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    if (!preserveTimedOutPlacement(job, error)) {
+      job.pendingPlacement = null;
+      updateGenerationJob(job, "failed", "Error: " + message);
+      setStatus("Error: " + message, "error");
+    }
+  } finally {
+    renderGenerationQueue();
+  }
 }
 
 async function runGenerationJob(job: GenerationJob): Promise<void> {
@@ -2071,7 +2194,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     rawSelection,
   } = job;
   const spec = modelSpec(model);
-  let releasePhotoshop: (() => void) | null = null;
+  let hostReservation: HostModalReservation | null = null;
   try {
     throwIfCancelled(job);
     const documentBounds: Bounds = { left: 0, top: 0, right: docW, bottom: docH };
@@ -2106,9 +2229,13 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     const cropH = region.bottom - region.top;
 
     updateGenerationJob(job, "preparing", "Waiting to freeze Photoshop input…");
-    releasePhotoshop = await waitForGenerationPhotoshop(job);
+    hostReservation = await acquireHostModalTask();
+    throwIfCancelled(job);
+    const snapshotLease = hostReservation.lease;
     if (isRegion) updateGenerationJob(job, "preparing", "Capturing selection…");
-    let selectionSnapshot: SelectionSnapshot | null = isRegion ? await captureSelection(docId, region) : null;
+    let selectionSnapshot: SelectionSnapshot | null = isRegion
+      ? await captureSelection(docId, region, snapshotLease)
+      : null;
     throwIfCancelled(job);
     const coversEntireTarget = placementCoversEntireTarget(region, targetBounds, selectionSnapshot);
 
@@ -2151,7 +2278,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       // Cancelled while the document was being read: stop before touching the
       // user's selection, and before anything has been sent.
       throwIfCancelled(job);
-      await setRectSelection(region, docId);
+      await setRectSelection(region, docId, snapshotLease);
       const cropped = cropW !== targetW || cropH !== targetH;
       const what = includeSelection ? "what was sent" : "where the result lands";
       const targetName = activeArtboard ? `active artboard “${activeArtboard.name}”` : "the full image";
@@ -2198,7 +2325,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       );
       // withMask=false: the selection shape is applied later as a Photoshop layer
       // mask, so we don't read/resample it here (and leave the selection untouched).
-      const read = await readRegion(docId, region, false, requestMaxEdge);
+      const read = await readRegion(docId, region, false, requestMaxEdge, snapshotLease);
       if (Math.max(read.image.width, read.image.height) > requestMaxEdge) {
         throw new Error("Photoshop returned a canvas input larger than the request limit.");
       }
@@ -2207,12 +2334,12 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       throwIfCancelled(job);
     }
 
-    releasePhotoshop();
-    releasePhotoshop = null;
     if (!(await confirmGenerationWarnings(job, coversEntireTarget))) {
       job.cancelRequested = true;
       throw cancelledError();
     }
+    hostReservation.release();
+    hostReservation = null;
     throwIfCancelled(job);
 
     const requestReferences: RequestReference[] = [];
@@ -2335,60 +2462,21 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       outputHeight: cropH,
       createdAt: new Date().toISOString(),
     };
-    releasePhotoshop = await waitForGenerationPhotoshop(job, false);
-    const placement = await placeResult(
-      docId,
+    job.pendingPlacement = {
       region,
       rgba,
-      decoded.width,
-      decoded.height,
-      resultLayerName(prompt, layerDetails),
+      width: decoded.width,
+      height: decoded.height,
+      layerName: resultLayerName(prompt, layerDetails),
       selectionSnapshot,
-      placeAsSmartObject,
       archive,
-      generationRefs,
-      job.anchorLayerId
-    );
-    releasePhotoshop();
-    releasePhotoshop = null;
-    scheduleGenerationRecallRefresh();
-
-    if (placement.smartObject) {
-      notes.push(
-        `The complete native ${returnedSize} result is embedded and sized nondestructively to the raster placement bounds.`
-      );
-      setGenerationNote(job, [notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
-    }
-
-    const doneMessage = isRegion
-      ? placement.clip === "alpha"
-        ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
-        : placement.smartObject
-          ? "Done — native result embedded as a Smart Object with an editable linked mask."
-          : "Done — raster fallback clipped to your selection with an editable mask."
-      : activeArtboard
-        ? placement.smartObject
-          ? `Done — native result embedded in active artboard “${activeArtboard.name}” as a Smart Object.`
-          : `Done — result added to active artboard “${activeArtboard.name}” as a raster layer.`
-        : placement.smartObject
-          ? "Done — native full-image result embedded as a Smart Object."
-          : "Done — full-image result added as a raster layer.";
-    const archiveMessages: string[] = [];
-    if (placeAsSmartObject && !placement.smartObject) {
-      archiveMessages.push("Smart Object placement failed; the paid result was preserved as a raster layer.");
-    }
-    if (!placement.archiveSaved) archiveMessages.push("Prompt archive could not be saved; see the console.");
-    if (placement.referenceArchiveFailures) {
-      archiveMessages.push(
-        `${placement.referenceArchiveFailures} reference image${placement.referenceArchiveFailures === 1 ? " was" : "s were"} not embedded; see the console.`
-      );
-    }
-    const archivedMessage = archiveMessages.length ? ` ${archiveMessages.join(" ")}` : "";
-    const completedMessage = usageDetails.length
-      ? `${doneMessage} (${usageDetails.join(", ")}).${archivedMessage}`
-      : `${doneMessage}${archivedMessage}`;
-    setStatus(completedMessage, "ok");
-    removeGenerationJob(job);
+      returnedSize,
+      notes,
+      usageDetails,
+      isRegion,
+      activeArtboard,
+    };
+    await completeGenerationPlacement(job);
   } catch (err: any) {
     if (isCancelledError(err)) {
       // Stopping the wait does not stop the provider: once the request is out it
@@ -2408,11 +2496,14 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       removeGenerationJob(job);
     } else {
       const message = err?.message || String(err);
-      updateGenerationJob(job, "failed", "Error: " + message);
-      setStatus("Error: " + message, "error");
+      if (!preserveTimedOutPlacement(job, err)) {
+        job.pendingPlacement = null;
+        updateGenerationJob(job, "failed", "Error: " + message);
+        setStatus("Error: " + message, "error");
+      }
     }
   } finally {
-    if (releasePhotoshop) releasePhotoshop();
+    if (hostReservation) hostReservation.release();
     releaseGenerationSlot(job);
     pumpGenerationSlots();
     job.cancelInFlight = null;
