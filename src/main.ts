@@ -51,6 +51,7 @@ import {
   DEFAULT_OPENAI_DESCRIPTION_MODEL,
   DescriptionModelSpec,
 } from "./describe";
+import { formatDescriptions } from "./description-format";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
 import {
   MODELS,
@@ -1864,24 +1865,6 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
     });
   }
   return inputs;
-}
-
-function formatDescriptionParagraphs(description: string): string {
-  return description
-    .replace(/\r\n?/g, "\n")
-    .replace(/(^|[.!?]["')\]]?)\s+([A-Z][A-Z0-9 &/-]{2,}:)/g, (_match: string, boundary: string, label: string) =>
-      boundary ? `${boundary}\n\n${label}` : label
-    )
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function formatDescriptions(inputs: PreparedDescriptionInput[], descriptions: string[]): string {
-  const formatted = descriptions.map(formatDescriptionParagraphs);
-  if (formatted.length === 1) return formatted[0];
-  return formatted
-    .map((description, index) => `Image ${index + 1} — ${inputs[index].source}\n${description}`)
-    .join("\n\n");
 }
 
 function descriptionUsageText(totalTokens?: number, reasoningTokens?: number): string {
