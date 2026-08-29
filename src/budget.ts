@@ -23,13 +23,17 @@ import { loadSetting, saveSetting } from "./storage";
 // other panel settings. When GPT Image 2 returns usage, the caller supplies the
 // token-based amount; otherwise it supplies the output-only estimate shown in the
 // resolution menu. Models without compatible published token rates still use
-// that estimate.
+// that estimate. Description requests share the CHF total but count their input
+// images, including estimates when cancellation prevents reading usage.
 
 export interface Budget {
   chf: number;
   images: number; // images it could price
   unpriced: number; // images generated at a tier with no published price
   cancelled: number; // runs stopped after the request went out — billed, no image
+  imagesAnalyzed: number; // input images in budgeted Describe requests
+  analysisCancelled: number;
+  analysisEstimates: number;
   since: string; // ISO date of the last reset, or of first use
 }
 
@@ -43,6 +47,9 @@ function save(b: Budget): void {
   saveSetting("budgetImages", String(b.images));
   saveSetting("budgetUnpriced", String(b.unpriced));
   saveSetting("budgetCancelled", String(b.cancelled));
+  saveSetting("budgetImagesAnalyzed", String(b.imagesAnalyzed));
+  saveSetting("budgetAnalysisCancelled", String(b.analysisCancelled));
+  saveSetting("budgetAnalysisEstimates", String(b.analysisEstimates));
   saveSetting("budgetSince", b.since);
 }
 
@@ -55,6 +62,11 @@ export function loadBudget(): Budget {
     images: num("budgetImages"),
     unpriced: num("budgetUnpriced"),
     cancelled: num("budgetCancelled"),
+    // Old request counts cannot tell us how many images were analyzed.
+    // New keys start at zero without resetting the existing spend or date.
+    imagesAnalyzed: num("budgetImagesAnalyzed"),
+    analysisCancelled: num("budgetAnalysisCancelled"),
+    analysisEstimates: num("budgetAnalysisEstimates"),
     since,
   };
 }
@@ -65,6 +77,9 @@ export function resetBudget(): Budget {
     images: 0,
     unpriced: 0,
     cancelled: 0,
+    imagesAnalyzed: 0,
+    analysisCancelled: 0,
+    analysisEstimates: 0,
     since: new Date().toISOString(),
   };
   save(fresh);
@@ -85,6 +100,16 @@ export function addToBudget(chf: number | null, cancelled = false): Budget {
   if (cancelled) b.cancelled += 1;
   else if (chf === null) b.unpriced += 1;
   else b.images += 1;
+  save(b);
+  return b;
+}
+
+export function addDescriptionToBudget(chf: number, imageCount: number, cancelled = false, estimated = false): Budget {
+  const b = loadBudget();
+  b.chf += chf;
+  b.imagesAnalyzed += imageCount;
+  if (cancelled) b.analysisCancelled += imageCount;
+  if (estimated) b.analysisEstimates += imageCount;
   save(b);
   return b;
 }
@@ -115,10 +140,16 @@ export function formatDate(iso: string): string {
 // UXP into honouring. `counts` keeps its brackets — it reads as an aside under
 // the total either way, and nothing else has to know where the split was.
 export function budgetText(b: Budget): { total: string; counts: string } {
-  const counts = [`${b.images} images`];
+  const analysisDetails: string[] = [];
+  if (b.analysisCancelled) analysisDetails.push(`${b.analysisCancelled} canceled`);
+  if (b.analysisEstimates) analysisDetails.push(`${b.analysisEstimates} estimated`);
+  const analyzed = `${b.imagesAnalyzed} image${b.imagesAnalyzed === 1 ? "" : "s"} described` +
+    (analysisDetails.length ? ` (${analysisDetails.join(", ")})` : "");
+  const counts = [`${b.images} images`, analyzed];
   if (b.unpriced) counts.push(`${b.unpriced} unpriced`);
-  if (b.cancelled) counts.push(`${b.cancelled} canceled but billed`);
+  if (b.cancelled) counts.push(`${b.cancelled} image requests canceled but billed`);
   return {
+    // Round only the display; small description charges retain full precision.
     total: `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)}`,
     counts: `(${counts.join(", ")})`,
   };

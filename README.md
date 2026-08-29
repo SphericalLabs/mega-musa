@@ -15,7 +15,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 - Choose Nano Banana Pro, Nano Banana 2 or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
 - Queue multiple generations while continuing to edit the controls. Each click freezes its prompt, model, quality, references, Photoshop pixels, selection and destination. Plain Generate clicks allow up to four active jobs, while one brace-expanded prompt can add up to 10. Two provider requests run concurrently; additional jobs wait.
 - Cancel one queued generation from its row or cancel every waiting and running generation with **Cancel All**. A request that has already reached the provider counts as billed and is added to the spend counter.
-- Track estimated spend locally.
+- Track image generation and Describe costs in one local CHF total, with separate counts for generated and described images.
 
 ## Requirements
 
@@ -59,6 +59,14 @@ Existing selections are framed to the nearest supported output ratio without cha
 Initial result sizing is nondestructive: the native provider pixels remain stored in the Smart Object while its outer bounds match raster placement. The selection mask is attached only after sizing and placement, so its original size and position are preserved. Masks are linked by default so later Move and Free Transform operations affect the image and mask together; unlink the mask first to reframe the image inside a fixed selection boundary. Enlarging beyond the native provider dimensions cannot create new detail. Paint, erase, clone and similar pixel edits require opening the Smart Object contents or rasterizing the result first.
 
 Mega Musa uses 8-bit sRGB for model inputs and outputs. A 16-bit document shows a precision warning. Partial placements in CMYK, Lab, Grayscale and non-sRGB documents show a color-conversion warning, which is skipped when the result fully and opaquely covers the complete document or active artboard. Either warning can be accepted once per exact mode/profile/depth state during the panel session. A 32-bit/HDR document, Quick Mask mode or a Bitmap, Indexed Color, Duotone or Multichannel document blocks generation before anything is sent and explains how to switch to a supported state.
+
+### Describe budget
+
+**Describe Images** adds its cost to the same budget as image generation. The **images described** counter counts each input image: one Photoshop selection plus nine references adds 10, even though they share one API request. No Describe request count is shown. The cost for the whole request is added once, without multiplying it by the image count. Returned usage accounts for input, output, reasoning and cached tokens, including OpenAI cache writes. The calculator uses [OpenAI pricing](https://developers.openai.com/api/docs/pricing) and [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), checked August 28, 2026, with the panel's existing USD-to-CHF reference rate. It assumes paid API usage; free tiers, credits, taxes and account-specific discounts are not detected.
+
+If usage is missing, the budget uses the midpoint of the model's displayed price range per input image and marks those images as estimated. Canceling after sending a request also adds that estimate once; its input images count as described and are marked canceled and estimated. A late response does not add cost or images again or replace the estimate. Canceling during preparation adds nothing. Responses with usable billing information still count if their description text cannot be parsed; transport errors and rejected requests without usage add neither cost nor described images.
+
+The total always shows two decimal places; stored amounts are not rounded. Counts and costs survive a panel reload. **Undo** restores the prompt without refunding usage. **Reset** clears spend, generation counts and description counts together. When upgrading from the old Describe request counter, the counters for described images start at zero because historical input counts were not saved. Existing CHF spend, generation counts and the budget's start date are preserved. This is a local estimate, not the provider's invoice.
 
 ## Data retention
 

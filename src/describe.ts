@@ -17,6 +17,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { USD_CHF } from "./models";
+
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const GEMINI_MODELS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_OUTPUT_TOKENS = 8192;
@@ -31,6 +33,8 @@ export interface DescriptionModelSpec {
   provider: DescriptionProvider;
   model: string;
   effort: OpenAIReasoningEffort | GeminiThinkingLevel;
+  // Midpoint of the single-image menu estimate, used when usage is unavailable.
+  estimatedCHF: number;
 }
 
 export const DEFAULT_OPENAI_DESCRIPTION_MODEL = "openai:gpt-5.6-luna:high";
@@ -43,6 +47,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "openai",
     model: "gpt-5.6-luna",
     effort: "none",
+    estimatedCHF: 0.0015,
   },
   {
     id: DEFAULT_OPENAI_DESCRIPTION_MODEL,
@@ -50,6 +55,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "openai",
     model: "gpt-5.6-luna",
     effort: "high",
+    estimatedCHF: 0.006,
   },
   {
     id: "openai:gpt-5.6-sol:none",
@@ -57,6 +63,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "openai",
     model: "gpt-5.6-sol",
     effort: "none",
+    estimatedCHF: 0.02,
   },
   {
     id: "openai:gpt-5.6-sol:high",
@@ -64,6 +71,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "openai",
     model: "gpt-5.6-sol",
     effort: "high",
+    estimatedCHF: 0.09,
   },
   {
     id: "gemini:gemini-3.5-flash-lite:minimal",
@@ -71,6 +79,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "gemini",
     model: "gemini-3.5-flash-lite",
     effort: "minimal",
+    estimatedCHF: 0.0015,
   },
   {
     id: "gemini:gemini-3.5-flash-lite:high",
@@ -78,6 +87,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "gemini",
     model: "gemini-3.5-flash-lite",
     effort: "high",
+    estimatedCHF: 0.0115,
   },
   {
     id: "gemini:gemini-3.7-flash:low",
@@ -85,6 +95,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "gemini",
     model: "gemini-3.7-flash",
     effort: "low",
+    estimatedCHF: 0.005,
   },
   {
     id: DEFAULT_GEMINI_DESCRIPTION_MODEL,
@@ -92,6 +103,7 @@ export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
     provider: "gemini",
     model: "gemini-3.7-flash",
     effort: "high",
+    estimatedCHF: 0.0175,
   },
 ];
 
@@ -102,9 +114,49 @@ export interface DescriptionImage {
 
 export interface DescriptionUsage {
   inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  // Includes reasoning tokens for both providers.
   outputTokens?: number;
   reasoningTokens?: number;
   totalTokens?: number;
+  serviceTier?: string;
+}
+
+// Standard paid-tier USD prices per million tokens, checked 2026-08-28:
+// https://developers.openai.com/api/docs/pricing
+// https://developers.openai.com/api/docs/guides/prompt-caching
+// https://ai.google.dev/gemini-api/docs/pricing
+const DESCRIPTION_TOKEN_RATES: Record<string, { input: number; output: number }> = {
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.6-sol": { input: 4, output: 20 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75 },
+};
+
+export function estimatedDescriptionCHF(model: DescriptionModelSpec, imageCount: number): number {
+  return model.estimatedCHF * Math.max(1, imageCount);
+}
+
+export function descriptionUsageCHF(
+  model: DescriptionModelSpec,
+  usage: DescriptionUsage,
+  at = new Date()
+): number | null {
+  const rates = DESCRIPTION_TOKEN_RATES[model.model];
+  const { inputTokens, outputTokens } = usage;
+  if (!rates || inputTokens === undefined || outputTokens === undefined) return null;
+  const cached = usage.cachedInputTokens ?? 0;
+  const writes = usage.cacheWriteInputTokens ?? 0;
+  if (![inputTokens, outputTokens, cached, writes].every((n) => Number.isFinite(n) && n >= 0)) return null;
+  if (cached + writes > inputTokens) return null;
+  // Both providers discount cache reads by 90%. GPT-5.6 cache writes cost 1.25x.
+  const input = inputTokens - cached - writes + cached * 0.1 + writes * 1.25;
+  const tier = usage.serviceTier;
+  const tierMultiplier = tier === "fast" || tier === "priority" ? 2 : tier === "flex" ? 0.5 : 1;
+  // Gemini's published Flash promotion ends after December 2026.
+  const promotionMultiplier = model.model === "gemini-3.7-flash" && at.getTime() >= Date.UTC(2027, 0, 1) ? 2 : 1;
+  return ((input * rates.input + outputTokens * rates.output) / 1000000) * USD_CHF * tierMultiplier * promotionMultiplier;
 }
 
 export interface DescriptionResult {
@@ -117,6 +169,8 @@ export interface DescribeImagesOptions {
   model: DescriptionModelSpec;
   images: DescriptionImage[];
   signal?: AbortSignal;
+  // Called for an accepted response before parsing text, which can still fail.
+  onUsage?: (usage: DescriptionUsage | undefined) => void;
 }
 
 const DESCRIPTION_INSTRUCTIONS = `Write precise, visually actionable descriptions for an image-generation or image-editing prompt field.
@@ -155,8 +209,7 @@ function descriptionSchema(imageCount: number): Record<string, unknown> {
 }
 
 function finiteNumber(value: any): number | undefined {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function requestInit(body: unknown, headers: Record<string, string>, signal?: AbortSignal): any {
@@ -258,21 +311,22 @@ async function describeWithOpenAI(opts: DescribeImagesOptions): Promise<Descript
   if (!response.ok) {
     throw new Error(String(json?.error?.message || json?.error || `HTTP ${response.status} ${response.statusText}`));
   }
+  const rawUsage = json?.usage;
+  const usage: DescriptionUsage | undefined = rawUsage
+    ? {
+        inputTokens: finiteNumber(rawUsage.input_tokens),
+        cachedInputTokens: finiteNumber(rawUsage.input_tokens_details?.cached_tokens),
+        cacheWriteInputTokens: finiteNumber(rawUsage.input_tokens_details?.cache_write_tokens),
+        outputTokens: finiteNumber(rawUsage.output_tokens),
+        reasoningTokens: finiteNumber(rawUsage.output_tokens_details?.reasoning_tokens),
+        totalTokens: finiteNumber(rawUsage.total_tokens),
+        serviceTier: json?.service_tier,
+      }
+    : undefined;
+  opts.onUsage?.(usage);
   const text = openAIOutputText(json);
   if (!text) throw new Error("OpenAI returned no image description.");
-
-  const usage = json?.usage;
-  return {
-    descriptions: parseDescriptionJson(text, opts.images.length),
-    usage: usage
-      ? {
-          inputTokens: finiteNumber(usage.input_tokens),
-          outputTokens: finiteNumber(usage.output_tokens),
-          reasoningTokens: finiteNumber(usage.output_tokens_details?.reasoning_tokens),
-          totalTokens: finiteNumber(usage.total_tokens),
-        }
-      : undefined,
-  };
+  return { descriptions: parseDescriptionJson(text, opts.images.length), usage };
 }
 
 function geminiOutputText(json: any): string {
@@ -323,24 +377,27 @@ async function describeWithGemini(opts: DescribeImagesOptions): Promise<Descript
   if (!response.ok) {
     throw new Error(String(json?.error?.message || json?.error || `HTTP ${response.status} ${response.statusText}`));
   }
+  const rawUsage = json?.usageMetadata;
+  const candidates = finiteNumber(rawUsage?.candidatesTokenCount);
+  const thoughts = finiteNumber(rawUsage?.thoughtsTokenCount);
+  const usage: DescriptionUsage | undefined = rawUsage
+    ? {
+        inputTokens: finiteNumber(rawUsage.promptTokenCount),
+        cachedInputTokens: finiteNumber(rawUsage.cachedContentTokenCount),
+        // Gemini reports thinking separately; OpenAI includes it in output_tokens.
+        outputTokens: candidates === undefined ? undefined : candidates + (thoughts ?? 0),
+        reasoningTokens: thoughts,
+        totalTokens: finiteNumber(rawUsage.totalTokenCount),
+      }
+    : undefined;
+  opts.onUsage?.(usage);
   const text = geminiOutputText(json);
   if (!text) {
     const reason = json?.promptFeedback?.blockReason || json?.candidates?.[0]?.finishReason;
     throw new Error(reason ? `Gemini returned no description (${reason}).` : "Gemini returned no image description.");
   }
 
-  const usage = json?.usageMetadata;
-  return {
-    descriptions: parseDescriptionJson(text, opts.images.length),
-    usage: usage
-      ? {
-          inputTokens: finiteNumber(usage.promptTokenCount),
-          outputTokens: finiteNumber(usage.candidatesTokenCount),
-          reasoningTokens: finiteNumber(usage.thoughtsTokenCount),
-          totalTokens: finiteNumber(usage.totalTokenCount),
-        }
-      : undefined,
-  };
+  return { descriptions: parseDescriptionJson(text, opts.images.length), usage };
 }
 
 export function descriptionModelSpec(id: string): DescriptionModelSpec | null {

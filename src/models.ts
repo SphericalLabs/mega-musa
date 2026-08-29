@@ -61,7 +61,7 @@ export interface OutputFrame {
 // Published prices are USD. Mid-market reference rate on 2026-08-04.
 // The francs in the menu are estimates, so bump this if the rate drifts far
 // enough to matter.
-const USD_CHF = 0.8103;
+export const USD_CHF = 0.8103;
 
 // GPT Image 2 charges output image tokens rather than a fixed per-image amount.
 // OpenAI's calculator uses these quality factors and an output rate of $30/M.

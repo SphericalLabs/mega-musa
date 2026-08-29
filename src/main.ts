@@ -50,6 +50,9 @@ import {
   DEFAULT_GEMINI_DESCRIPTION_MODEL,
   DEFAULT_OPENAI_DESCRIPTION_MODEL,
   DescriptionModelSpec,
+  DescriptionUsage,
+  descriptionUsageCHF,
+  estimatedDescriptionCHF,
 } from "./describe";
 import { formatDescriptions } from "./description-format";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
@@ -74,7 +77,7 @@ import {
   loadSetting,
   saveSetting,
 } from "./storage";
-import { Budget, loadBudget, addToBudget, resetBudget, budgetText } from "./budget";
+import { Budget, loadBudget, addToBudget, addDescriptionToBudget, resetBudget, budgetText } from "./budget";
 import { GenerationArchive, readLayerGenerationArchive } from "./archive";
 import { restoreReferenceAssets } from "./reference-assets";
 import { expandPromptTemplate } from "./prompt-expansion";
@@ -123,7 +126,13 @@ const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
 // this panel session. Changing any of those properties creates a new warning.
 const acceptedDocumentWarnings = new Set<string>();
 let describing = false;
+let descriptionJob: CancellableJob | null = null;
 let promptBeforeDescription: string | null = null;
+
+interface CancellableJob {
+  cancelRequested: boolean;
+  cancelInFlight: (() => void) | null;
+}
 
 type GenerationJobState =
   | "preparing"
@@ -149,7 +158,7 @@ interface PendingGenerationPlacement {
   activeArtboard: ActiveArtboard | null;
 }
 
-interface GenerationJob {
+interface GenerationJob extends CancellableJob {
   id: number;
   prompt: string;
   model: string;
@@ -170,8 +179,6 @@ interface GenerationJob {
   documentState: DocumentState;
   state: GenerationJobState;
   status: string;
-  cancelRequested: boolean;
-  cancelInFlight: (() => void) | null;
   cancelSlotWait: (() => void) | null;
   slotAcquired: boolean;
   requestSent: boolean;
@@ -275,7 +282,7 @@ function isCancelledError(err: any): boolean {
   return !!err?.nbpCancelled || err?.name === "AbortError";
 }
 
-function throwIfCancelled(job: GenerationJob): void {
+function throwIfCancelled(job: CancellableJob): void {
   if (job.cancelRequested) throw cancelledError();
 }
 
@@ -301,7 +308,7 @@ function newAbortController(): { signal?: any; abort(): void } {
 // abandoned request cannot reach the global unhandledrejection hook and overwrite
 // the status the user is reading.
 function awaitCancellable<T>(
-  job: GenerationJob,
+  job: CancellableJob,
   request: Promise<T>,
   controller: { abort(): void }
 ): Promise<T> {
@@ -362,7 +369,9 @@ function updateDescriptionControls(): void {
   const describeButton = $("describe");
   if (describeButton) {
     const hasInput = refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection);
-    describeButton.disabled = busy || !hasInput;
+    describeButton.disabled = !describing && (busy || !hasInput);
+    describeButton.textContent = describing ? "Cancel" : "Describe";
+    describeButton.setAttribute("variant", describing ? "warning" : "primary");
   }
   const describeModel = $("describeModel");
   if (describeModel) describeModel.disabled = busy;
@@ -372,8 +381,6 @@ function updateDescriptionControls(): void {
 
 function setDescriptionBusy(on: boolean): void {
   describing = on;
-  const describeButton = $("describe");
-  if (describeButton) describeButton.textContent = on ? "Describing…" : "Describe";
   const prompt = $("prompt");
   if (prompt) prompt.disabled = on;
   updateGenerateControl();
@@ -1817,7 +1824,7 @@ function descriptionApiKey(model: DescriptionModelSpec): string {
   return String(model.provider === "openai" ? $("openaiApiKey")?.value || "" : $("geminiApiKey")?.value || "").trim();
 }
 
-async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
+async function prepareDescriptionInputs(job: CancellableJob): Promise<PreparedDescriptionInput[]> {
   const inputs: PreparedDescriptionInput[] = [];
   const includeSelection = isChecked($("includeSelection"));
   const descriptionRefs = refs.slice();
@@ -1829,6 +1836,7 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
     } catch {
       /* References can still be described without an open Photoshop document. */
     }
+    throwIfCancelled(job);
     const hasSelection =
       !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
     if (hasSelection) {
@@ -1836,6 +1844,7 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
       const doc = getActiveDoc();
       const documentBounds: Bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
       const activeArtboard = await getActiveArtboard(doc);
+      throwIfCancelled(job);
       const targetBounds = activeArtboard?.bounds || documentBounds;
       const region = intersectBounds(rawSelection as Bounds, targetBounds);
       if (!region) {
@@ -1847,6 +1856,7 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
       }
 
       const read = await readRegion(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
+      throwIfCancelled(job);
       const png = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
       inputs.push({
         source: "Photoshop selection",
@@ -1859,9 +1869,11 @@ async function prepareDescriptionInputs(): Promise<PreparedDescriptionInput[]> {
   for (let index = 0; index < descriptionRefs.length; index += 1) {
     const reference = descriptionRefs[index];
     setStatus(`Preparing reference image ${index + 1}/${descriptionRefs.length} for description…`);
+    const image = await resizeReference(reference, DESCRIPTION_INPUT_MAX_EDGE);
+    throwIfCancelled(job);
     inputs.push({
       source: `Reference ${index + 1}: ${reference.name}`,
-      image: await resizeReference(reference, DESCRIPTION_INPUT_MAX_EDGE),
+      image,
     });
   }
   return inputs;
@@ -1874,6 +1886,13 @@ function descriptionUsageText(totalTokens?: number, reasoningTokens?: number): s
 }
 
 async function onDescribe(): Promise<void> {
+  if (descriptionJob) {
+    descriptionJob.cancelRequested = true;
+    const stopRequest = descriptionJob.cancelInFlight;
+    descriptionJob.cancelInFlight = null;
+    if (stopRequest) stopRequest();
+    return;
+  }
   if (hasActiveGenerationJobs() || describing) return;
   if (!(refs.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection))) {
     setStatus("Add a reference image or draw and include a Photoshop selection.", "error");
@@ -1890,21 +1909,47 @@ async function onDescribe(): Promise<void> {
     return;
   }
 
+  const job: CancellableJob = { cancelRequested: false, cancelInFlight: null };
+  const controller = newAbortController();
+  let requestSent = false;
+  let inputImageCount = 0;
+  let estimatedCharge = 0;
+  let budgetCharge: number | null = null;
+  let usedEstimate = false;
+  const recordDescriptionCharge = (usage?: DescriptionUsage) => {
+    // A late response after Cancel must not add the same request a second time.
+    if (budgetCharge !== null) return;
+    const usageCharge = usage ? descriptionUsageCHF(model, usage) : null;
+    usedEstimate = usageCharge === null;
+    budgetCharge = usageCharge ?? estimatedCharge;
+    renderBudget(addDescriptionToBudget(budgetCharge, inputImageCount, job.cancelRequested, usedEstimate));
+  };
+  const descriptionChargeText = () => budgetCharge === null ? "" :
+    ` ${usedEstimate ? "Estimate" : "Usage cost"}: ca. CHF ${formatCHF(budgetCharge)} added to the budget.`;
+  descriptionJob = job;
   setDescriptionBusy(true);
   setBusy(true);
   setStatus("Preparing inputs for description…");
   try {
-    const inputs = await prepareDescriptionInputs();
+    const inputs = await awaitCancellable(job, prepareDescriptionInputs(job), controller);
+    throwIfCancelled(job);
     if (!inputs.length) {
       throw new Error("Add a reference image or draw and include a Photoshop selection.");
     }
 
     setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
-    const result = await describeImages({
+    inputImageCount = inputs.length;
+    estimatedCharge = estimatedDescriptionCHF(model, inputImageCount);
+    requestSent = true;
+    const request = describeImages({
       apiKey,
       model,
       images: inputs.map((input) => input.image),
+      signal: controller.signal,
+      onUsage: recordDescriptionCharge,
     });
+    const result = await awaitCancellable(job, request, controller);
+    throwIfCancelled(job);
     const prompt = $("prompt");
     promptBeforeDescription = String(prompt?.value || "");
     setValueSafe(prompt, formatDescriptions(inputs, result.descriptions));
@@ -1918,12 +1963,22 @@ async function onDescribe(): Promise<void> {
       `Prompt filled from ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}${descriptionUsageText(
         result.usage?.totalTokens,
         result.usage?.reasoningTokens
-      )}.`,
+      )}.${descriptionChargeText()}`,
       "ok"
     );
   } catch (error: any) {
-    setStatus("Description error: " + (error?.message || String(error)), "error");
+    if (isCancelledError(error)) {
+      if (requestSent) recordDescriptionCharge();
+      setStatus(
+        "Description canceled. Prompt unchanged." + descriptionChargeText() +
+          (requestSent ? " Final provider billing may differ." : "")
+      );
+    } else {
+      setStatus("Description error: " + (error?.message || String(error)) + descriptionChargeText(), "error");
+    }
   } finally {
+    job.cancelInFlight = null;
+    descriptionJob = null;
     setDescriptionBusy(false);
     setBusy(false);
   }
