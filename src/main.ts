@@ -2243,9 +2243,13 @@ async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
   const doneMessage = pending.isRegion
     ? placement.clip === "alpha"
       ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
-      : placement.smartObject
-        ? "Done — result embedded as a Smart Object with an editable linked mask."
-        : "Done — raster fallback clipped to your selection with an editable mask."
+      : placement.clip === "mask"
+        ? placement.smartObject
+          ? "Done — result embedded as a Smart Object with an editable linked mask."
+          : "Done — raster fallback clipped to your selection with an editable mask."
+        : placement.smartObject
+          ? "Done — result embedded as a Smart Object; the fully opaque selection needed no mask."
+          : "Done — result added as a raster layer; the fully opaque selection needed no mask."
     : pending.activeArtboard
       ? placement.smartObject
         ? `Done — result embedded in active artboard “${pending.activeArtboard.name}” as a Smart Object.`

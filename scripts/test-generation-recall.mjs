@@ -12,7 +12,7 @@ const bundle = await build({
   stdin: {
     contents: `
       export { readLayerGenerationArchive, writeLayerGenerationArchive } from "./src/archive";
-      export { restoreArchivedSelection, setRectSelection } from "./src/photoshop-bridge";
+      export { restoreArchivedSelection, selectionNeedsMask, setRectSelection } from "./src/photoshop-bridge";
     `,
     resolveDir: process.cwd(),
     loader: "ts",
@@ -96,7 +96,31 @@ loadBundle((name) => {
   if (name === "uxp") return { storage: {} };
   throw new Error(`Unexpected external module: ${name}`);
 }, module, module.exports);
-const { readLayerGenerationArchive, writeLayerGenerationArchive, restoreArchivedSelection, setRectSelection } = module.exports;
+const {
+  readLayerGenerationArchive,
+  writeLayerGenerationArchive,
+  restoreArchivedSelection,
+  selectionNeedsMask,
+  setRectSelection,
+} = module.exports;
+
+const maskBounds = { left: 0, top: 0, right: 2, bottom: 2 };
+assert.equal(selectionNeedsMask(null), false);
+assert.equal(
+  selectionNeedsMask({ bounds: maskBounds, data: Uint8Array.of(255, 255, 255, 255) }),
+  false,
+  "a fully opaque selection does not need a redundant layer mask"
+);
+assert.equal(
+  selectionNeedsMask({ bounds: maskBounds, data: Uint8Array.of(255, 254, 255, 255) }),
+  true,
+  "partial selection coverage still needs a layer mask"
+);
+assert.equal(
+  selectionNeedsMask({ bounds: maskBounds, data: Uint8Array.of(255) }),
+  true,
+  "malformed snapshots must retain placement validation"
+);
 
 function resetDocument(savedGeometry = geometry) {
   const artboard = savedGeometry.artboard ? { ...clone(savedGeometry.artboard), name: "Artboard" } : null;

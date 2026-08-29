@@ -8,7 +8,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 
 ## Features
 
-- Edit a selection, the full document or the active artboard. Results are placed as embedded, image-backed Smart Objects by default, sized nondestructively to the same bounds as raster placement at the top of the relevant document, artboard or group and named after the prompt with the model, resolution and quality in brackets. This avoids PSB-backed Smart Object sources. Clear **Place as Smart Object** to place a raster layer instead. Selected regions keep their shape and feathering through a linked, editable layer mask. If Smart Object placement fails, Mega Musa preserves the paid result as a raster layer and reports the fallback.
+- Edit a selection, the full document or the active artboard. Results are placed as embedded, image-backed Smart Objects by default, sized nondestructively to the same bounds as raster placement at the top of the relevant document, artboard or group and named after the prompt with the model, resolution and quality in brackets. This avoids PSB-backed Smart Object sources. Clear **Place as Smart Object** to place a raster layer instead. Nonrectangular and feathered selections keep their shape through a linked, editable layer mask; fully opaque rectangular selections need no mask. If Smart Object placement fails, Mega Musa preserves the paid result as a raster layer and reports the fallback.
 - **Reduce document size (JPEG 90, lossy)** is off by default. When enabled, opaque new Smart Object sources and opaque new reference assets use JPEG 90. Assets with transparency use lossless, explicitly tagged sRGB PNG. With the option off, every generated Smart Object source uses lossless sRGB PNG and references retain their original bytes.
 - Each generated layer stores its complete prompt, generation settings and storage mode in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Reference images are embedded in the document for reuse.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
@@ -75,7 +75,7 @@ A generated document is structured like this:
 Photoshop document
 ├── Generated result layer
 │   ├── Embedded JPEG 90 or lossless sRGB PNG source (Smart Object mode)
-│   ├── Editable Photoshop layer mask, when a selection was used
+│   ├── Editable Photoshop layer mask, when selection clipping is needed
 │   └── Prompt, settings, geometry and reference pointers in layer metadata
 └── Mega Musa Reference Archive (hidden and locked)
     └── One embedded asset per unique reference source

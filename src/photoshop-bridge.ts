@@ -89,6 +89,19 @@ export interface SelectionSnapshot {
   data: Uint8Array;
 }
 
+export function selectionNeedsMask(selection: SelectionSnapshot | null): selection is SelectionSnapshot {
+  if (!selection) return false;
+  const width = selection.bounds.right - selection.bounds.left;
+  const height = selection.bounds.bottom - selection.bounds.top;
+  // Preserve existing validation for malformed snapshots instead of silently
+  // treating them as fully opaque.
+  if (width < 1 || height < 1 || selection.data.length !== width * height) return true;
+  for (let i = 0; i < selection.data.length; i++) {
+    if (selection.data[i] !== 255) return true;
+  }
+  return false;
+}
+
 export function getActiveDoc(): any {
   const doc = app.activeDocument;
   if (!doc) throw new Error("Open a document in Photoshop first.");
@@ -1171,6 +1184,9 @@ export async function placeResult(
   timeoutSeconds: number = DEFAULT_HOST_MODAL_TIMEOUT_SECONDS
 ): Promise<PlacementResult> {
   const historyName = "Mega Musa: place result";
+  // A hard rectangular selection already matches the placed layer's bounds.
+  // Only shape or feathering that hides pixels needs a separate layer mask.
+  const clippingSelection = selectionNeedsMask(selection) ? selection : null;
   return await runModal(
     "place result",
     async (executionContext) => withActiveDocument(docId, async () => {
@@ -1209,8 +1225,8 @@ export async function placeResult(
           await positionSmartObjectAtBounds(incompleteSmartObject, bounds);
           await bringResultToFront(incompleteSmartObject);
 
-          if (selection) {
-            await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, selection);
+          if (clippingSelection) {
+            await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, clippingSelection);
             clip = "mask";
           }
           resultLayer = incompleteSmartObject;
@@ -1242,7 +1258,7 @@ export async function placeResult(
           width,
           height,
           layerName,
-          selection
+          clippingSelection
         );
         resultLayer = fallback.layer;
         clip = fallback.clip;
