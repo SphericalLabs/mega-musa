@@ -412,50 +412,6 @@ function scheduleDescriptionInputRefresh(): void {
   }, 60);
 }
 
-let statusKind: "info" | "error" | "ok" = "info";
-let pulseTimer: any = null;
-let pulseStep = 0;
-let pulseDir = 1;
-const PULSE_STEPS = 15; // must match the #status.pulseN rules in index.html
-// 28 frames per breath (up and back down), so this sets the period: 1.68s.
-const PULSE_MS = 60;
-
-// The status box's class carries the kind (which picks the gray / green / red
-// tint) and, while a request is in flight, the current step of the pulse. Deriving
-// it in one place means a status update mid-run cannot knock the pulse out.
-function applyStatusClass(): void {
-  const el = $("status");
-  if (!el) return;
-  // Only the neutral gray breathes — a finished run's green or red sits still.
-  if (statusKind === "info") {
-    el.className = pulseTimer === null ? "" : `pulse${pulseStep}`;
-    return;
-  }
-  el.className = statusKind;
-}
-
-// Breathe the status box's background while a request is in flight, so a 10-60s
-// wait doesn't look frozen. UXP supports no CSS animations or transitions, so the
-// pulse is a timer walking the #status.pulseN classes up and back down. Only the
-// background moves; the text is never dimmed or faded.
-function setBusy(on: boolean): void {
-  if (on === (pulseTimer !== null)) return;
-  if (on) {
-    pulseStep = 0;
-    pulseDir = 1;
-    pulseTimer = setInterval(() => {
-      pulseStep += pulseDir;
-      if (pulseStep >= PULSE_STEPS - 1) pulseDir = -1;
-      else if (pulseStep <= 0) pulseDir = 1;
-      applyStatusClass();
-    }, PULSE_MS);
-  } else {
-    clearInterval(pulseTimer);
-    pulseTimer = null;
-  }
-  applyStatusClass();
-}
-
 type ModalNoticeKind = "blocker" | "warning";
 type ModalNoticeAction = "primary" | "cancel";
 
@@ -530,9 +486,9 @@ async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> 
 
 function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): void {
   const el = $("status");
-  if (el) el.textContent = message;
-  statusKind = kind;
-  applyStatusClass();
+  if (!el) return;
+  el.textContent = message;
+  el.className = kind === "info" ? "" : kind;
 }
 
 // A second, persistent line under the status box. Status text is replaced on
@@ -1199,7 +1155,6 @@ function renderGenerationQueue(): void {
     list.appendChild(row);
   }
 
-  setBusy(hasActiveGenerationJobs() || describing);
   updateGenerateControl();
   updateDescriptionControls();
   flushDeferredGenerationRecallRefresh();
@@ -1954,7 +1909,6 @@ async function onDescribe(): Promise<void> {
     ` ${usedEstimate ? "Estimate" : "Usage cost"}: ca. CHF ${formatCHF(budgetCharge)} added to the budget.`;
   descriptionJob = job;
   setDescriptionBusy(true);
-  setBusy(true);
   setStatus("Preparing inputs for description…");
   try {
     const inputs = await awaitCancellable(job, prepareDescriptionInputs(job), controller);
@@ -2006,7 +1960,6 @@ async function onDescribe(): Promise<void> {
     job.cancelInFlight = null;
     descriptionJob = null;
     setDescriptionBusy(false);
-    setBusy(false);
   }
 }
 

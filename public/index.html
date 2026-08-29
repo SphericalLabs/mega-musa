@@ -167,30 +167,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
               padding: 6px 8px; border-radius: 4px; background: rgba(128,128,128,0.12); }
     #status.error { background: rgba(226,75,74,0.18); }
     #status.ok    { background: rgba(29,158,117,0.18); }
-    /* Breathing gray while a request is in flight — a 10-60s wait should not look
-       frozen. UXP runs no CSS animations or transitions, so main.ts steps through
-       these classes on a timer instead; the alphas are cosine-spaced so the pulse
-       eases at both ends rather than sawing up and down. They only ever tint the
-       background: the text colour is untouched, and even the strongest step is a
-       low-alpha gray that leaves the label near 7:1 contrast against the theme
-       text colour set above, in either theme. The swing spans 0.08-0.32 around a
-       0.20 mid point; widen or narrow it about that mid point to change how
-       strongly the box breathes without shifting its average tint. */
-    #status.pulse0  { background: rgba(128,128,128,0.080); }
-    #status.pulse1  { background: rgba(128,128,128,0.083); }
-    #status.pulse2  { background: rgba(128,128,128,0.092); }
-    #status.pulse3  { background: rgba(128,128,128,0.106); }
-    #status.pulse4  { background: rgba(128,128,128,0.125); }
-    #status.pulse5  { background: rgba(128,128,128,0.148); }
-    #status.pulse6  { background: rgba(128,128,128,0.173); }
-    #status.pulse7  { background: rgba(128,128,128,0.200); }
-    #status.pulse8  { background: rgba(128,128,128,0.227); }
-    #status.pulse9  { background: rgba(128,128,128,0.252); }
-    #status.pulse10 { background: rgba(128,128,128,0.275); }
-    #status.pulse11 { background: rgba(128,128,128,0.294); }
-    #status.pulse12 { background: rgba(128,128,128,0.308); }
-    #status.pulse13 { background: rgba(128,128,128,0.317); }
-    #status.pulse14 { background: rgba(128,128,128,0.320); }
     #note { margin-top: 6px; }
     #note:empty { display: none; }
     #generationQueue { display: none; margin-top: 16px; }
