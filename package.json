@@ -6,7 +6,7 @@
   "description": "Mega Musa — AI image generation and localized editing panel for Adobe Photoshop (UXP).",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
-    "test": "node scripts/test-prompt-expansion.mjs && node scripts/test-host-modal.mjs && node scripts/test-description-format.mjs && node scripts/test-description-cancel.mjs && node scripts/test-generation-recall.mjs",
+    "test": "node scripts/test-prompt-expansion.mjs && node scripts/test-host-modal.mjs && node scripts/test-description-format.mjs && node scripts/test-description-cancel.mjs && node scripts/test-generation-recall.mjs && node scripts/test-image-storage.mjs",
     "typecheck": "tsc --noEmit",
     "build": "npm run icons && node esbuild.config.mjs",
     "watch": "npm run icons && node esbuild.config.mjs --watch"

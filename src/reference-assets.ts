@@ -19,6 +19,7 @@
 
 import { base64ToBytes, bytesToBase64 } from "./image-codec";
 import {
+  AssetStorageMode,
   ArchivedReference,
   ReferenceAssetMetadata,
   readLayerReferenceAssetMetadata,
@@ -166,9 +167,10 @@ function imageExtension(mimeType: string): string {
   return "png";
 }
 
-function assetLayerName(hash: string, name: string): string {
+function assetLayerName(hash: string, name: string, storageMode: AssetStorageMode): string {
   const cleanName = name.replace(/[\r\n]+/g, " ").trim() || "reference image";
-  return `[Mega Musa Reference ${hash.slice(0, 12)}] ${cleanName}`.slice(0, 255);
+  const mode = storageMode === "original" ? "" : ` ${storageMode}`;
+  return `[Mega Musa Reference ${hash.slice(0, 12)}${mode}] ${cleanName}`.slice(0, 255);
 }
 
 function layersOf(owner: any): any[] {
@@ -291,20 +293,66 @@ function pointerFor(metadata: ReferenceAssetMetadata, layerId: number, name: str
     name,
     mimeType: metadata.mimeType,
     byteLength: metadata.byteLength,
+    storageMode: metadata.storageMode,
+    sourceMimeType: metadata.sourceMimeType,
+    sourceByteLength: metadata.sourceByteLength,
+    lossy: metadata.lossy,
   };
 }
 
-async function assetLayersByHash(docId: number, group: any): Promise<Map<string, { layer: any; metadata: ReferenceAssetMetadata }>> {
-  const assets = new Map<string, { layer: any; metadata: ReferenceAssetMetadata }>();
+interface IndexedAsset {
+  layer: any;
+  metadata: ReferenceAssetMetadata;
+}
+
+interface AssetIndex {
+  byId: Map<string, IndexedAsset>;
+  byStorage: Map<string, IndexedAsset>;
+  originalByHash: Map<string, IndexedAsset>;
+  anyByHash: Map<string, IndexedAsset>;
+}
+
+function emptyAssetIndex(): AssetIndex {
+  return {
+    byId: new Map(),
+    byStorage: new Map(),
+    originalByHash: new Map(),
+    anyByHash: new Map(),
+  };
+}
+
+function storedMode(metadata: ReferenceAssetMetadata): AssetStorageMode {
+  return metadata.storageMode || "original";
+}
+
+function storageKey(hash: string, storageMode: AssetStorageMode): string {
+  return `${hash}:${storageMode}`;
+}
+
+function addIndexedAsset(index: AssetIndex, asset: IndexedAsset): void {
+  const { metadata } = asset;
+  if (!index.byId.has(metadata.id)) index.byId.set(metadata.id, asset);
+  if (!index.byStorage.has(storageKey(metadata.hash, storedMode(metadata)))) {
+    index.byStorage.set(storageKey(metadata.hash, storedMode(metadata)), asset);
+  }
+  if (!index.anyByHash.has(metadata.hash)) index.anyByHash.set(metadata.hash, asset);
+  if (storedMode(metadata) === "original" && !index.originalByHash.has(metadata.hash)) {
+    index.originalByHash.set(metadata.hash, asset);
+  }
+}
+
+async function indexAssetLayers(docId: number, group: any): Promise<AssetIndex> {
+  const assets = emptyAssetIndex();
   for (const layer of descendantLayers(group)) {
     const metadata = await readLayerReferenceAssetMetadata(docId, layer.id);
-    if (metadata && !assets.has(metadata.hash)) assets.set(metadata.hash, { layer, metadata });
+    if (metadata) addIndexedAsset(assets, { layer, metadata });
   }
   return assets;
 }
 
-// Called from placeResult's existing executeAsModal scope. Each unique original
-// file becomes one embedded Smart Object; repeated use only adds another pointer.
+// Called from placeResult's existing executeAsModal scope. Existing assets are
+// only read and reused. Compression is applied to newly supplied bytes before
+// this function runs, so opening an older document never migrates its archive.
 export async function archiveReferenceAssetsInActiveDocument(
   docId: number,
   references: RefImage[],
@@ -333,33 +381,48 @@ export async function archiveReferenceAssetsInActiveDocument(
   const failures: string[] = [];
   setPoolEditable(group, true);
   try {
-    const existing = await assetLayersByHash(docId, group);
+    const existing = await indexAssetLayers(docId, group);
     const tempFolder = await storage.localFileSystem.getTemporaryFolder();
     for (const reference of references) {
       let placedLayer: any | null = null;
       try {
-        const bytes = base64ToBytes(reference.base64);
-        const hash = await hashReferenceBytes(bytes);
-        const match = existing.get(hash);
+        const sourceBytes = base64ToBytes(reference.base64);
+        const hash = reference.archivedHash || await hashReferenceBytes(sourceBytes);
+        const prepared = reference.archiveAsset;
+        const storageMode: AssetStorageMode =
+          prepared?.storageMode || reference.archivedStorageMode || "original";
+        const bytes = prepared ? base64ToBytes(prepared.base64) : sourceBytes;
+        const mimeType = prepared?.mimeType || reference.mimeType;
+        // An untouched older asset is already the smallest possible document
+        // change. Prefer it over creating a newly compressed duplicate.
+        const match =
+          existing.originalByHash.get(hash) ||
+          existing.byStorage.get(storageKey(hash, storageMode));
         if (match) {
           match.layer.visible = false;
           archived.push(pointerFor(match.metadata, match.layer.id, reference.name));
           continue;
         }
 
+        const id = storageMode === "original" ? hash : `${hash}:${storageMode}`;
         const metadata: ReferenceAssetMetadata = {
           kind: "referenceAsset",
           v: 1,
-          id: hash,
+          id,
           hash,
           name: reference.name,
-          mimeType: reference.mimeType,
+          mimeType,
           byteLength: bytes.length,
           createdAt: new Date().toISOString(),
+          storageMode,
+          sourceMimeType: reference.mimeType,
+          sourceByteLength: sourceBytes.length,
+          lossy: prepared?.lossy || false,
         };
-        const file = await tempFolder.createFile(`mega-musa-${hash}.${imageExtension(reference.mimeType)}`, {
-          overwrite: true,
-        });
+        const file = await tempFolder.createFile(
+          `mega-musa-${hash}-${storageMode}.${imageExtension(mimeType)}`,
+          { overwrite: true }
+        );
         const fileBytes =
           bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
             ? bytes.buffer
@@ -387,12 +450,12 @@ export async function archiveReferenceAssetsInActiveDocument(
           throw new Error("Photoshop did not return the embedded reference layer.");
         }
         placedLayer.visible = false;
-        placedLayer.name = assetLayerName(hash, reference.name);
+        placedLayer.name = assetLayerName(hash, reference.name, storageMode);
         if (placedLayer.parent?.id !== group.id) {
           placedLayer.move(group, constants.ElementPlacement.PLACEINSIDE);
         }
         await writeLayerReferenceAssetMetadata(docId, placedLayer.id, metadata);
-        existing.set(hash, { layer: placedLayer, metadata });
+        addIndexedAsset(existing, { layer: placedLayer, metadata });
         archived.push(pointerFor(metadata, placedLayer.id, reference.name));
       } catch (error: any) {
         failures.push(reference.name);
@@ -481,8 +544,8 @@ export async function restoreReferenceAssets(
         pool = await findAssetPool(targetDocument);
         if (pool) setPoolEditable(pool, true);
         const pooledAssets = pool
-          ? await assetLayersByHash(docId, pool)
-          : new Map<string, { layer: any; metadata: ReferenceAssetMetadata }>();
+          ? await indexAssetLayers(docId, pool)
+          : emptyAssetIndex();
         const exported = new Map<string, string>();
 
         for (const reference of references) {
@@ -494,8 +557,12 @@ export async function restoreReferenceAssets(
           try {
             let layer = layerById(targetDocument, reference.layerId);
             let metadata = layer ? await readLayerReferenceAssetMetadata(docId, layer.id) : null;
-            if (!metadata || metadata.hash !== reference.hash) {
-              const fallback = pooledAssets.get(reference.hash);
+            if (!metadata || metadata.hash !== reference.hash || metadata.id !== reference.id) {
+              const fallback =
+                pooledAssets.byId.get(reference.id) ||
+                pooledAssets.byStorage.get(storageKey(reference.hash, reference.storageMode || "original")) ||
+                pooledAssets.originalByHash.get(reference.hash) ||
+                pooledAssets.anyByHash.get(reference.hash);
               layer = fallback?.layer || null;
               metadata = fallback?.metadata || null;
             }
@@ -504,13 +571,15 @@ export async function restoreReferenceAssets(
               continue;
             }
 
-            let base64 = exported.get(reference.hash);
+            let base64 = exported.get(metadata.id);
             if (!base64) {
               base64 = await exportEmbeddedReference(layer.id, reference.hash, metadata.mimeType);
-              exported.set(reference.hash, base64);
+              exported.set(metadata.id, base64);
             }
             const image = referenceImageFromBase64(name, base64);
             if (!image) throw new Error("the embedded Smart Object did not contain a supported image");
+            image.archivedHash = metadata.hash;
+            image.archivedStorageMode = storedMode(metadata);
             images.push(image);
           } catch (error: any) {
             failures.push(name);

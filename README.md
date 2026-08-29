@@ -8,8 +8,9 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 
 ## Features
 
-- Edit a selection, the full document or the active artboard. Results are placed as embedded Smart Objects by default, sized nondestructively to the same bounds as raster placement at the top of the relevant document, artboard or group and named after the prompt with the model, resolution and quality in brackets. Clear **Place as Smart Object** to place a raster layer instead. Selected regions keep their shape and feathering through a linked, editable layer mask. If Smart Object placement fails, Mega Musa preserves the paid result as a raster layer and reports the fallback.
-- Each generated layer stores its complete prompt and generation settings in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Stage 1 records reference names but does not embed reference image pixels.
+- Edit a selection, the full document or the active artboard. Results are placed as embedded, image-backed Smart Objects by default, sized nondestructively to the same bounds as raster placement at the top of the relevant document, artboard or group and named after the prompt with the model, resolution and quality in brackets. This avoids PSB-backed Smart Object sources. Clear **Place as Smart Object** to place a raster layer instead. Selected regions keep their shape and feathering through a linked, editable layer mask. If Smart Object placement fails, Mega Musa preserves the paid result as a raster layer and reports the fallback.
+- **Reduce document size (JPEG 90, lossy)** is off by default. When enabled, opaque new Smart Object sources and opaque new reference assets use JPEG 90. Assets with transparency use lossless, explicitly tagged sRGB PNG. With the option off, every generated Smart Object source uses lossless sRGB PNG and references retain their original bytes.
+- Each generated layer stores its complete prompt, generation settings and storage mode in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Reference images are embedded in the document for reuse.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
 - Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste. References are normalized to sRGB before they are sent.
 - Choose Nano Banana Pro, Nano Banana 2 or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
@@ -50,7 +51,9 @@ A final positive integer repeats every concrete result before it. `{a photo of a
 
 Use `\{`, `\}`, `\,` and `\\` for literal braces, commas and backslashes. Commas outside brace groups are already literal. Queue rows and generated layer archives store the concrete expanded prompt, while the prompt field keeps the original template.
 
-To reuse a generation later, select its result layer in Photoshop's Layers panel. **Recall Generations** appears in Mega Musa without changing the current controls. **Copy Prompt** copies the complete prompt. **Load Settings** explicitly restores the prompt, model, supported controls and embedded reference images. Mega Musa stores each unique reference once as an embedded Smart Object in a locked, eye-off `Mega Musa Reference Archive` group, deduplicated by a SHA-256 hash of its original file bytes. Result layers point to those assets in their per-layer metadata. If an asset was removed or changed, the remaining settings still load and the panel reports the missing reference. Older Stage 1 records remain readable but contain reference names only.
+To reuse a generation later, select its result layer in Photoshop's Layers panel. **Recall Generations** appears in Mega Musa without changing the current controls. **Copy Prompt** copies the complete prompt. **Load Settings** explicitly restores the prompt, model, supported controls and embedded reference images. It intentionally does not change **Place as Smart Object** or **Reduce document size**: both are global preferences, persist across panel reloads and are frozen separately for each queued submission. **Place as Smart Object** defaults on; lossy size reduction defaults off.
+
+Mega Musa stores each unique reference once as an embedded Smart Object in a locked, eye-off `Mega Musa Reference Archive` group, deduplicated by a SHA-256 hash of its source bytes. With reduced storage enabled, a new opaque reference is stored as JPEG 90 and a new transparent reference as lossless sRGB PNG. If recompressing an existing JPEG would not save space, its original bytes are kept. Existing archived assets always win over creating a recompressed duplicate. Opening an older document, loading its settings or reusing a restored reference never migrates or recompresses its archive. Result layers point to those assets in their per-layer metadata. If an asset was removed or changed, the remaining settings still load and the panel reports the missing reference. Older Stage 1 records remain readable but contain reference names only.
 
 **Restore Rectangle** separately replaces the current selection with its saved bounding rectangle. New generations store the original selection bounds separately from the generation crop, along with the original canvas dimensions and artboard geometry. If no selection was drawn, recall restores the generation frame instead. Changed canvas dimensions, a different or changed artboard or a rectangle that does not fit entirely inside the target block restoration and leave the current selection untouched; prompt and settings recall still works. Coordinates are never automatically scaled, shifted or clipped. This restores neither a lasso's shape nor feathering or original source pixels, and it does not track moved content or detect edits that leave the geometry unchanged. Inspect the selection before generating. Older records without geometry keep their existing recall actions but cannot restore a rectangle.
 
@@ -58,9 +61,36 @@ To reuse a generation later, select its result layer in Photoshop's Layers panel
 
 Existing selections are framed to the nearest supported output ratio without changing their original shape. Nothing is added around them — the crop is the selection itself, so select as much surrounding image as the model should see to blend into, and feather the selection for a soft edge. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
 
-Initial result sizing is nondestructive: the native provider pixels remain stored in the Smart Object while its outer bounds match raster placement. The selection mask is attached only after sizing and placement, so its original size and position are preserved. Masks are linked by default so later Move and Free Transform operations affect the image and mask together; unlink the mask first to reframe the image inside a fixed selection boundary. Enlarging beyond the native provider dimensions cannot create new detail. Paint, erase, clone and similar pixel edits require opening the Smart Object contents or rasterizing the result first.
+Initial result sizing is nondestructive: the full provider resolution remains stored in the Smart Object while its outer bounds match raster placement. With reduced storage on, opaque pixels are JPEG-compressed once before embedding; PNG storage remains pixel-lossless. The selection mask is separate from source transparency and is attached only after sizing and placement, so its original size and position are preserved. Masks are linked by default so later Move and Free Transform operations affect the image and mask together; unlink the mask first to reframe the image inside a fixed selection boundary. Enlarging beyond the native provider dimensions cannot create new detail. Paint, erase, clone and similar pixel edits require opening the Smart Object contents or rasterizing the result first.
+
+For a raster result layer, Mega Musa cannot assign JPEG compression to that individual layer. PSD compression and TIFF image/layer compression are chosen by Photoshop when the whole document is saved. The reduced-storage preference still applies to newly embedded reference archive assets in that raster workflow.
 
 Mega Musa uses 8-bit sRGB for model inputs and outputs. A 16-bit document shows a precision warning. Partial placements in CMYK, Lab, Grayscale and non-sRGB documents show a color-conversion warning, which is skipped when the result fully and opaquely covers the complete document or active artboard. Either warning can be accepted once per exact mode/profile/depth state during the panel session. A 32-bit/HDR document, Quick Mask mode or a Bitmap, Indexed Color, Duotone or Multichannel document blocks generation before anything is sent and explains how to switch to a supported state.
+
+### Document structure and reducing file size
+
+A generated document is structured like this:
+
+```text
+Photoshop document
+├── Generated result layer
+│   ├── Embedded JPEG 90 or lossless sRGB PNG source (Smart Object mode)
+│   ├── Editable Photoshop layer mask, when a selection was used
+│   └── Prompt, settings, geometry and reference pointers in layer metadata
+└── Mega Musa Reference Archive (hidden and locked)
+    └── One embedded asset per unique reference source
+```
+
+With **Place as Smart Object** off, the result contains raster pixels instead of a separate embedded source. A layer mask is separate from source transparency: TIFF's **Save Transparency** option does not control Photoshop layer masks. The small metadata record stores Recall information, not another copy of the generated pixels. Existing reference assets are reused by source hash and are not recompressed when an older document is opened or recalled.
+
+Use these settings according to the required tradeoff:
+
+1. **Smallest file while keeping editable Smart Objects:** leave **Place as Smart Object** and **Reduce document size (JPEG 90, lossy)** on. Opaque new sources and references use JPEG 90; anything with alpha uses lossless sRGB PNG.
+2. **Absolute smallest working document:** turn **Place as Smart Object** off and leave **Reduce document size** on. The generated result becomes a raster layer, so its embedded full-resolution source is no longer available. New reference archive assets are still compressed. A flattened delivery copy can be smaller again, but loses layers, masks, Recall and reusable references.
+3. **PSD/PSB:** keep file compression enabled. Set **Maximize PSD and PSB File Compatibility** to **Ask** or **Never** only when older Photoshop versions, previews and other applications do not need the extra flattened composite. Adobe notes that omitting this composite can significantly reduce layered file size. See [Adobe's Photoshop performance guidance](https://helpx.adobe.com/ca/photoshop/kb/optimize-photoshop-cc-performance.html).
+4. **Layered TIFF:** for lossless storage, choose **ZIP** for both Image Compression and Layer Compression and leave **Save Image Pyramid** off. JPEG Image Compression can make the composite lossy where Photoshop offers it, but it does not JPEG-compress individual layers or embedded Smart Object/reference sources. Use **Save Transparency** only when another application needs the composite alpha channel. Leave **BigTIFF** off unless the document requires it; it raises the size limit rather than improving compression. See [Adobe's TIFF option reference](https://helpx.adobe.com/photoshop/using/saving-files-graphics-formats.html).
+
+PSD is the safest archival master for Photoshop-specific behavior. Photoshop can preserve layer data in TIFF, but other applications may ignore it; verify Mega Musa Recall on a representative layered TIFF before switching an archive workflow from PSD.
 
 ### Describe budget
 

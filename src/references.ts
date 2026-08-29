@@ -27,6 +27,18 @@ export interface RefImage {
   base64: string;
   dataUrl: string; // for the thumbnail <img>
   thumbnailDataUrl?: string; // PNG fallback for UXP, which cannot preview WebP reliably
+  // Prepared only for a newly queued generation. The visible/reference source
+  // remains untouched so API requests still receive the expected image.
+  archiveAsset?: {
+    mimeType: "image/png" | "image/jpeg";
+    base64: string;
+    storageMode: "png-srgb" | "jpeg-90";
+    lossy: boolean;
+  };
+  // Restored references retain the identity of their existing in-document
+  // asset. Reusing them never recompresses or duplicates that asset.
+  archivedHash?: string;
+  archivedStorageMode?: "original" | "png-srgb" | "jpeg-90";
 }
 
 const EXT_MIME: Record<string, string> = {

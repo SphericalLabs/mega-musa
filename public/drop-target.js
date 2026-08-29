@@ -106,7 +106,12 @@
       let resultBase64 = base64;
       let resultWidth = width;
       let resultHeight = height;
-      if (Math.max(width, height) > pending.maxEdge || pending.forcePng || pending.normalizeSrgb) {
+      if (
+        Math.max(width, height) > pending.maxEdge ||
+        pending.forcePng ||
+        pending.normalizeSrgb ||
+        pending.compactStorage
+      ) {
         const scale = Math.min(1, pending.maxEdge / Math.max(width, height));
         const targetWidth = Math.max(1, Math.round(width * scale));
         const targetHeight = Math.max(1, Math.round(height * scale));
@@ -128,10 +133,23 @@
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, targetWidth, targetHeight);
-        const outputType = pending.forcePng ? "image/png" : pending.mimeType;
-        // Keep compressed references compressed. PNG ignores the quality value
-        // and preserves transparency; JPEG and WebP use a high-quality redraw.
-        const dataUrl = canvas.toDataURL(outputType, 0.95);
+        let outputType = pending.forcePng ? "image/png" : pending.mimeType;
+        let outputQuality = 0.95;
+        if (pending.compactStorage) {
+          const pixels = context.getImageData(0, 0, targetWidth, targetHeight).data;
+          let opaque = true;
+          for (let pixel = 3; pixel < pixels.length; pixel += 4) {
+            if (pixels[pixel] !== 255) {
+              opaque = false;
+              break;
+            }
+          }
+          outputType = opaque ? "image/jpeg" : "image/png";
+          outputQuality = 0.9;
+        }
+        // PNG ignores quality and preserves transparency. Compact opaque
+        // archive assets use the user-visible JPEG 90 policy.
+        const dataUrl = canvas.toDataURL(outputType, outputQuality);
         const comma = dataUrl.indexOf(",");
         if (comma < 0) throw new Error("The resized image could not be encoded.");
         resultBase64 = dataUrl.slice(comma + 1);
@@ -355,6 +373,7 @@
         maxEdge,
         forcePng: message.forcePng === true,
         normalizeSrgb: message.normalizeSrgb === true,
+        compactStorage: message.compactStorage === true,
         chunks: new Array(totalChunks),
       });
     } else if (message.type === "resize-chunk") {

@@ -35,7 +35,15 @@ import {
   Bounds,
   SelectionSnapshot,
 } from "./photoshop-bridge";
-import { encodePng, bytesToBase64, decodeImage, toRGBA } from "./image-codec";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  decodeImage,
+  encodePng,
+  tagJpegAsSrgb,
+  tagPngAsSrgb,
+  toRGBA,
+} from "./image-codec";
 import {
   generateEdit,
   IMAGE_QUALITY_OPTIONS,
@@ -107,6 +115,10 @@ const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
 const DESCRIPTION_INPUT_MAX_EDGE = 2048;
+// This value prevents scaling while remaining finite for the WebView protocol.
+// Browser canvas limits fail safely back to the original file for unusually
+// large references instead of reducing their resolution.
+const REFERENCE_ARCHIVE_MAX_EDGE = 100000;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const PROMPT_MIN_HEIGHT_PX = 48;
 const PROMPT_MAX_HEIGHT_PX = 180;
@@ -169,7 +181,9 @@ interface GenerationJob extends CancellableJob {
   resolution: string;
   includeSelection: boolean;
   placeAsSmartObject: boolean;
+  reduceDocumentSize: boolean;
   references: RefImage[];
+  archiveReferences: () => Promise<RefImage[]>;
   doc: any;
   docId: number;
   docWidth: number;
@@ -848,6 +862,15 @@ function renderGenerationRecall(
     sourceParts.push("No reference images");
   }
   sourceParts.push(`placed at ${generation.outputWidth}×${generation.outputHeight}`);
+  if (generation.resultStorage) {
+    sourceParts.push(
+      generation.resultStorage.mode === "jpeg-90"
+        ? "Smart Object stored as JPEG 90"
+        : generation.resultStorage.mode === "png-srgb"
+          ? "Smart Object stored as lossless sRGB PNG"
+          : "stored as a raster layer"
+    );
+  }
   sourceParts.push(`Generated ${recallDateLabel(generation.createdAt)}`);
   $("recallSource").textContent = sourceParts.join(" · ");
   $("restoreRecallSelection").disabled = restoringRecallSelection || !generation.geometry;
@@ -995,10 +1018,6 @@ async function onLoadRecallSettings(): Promise<void> {
   }
   setCheckedSafe($("includeSelection"), generation.includeSelection);
   saveSetting("includeSelection", generation.includeSelection ? "1" : "0");
-  if (generation.placeAsSmartObject !== undefined) {
-    setCheckedSafe($("placeAsSmartObject"), generation.placeAsSmartObject);
-    saveSetting("placeAsSmartObject", generation.placeAsSmartObject ? "1" : "0");
-  }
   updateDescriptionControls();
   scheduleDescriptionInputRefresh();
 
@@ -1471,7 +1490,8 @@ function resizeReference(
   maxEdge: number,
   forcePng = false,
   logDimensions = true,
-  normalizeSrgb = true
+  normalizeSrgb = true,
+  compactStorage = false
 ): Promise<RequestReference> {
   if (!dropWebviewReady) {
     return Promise.reject(new Error("The image processor is not ready. Close and reopen the Mega Musa panel."));
@@ -1501,6 +1521,7 @@ function resizeReference(
       maxEdge,
       forcePng,
       normalizeSrgb,
+      compactStorage,
       totalChunks,
     })) {
       failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
@@ -1521,6 +1542,59 @@ function resizeReference(
       failReferenceResize(requestId, new Error(`Could not prepare reference image “${ref.name}”.`));
     }
   });
+}
+
+async function prepareReferenceArchiveImages(
+  references: RefImage[],
+  reduceDocumentSize: boolean
+): Promise<RefImage[]> {
+  if (!reduceDocumentSize) return references;
+  const prepared: RefImage[] = [];
+  for (const reference of references) {
+    // A reference restored from any existing document archive is immutable.
+    // Its stored bytes and identity are reused even if the global preference is
+    // now different.
+    if (reference.archivedHash) {
+      prepared.push(reference);
+      continue;
+    }
+    try {
+      const compact = await resizeReference(
+        reference,
+        REFERENCE_ARCHIVE_MAX_EDGE,
+        false,
+        false,
+        true,
+        true
+      );
+      let bytes = base64ToBytes(compact.base64);
+      const storageMode = compact.mimeType === "image/jpeg" ? "jpeg-90" : "png-srgb";
+      bytes = compact.mimeType === "image/jpeg" ? tagJpegAsSrgb(bytes) : tagPngAsSrgb(bytes);
+      // Re-encoding an already compressed JPEG can occasionally grow it. Keep
+      // the exact source bytes when JPEG 90 would not reduce the document.
+      if (reference.mimeType === "image/jpeg" && bytes.length >= base64ToBytes(reference.base64).length) {
+        prepared.push(reference);
+        continue;
+      }
+      prepared.push({
+        ...reference,
+        archiveAsset: {
+          mimeType: compact.mimeType as "image/png" | "image/jpeg",
+          base64: bytesToBase64(bytes),
+          storageMode,
+          lossy: storageMode === "jpeg-90",
+        },
+      });
+    } catch (error: any) {
+      // Compression is an optimization, not a reason to lose provenance.
+      console.log(
+        `[Mega Musa] kept original reference “${reference.name}” because compact storage failed:`,
+        error?.message || error
+      );
+      prepared.push(reference);
+    }
+  }
+  return prepared;
 }
 
 function ensureReferenceThumbnail(ref: RefImage): Promise<string> {
@@ -2046,7 +2120,20 @@ async function onGenerate(): Promise<void> {
   // still placed into the selection's area and shape.
   const includeSelection = isChecked($("includeSelection"));
   const placeAsSmartObject = isChecked($("placeAsSmartObject"));
+  const reduceDocumentSize = isChecked($("reduceDocumentSize"));
   const generationRefs = refs.slice();
+  let archiveReferencePreparation: Promise<RefImage[]> | null = null;
+  const archiveReferences = () => {
+    if (!archiveReferencePreparation) {
+      archiveReferencePreparation = prepareReferenceArchiveImages(generationRefs, reduceDocumentSize).catch(
+        (error: any) => {
+          console.log("[Mega Musa] kept original references because compact storage failed:", error?.message || error);
+          return generationRefs;
+        }
+      );
+    }
+    return archiveReferencePreparation;
+  };
   const activeLayers: any[] = Array.from(doc.activeLayers || []);
   const anchorId = Number(activeLayers[0]?.id);
   const anchorLayerId = Number.isFinite(anchorId) ? anchorId : null;
@@ -2078,7 +2165,9 @@ async function onGenerate(): Promise<void> {
     resolution,
     includeSelection,
     placeAsSmartObject,
+    reduceDocumentSize,
     references: generationRefs,
+    archiveReferences,
     doc,
     docId: Number(doc.id),
     docWidth: Number(doc.width),
@@ -2131,8 +2220,9 @@ async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
     pending.layerName,
     pending.selectionSnapshot,
     job.placeAsSmartObject,
+    job.reduceDocumentSize,
     pending.archive,
-    job.references,
+    await job.archiveReferences(),
     job.anchorLayerId,
     undefined,
     PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS
@@ -2140,8 +2230,9 @@ async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
   scheduleGenerationRecallRefresh();
 
   if (placement.smartObject) {
+    const storage = placement.resultStorage?.mode === "jpeg-90" ? "JPEG 90" : "lossless sRGB PNG";
     pending.notes.push(
-      `The complete native ${pending.returnedSize} result is embedded and sized nondestructively to the raster placement bounds.`
+      `The full-resolution ${pending.returnedSize} result is embedded as ${storage} and sized nondestructively to the raster placement bounds.`
     );
     setGenerationNote(
       job,
@@ -2153,14 +2244,14 @@ async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
     ? placement.clip === "alpha"
       ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
       : placement.smartObject
-        ? "Done — native result embedded as a Smart Object with an editable linked mask."
+        ? "Done — result embedded as a Smart Object with an editable linked mask."
         : "Done — raster fallback clipped to your selection with an editable mask."
     : pending.activeArtboard
       ? placement.smartObject
-        ? `Done — native result embedded in active artboard “${pending.activeArtboard.name}” as a Smart Object.`
+        ? `Done — result embedded in active artboard “${pending.activeArtboard.name}” as a Smart Object.`
         : `Done — result added to active artboard “${pending.activeArtboard.name}” as a raster layer.`
       : placement.smartObject
-        ? "Done — native full-image result embedded as a Smart Object."
+        ? "Done — full-image result embedded as a Smart Object."
         : "Done — full-image result added as a raster layer.";
   const archiveMessages: string[] = [];
   if (job.placeAsSmartObject && !placement.smartObject) {
@@ -2206,6 +2297,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     resolution,
     includeSelection,
     placeAsSmartObject,
+    reduceDocumentSize,
     references: generationRefs,
     doc,
     docId,
@@ -2410,6 +2502,9 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
             imageSize: resolution === "auto" ? undefined : resolution,
             signal: controller.signal,
           });
+      // Prepare one shared full-resolution reference archive while the provider
+      // is working, after the free cancellation/preflight stages are complete.
+      void job.archiveReferences();
       result = await awaitCancellable(job, request, controller);
     } finally {
       releaseGenerationSlot(job);
@@ -2477,6 +2572,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       resolvedQuality,
       includeSelection,
       placeAsSmartObject,
+      reduceDocumentSize,
       referenceNames: generationRefs.map((reference) => reference.name),
       requestedSize: exactOutputSize || outputFrameNote,
       outputWidth: cropW,
@@ -2827,9 +2923,11 @@ async function restoreSettings(): Promise<void> {
     loadSetting("resolution", "auto"),
     loadSetting("quality", "auto")
   );
-  // Defaults to on — only an explicit "0" from a previous session turns it off.
+  // Canvas input and Smart Objects default on. Lossy document-size reduction is
+  // opt-in; an existing saved preference still wins over either default.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
   setCheckedSafe($("placeAsSmartObject"), loadSetting("placeAsSmartObject", "1") !== "0");
+  setCheckedSafe($("reduceDocumentSize"), loadSetting("reduceDocumentSize", "0") !== "0");
 }
 
 function persistSettingsHooks(): void {
@@ -2857,6 +2955,9 @@ function persistSettingsHooks(): void {
   });
   $("placeAsSmartObject")?.addEventListener("change", () =>
     saveSetting("placeAsSmartObject", isChecked($("placeAsSmartObject")) ? "1" : "0")
+  );
+  $("reduceDocumentSize")?.addEventListener("change", () =>
+    saveSetting("reduceDocumentSize", isChecked($("reduceDocumentSize")) ? "1" : "0")
   );
   $("describeModel")?.addEventListener("change", () =>
     saveSetting("describeModel", $("describeModel").value || DEFAULT_OPENAI_DESCRIPTION_MODEL)

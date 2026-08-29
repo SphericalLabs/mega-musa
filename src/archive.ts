@@ -26,6 +26,15 @@ const { action } = require("photoshop");
 // layer metadata.
 export const ARCHIVE_SETTINGS_KEY = "io_sphericals_mega_musa";
 
+export type AssetStorageMode = "original" | "png-srgb" | "jpeg-90";
+
+export interface EmbeddedResultStorage {
+  mode: "raster" | "png-srgb" | "jpeg-90";
+  mimeType?: "image/png" | "image/jpeg";
+  byteLength?: number;
+  lossy: boolean;
+}
+
 export interface ArchivedReference {
   id: string;
   hash: string;
@@ -33,6 +42,10 @@ export interface ArchivedReference {
   name: string;
   mimeType: string;
   byteLength: number;
+  storageMode?: AssetStorageMode;
+  sourceMimeType?: string;
+  sourceByteLength?: number;
+  lossy?: boolean;
 }
 
 export interface ReferenceAssetMetadata {
@@ -44,6 +57,10 @@ export interface ReferenceAssetMetadata {
   mimeType: string;
   byteLength: number;
   createdAt: string;
+  storageMode?: AssetStorageMode;
+  sourceMimeType?: string;
+  sourceByteLength?: number;
+  lossy?: boolean;
 }
 
 export interface ReferenceAssetPoolMetadata {
@@ -74,6 +91,8 @@ export interface GenerationArchive {
   resolvedQuality?: string;
   includeSelection: boolean;
   placeAsSmartObject?: boolean;
+  reduceDocumentSize?: boolean;
+  resultStorage?: EmbeddedResultStorage;
   referenceNames: string[];
   requestedSize: string;
   outputWidth: number;
@@ -162,7 +181,21 @@ function isArchivedReference(value: any): value is ArchivedReference {
     Number.isFinite(value.layerId) &&
     typeof value.name === "string" &&
     typeof value.mimeType === "string" &&
-    Number.isFinite(value.byteLength)
+    Number.isFinite(value.byteLength) &&
+    (value.storageMode === undefined || ["original", "png-srgb", "jpeg-90"].includes(value.storageMode)) &&
+    (value.sourceMimeType === undefined || typeof value.sourceMimeType === "string") &&
+    (value.sourceByteLength === undefined || Number.isFinite(value.sourceByteLength)) &&
+    (value.lossy === undefined || typeof value.lossy === "boolean")
+  );
+}
+
+function isEmbeddedResultStorage(value: any): value is EmbeddedResultStorage {
+  return (
+    value != null &&
+    ["raster", "png-srgb", "jpeg-90"].includes(value.mode) &&
+    (value.mimeType === undefined || value.mimeType === "image/png" || value.mimeType === "image/jpeg") &&
+    (value.byteLength === undefined || Number.isFinite(value.byteLength)) &&
+    typeof value.lossy === "boolean"
   );
 }
 
@@ -178,6 +211,8 @@ function isGenerationArchive(value: any): value is GenerationArchive {
     typeof value.quality === "string" &&
     typeof value.includeSelection === "boolean" &&
     (value.placeAsSmartObject === undefined || typeof value.placeAsSmartObject === "boolean") &&
+    (value.reduceDocumentSize === undefined || typeof value.reduceDocumentSize === "boolean") &&
+    (value.resultStorage === undefined || isEmbeddedResultStorage(value.resultStorage)) &&
     Array.isArray(value.referenceNames) &&
     value.referenceNames.every((name: unknown) => typeof name === "string") &&
     typeof value.requestedSize === "string" &&
@@ -198,7 +233,11 @@ function isReferenceAssetMetadata(value: any): value is ReferenceAssetMetadata {
     typeof value.name === "string" &&
     typeof value.mimeType === "string" &&
     Number.isFinite(value.byteLength) &&
-    typeof value.createdAt === "string"
+    typeof value.createdAt === "string" &&
+    (value.storageMode === undefined || ["original", "png-srgb", "jpeg-90"].includes(value.storageMode)) &&
+    (value.sourceMimeType === undefined || typeof value.sourceMimeType === "string") &&
+    (value.sourceByteLength === undefined || Number.isFinite(value.sourceByteLength)) &&
+    (value.lossy === undefined || typeof value.lossy === "boolean")
   );
 }
 

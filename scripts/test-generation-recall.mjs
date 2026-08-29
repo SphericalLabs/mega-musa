@@ -35,6 +35,8 @@ const geometry = {
 const archive = {
   v: 1, prompt: "Add a tree", provider: "Gemini", model: "test-model", modelLabel: "Test model",
   resolution: "1K", ratio: "5:4", quality: "auto", includeSelection: true,
+  placeAsSmartObject: true, reduceDocumentSize: true,
+  resultStorage: { mode: "jpeg-90", mimeType: "image/jpeg", byteLength: 1234, lossy: true },
   referenceNames: [], references: [], requestedSize: "5:4 at 1K",
   outputWidth: 500, outputHeight: 400, createdAt: "2026-08-28T12:00:00.000Z",
 };
@@ -124,6 +126,12 @@ async function expectBlocked(savedGeometry, pattern) {
 // must not hide the prompt/settings or infer a position from output size.
 await writeLayerGenerationArchive(1, 2, { ...archive, geometry });
 assert.deepEqual(await readLayerGenerationArchive(1, 2), { ...archive, geometry });
+const legacyArchive = clone(archive);
+delete legacyArchive.placeAsSmartObject;
+delete legacyArchive.reduceDocumentSize;
+delete legacyArchive.resultStorage;
+await writeLayerGenerationArchive(1, 2, legacyArchive);
+assert.deepEqual(await readLayerGenerationArchive(1, 2), legacyArchive, "older archives remain readable");
 await writeLayerGenerationArchive(1, 2, archive);
 assert.deepEqual(await readLayerGenerationArchive(1, 2), archive);
 resetDocument();

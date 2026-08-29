@@ -17,9 +17,15 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { applyAlphaMask, coverResampleRGBA, resampleGray } from "./image-codec";
+import {
+  applyAlphaMask,
+  coverResampleRGBA,
+  encodeEmbeddedImage,
+  resampleGray,
+} from "./image-codec";
 import {
   ArchivedGenerationGeometry,
+  EmbeddedResultStorage,
   GenerationArchive,
   getRecallSelectionBounds,
   writeLayerGenerationArchive,
@@ -34,6 +40,7 @@ import {
 } from "./host-modal";
 
 const { app, action, constants, core, imaging } = require("photoshop");
+const { storage } = require("uxp");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 
 function runModal<T>(
@@ -523,6 +530,7 @@ export interface PlacementResult {
   smartObject: boolean;
   archiveSaved: boolean;
   referenceArchiveFailures: number;
+  resultStorage: EmbeddedResultStorage;
 }
 
 function openDocumentById(docId: number): any | null {
@@ -804,18 +812,20 @@ function nextSmartObjectMarker(): string {
   return `__mega_musa_result_${Date.now()}_${smartObjectMarkerSequence}`;
 }
 
-// Build the Smart Object from an explicit 8-bit sRGB document instead of a
-// temporary PNG. That retains every returned source pixel, avoids missing-profile
-// interpretation during Place Embedded and leaves no source file to manage.
-async function createNativeSmartObject(
+// Embed a normal image file instead of converting a pixel layer to a Smart
+// Object, which makes Photoshop store an internal PSB. The scratch document
+// only establishes the exact outer transform before the embedded image-backed
+// Smart Object is duplicated into the user's document.
+async function createFileSmartObject(
   targetDocument: any,
   anchorLayer: any,
   rgba: Uint8Array,
   width: number,
   height: number,
   targetBounds: Bounds,
-  layerName: string
-): Promise<any> {
+  layerName: string,
+  reduceDocumentSize: boolean
+): Promise<{ layer: any; storage: EmbeddedResultStorage }> {
   const targetWidth = targetBounds.right - targetBounds.left;
   const targetHeight = targetBounds.bottom - targetBounds.top;
   if (targetWidth <= 0 || targetHeight <= 0) {
@@ -826,9 +836,19 @@ async function createNativeSmartObject(
     descendantLayers(targetDocument).map((layer) => Number(layer.id)).filter(Number.isFinite)
   );
   const sourceMarker = nextSmartObjectMarker();
+  const encoded = encodeEmbeddedImage(rgba, width, height, reduceDocumentSize);
   let scratch: any | null = null;
   let placedLayer: any | null = null;
   try {
+    const tempFolder = await storage.localFileSystem.getTemporaryFolder();
+    const file = await tempFolder.createFile(`${sourceMarker}.${encoded.extension}`, { overwrite: true });
+    const fileBytes =
+      encoded.bytes.byteOffset === 0 && encoded.bytes.byteLength === encoded.bytes.buffer.byteLength
+        ? encoded.bytes.buffer
+        : encoded.bytes.slice().buffer;
+    await file.write(fileBytes, { format: storage.formats.binary });
+    const token = storage.localFileSystem.createSessionToken(file);
+
     scratch = await app.createDocument({
       width,
       height,
@@ -839,33 +859,22 @@ async function createNativeSmartObject(
     });
     if (!scratch) throw new Error("Photoshop could not create the Smart Object source document.");
 
-    const sourceLayer = scratch.layers?.[0];
-    if (!sourceLayer) throw new Error("The Smart Object source document has no pixel layer.");
-    const imageData = await imaging.createImageDataFromBuffer(rgba, {
-      width,
-      height,
-      components: 4,
-      componentSize: 8,
-      colorSpace: "RGB",
-      colorProfile: SRGB_PROFILE,
-      chunky: true,
-    });
-    try {
-      await imaging.putPixels({
-        documentID: scratch.id,
-        layerID: sourceLayer.id,
-        targetBounds: { left: 0, top: 0, right: width, bottom: height },
-        imageData,
-      });
-    } finally {
-      imageData.dispose();
-    }
-
-    await selectLayerById(sourceLayer.id);
-    await action.batchPlay(
-      [{ _obj: "newPlacedLayer", _options: { dialogOptions: "dontDisplay" } }],
+    const placeSourceResult = await action.batchPlay(
+      [
+        {
+          _obj: "placeEvent",
+          null: { _path: token, _kind: "local" },
+          linked: false,
+          freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
       {}
     );
+    const placeSourceError = placeSourceResult?.[0]?._obj === "error" ? placeSourceResult[0] : null;
+    if (placeSourceError) {
+      throw new Error(placeSourceError.message || "Photoshop could not embed the Smart Object image file.");
+    }
     const embeddedSource = scratch.activeLayers?.[0];
     if (!embeddedSource) throw new Error("Photoshop did not create the embedded Smart Object.");
     await renameActiveLayer(sourceMarker);
@@ -909,7 +918,15 @@ async function createNativeSmartObject(
     }
     await selectLayerById(placedLayer.id);
     await renameActiveLayer(layerName);
-    return placedLayer;
+    return {
+      layer: placedLayer,
+      storage: {
+        mode: encoded.storageMode,
+        mimeType: encoded.mimeType,
+        byteLength: encoded.bytes.length,
+        lossy: encoded.lossy,
+      },
+    };
   } catch (error) {
     if (openDocumentById(targetDocument.id)) {
       app.activeDocument = targetDocument;
@@ -1133,8 +1150,8 @@ async function placeRasterFallback(
   return { layer, clip };
 }
 
-// Modal step 2: preserve the complete native provider image inside an embedded
-// Smart Object, pre-size it to the raster-equivalent `bounds` and attach a
+// Modal step 2: preserve the provider image at full resolution inside an
+// image-backed Smart Object, pre-size it to the raster-equivalent `bounds` and attach a
 // linked layer mask afterwards when the target shape needs clipping. Any Smart
 // Object failure falls back to raster placement so a paid result is preserved.
 export async function placeResult(
@@ -1146,6 +1163,7 @@ export async function placeResult(
   layerName: string,
   selection: SelectionSnapshot | null,
   placeAsSmartObject: boolean,
+  reduceDocumentSize: boolean,
   archive: GenerationArchive,
   references: RefImage[],
   anchorLayerId?: number | null,
@@ -1172,18 +1190,22 @@ export async function placeResult(
       let clip: PlacementClip = "none";
       let smartObject = placeAsSmartObject;
       let incompleteSmartObject: any | null = null;
+      let resultStorage: EmbeddedResultStorage = { mode: "raster", lossy: false };
 
       if (placeAsSmartObject) {
         try {
-          incompleteSmartObject = await createNativeSmartObject(
+          const created = await createFileSmartObject(
             document,
             anchorLayer,
             rgba,
             width,
             height,
             bounds,
-            layerName
+            layerName,
+            reduceDocumentSize
           );
+          incompleteSmartObject = created.layer;
+          resultStorage = created.storage;
           await positionSmartObjectAtBounds(incompleteSmartObject, bounds);
           await bringResultToFront(incompleteSmartObject);
 
@@ -1194,6 +1216,7 @@ export async function placeResult(
           resultLayer = incompleteSmartObject;
         } catch (error: any) {
           smartObject = false;
+          resultStorage = { mode: "raster", lossy: false };
           console.log("[Mega Musa] Smart Object placement failed; using raster fallback:", error?.message || error);
           if (incompleteSmartObject) {
             try {
@@ -1226,6 +1249,7 @@ export async function placeResult(
       }
 
       const layerId = resultLayer.id;
+      archive.resultStorage = resultStorage;
 
       let referenceArchiveFailures = 0;
       try {
@@ -1254,7 +1278,14 @@ export async function placeResult(
       // effect so the latest arriving image is the frontmost layer in its
       // frozen document, artboard or group.
       await bringResultToFront(resultLayer);
-      const placement = { clip, layerId, smartObject, archiveSaved, referenceArchiveFailures };
+      const placement = {
+        clip,
+        layerId,
+        smartObject,
+        archiveSaved,
+        referenceArchiveFailures,
+        resultStorage,
+      };
       await executionContext.hostControl.resumeHistory(historySuspension);
       return placement;
     }),

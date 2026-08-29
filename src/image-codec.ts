@@ -18,7 +18,7 @@
  */
 
 import { encode, decode } from "fast-png";
-import { decode as jpegDecode } from "jpeg-js";
+import { decode as jpegDecode, encode as jpegEncode } from "jpeg-js";
 
 // --- base64 <-> bytes (UXP provides global btoa/atob) -----------------------
 
@@ -38,10 +38,155 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-// --- PNG encode / decode ----------------------------------------------------
+// --- PNG/JPEG encode / decode ----------------------------------------------
+
+function uint32Bytes(value: number): Uint8Array {
+  return Uint8Array.of(value >>> 24, value >>> 16, value >>> 8, value);
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = Uint8Array.from(type, (character) => character.charCodeAt(0));
+  const checksumInput = new Uint8Array(typeBytes.length + data.length);
+  checksumInput.set(typeBytes);
+  checksumInput.set(data, typeBytes.length);
+  const chunk = new Uint8Array(12 + data.length);
+  chunk.set(uint32Bytes(data.length), 0);
+  chunk.set(typeBytes, 4);
+  chunk.set(data, 8);
+  chunk.set(uint32Bytes(crc32(checksumInput)), 8 + data.length);
+  return chunk;
+}
+
+function pngHasChunk(bytes: Uint8Array, wanted: string): boolean {
+  for (let offset = 8; offset + 12 <= bytes.length; ) {
+    const length =
+      ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+    if (offset + 12 + length > bytes.length) return false;
+    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+    if (type === wanted) return true;
+    offset += 12 + length;
+  }
+  return false;
+}
+
+// Pixels produced by Mega Musa and the reference WebView are sRGB. Add the
+// standard PNG declaration when the encoder did not already include sRGB or an
+// ICC profile. The zero byte selects perceptual rendering intent.
+export function tagPngAsSrgb(bytes: Uint8Array): Uint8Array {
+  if (pngHasChunk(bytes, "sRGB") || pngHasChunk(bytes, "iCCP")) return bytes;
+  const ihdrEnd = 8 + 12 + 13;
+  if (bytes.length < ihdrEnd || !pngHasChunk(bytes, "IHDR")) {
+    throw new Error("Could not tag an invalid PNG as sRGB.");
+  }
+  const srgb = pngChunk("sRGB", Uint8Array.of(0));
+  const tagged = new Uint8Array(bytes.length + srgb.length);
+  tagged.set(bytes.subarray(0, ihdrEnd));
+  tagged.set(srgb, ihdrEnd);
+  tagged.set(bytes.subarray(ihdrEnd), ihdrEnd + srgb.length);
+  return tagged;
+}
+
+// JPEG has no PNG-style sRGB chunk. This minimal Exif block records ColorSpace
+// 1 (sRGB), matching the explicitly sRGB pixels sent to the JPEG encoder.
+export function tagJpegAsSrgb(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 2 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    throw new Error("Could not tag an invalid JPEG as sRGB.");
+  }
+  const exif = Uint8Array.of(
+    0xff, 0xe1, 0x00, 0x34,
+    0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+    0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x01, 0x00,
+    0x69, 0x87, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00,
+    0x01, 0xa0, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
+  );
+  const tagged = new Uint8Array(bytes.length + exif.length);
+  tagged.set(bytes.subarray(0, 2));
+  tagged.set(exif, 2);
+  tagged.set(bytes.subarray(2), 2 + exif.length);
+  return tagged;
+}
 
 export function encodePng(data: Uint8Array, width: number, height: number, channels: number): Uint8Array {
-  return encode({ width, height, data, channels, depth: 8 }) as Uint8Array;
+  return tagPngAsSrgb(encode({ width, height, data, channels, depth: 8 }) as Uint8Array);
+}
+
+export function encodeJpeg(data: Uint8Array, width: number, height: number, quality = 90): Uint8Array {
+  // jpeg-js is CommonJS. Bundlers therefore expose its internal `module`, which
+  // makes version 0.4.4 return Buffer.from(byteout) even in Photoshop UXP. Give
+  // that one synchronous call the only Buffer operation it needs, then restore
+  // the host global immediately instead of installing a Node polyfill.
+  const globals: any = globalThis as any;
+  const hadBuffer = Object.prototype.hasOwnProperty.call(globals, "Buffer");
+  const previousBuffer = globals.Buffer;
+  if (typeof previousBuffer === "undefined") {
+    globals.Buffer = {
+      from(value: ArrayLike<number>): Uint8Array {
+        return value instanceof Uint8Array ? value : Uint8Array.from(value);
+      },
+    };
+  }
+  try {
+    const encoded = jpegEncode({ data, width, height }, quality).data;
+    const bytes = encoded instanceof Uint8Array ? encoded : Uint8Array.from(encoded as ArrayLike<number>);
+    return tagJpegAsSrgb(bytes);
+  } finally {
+    if (hadBuffer) globals.Buffer = previousBuffer;
+    else delete globals.Buffer;
+  }
+}
+
+export function rgbaIsOpaque(data: Uint8Array): boolean {
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] !== 255) return false;
+  }
+  return true;
+}
+
+export interface EncodedEmbeddedImage {
+  bytes: Uint8Array;
+  mimeType: "image/png" | "image/jpeg";
+  extension: "png" | "jpg";
+  storageMode: "png-srgb" | "jpeg-90";
+  lossy: boolean;
+}
+
+export function encodeEmbeddedImage(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  reduceDocumentSize: boolean
+): EncodedEmbeddedImage {
+  if (reduceDocumentSize && rgbaIsOpaque(rgba)) {
+    return {
+      bytes: encodeJpeg(rgba, width, height, 90),
+      mimeType: "image/jpeg",
+      extension: "jpg",
+      storageMode: "jpeg-90",
+      lossy: true,
+    };
+  }
+  return {
+    bytes: encodePng(rgba, width, height, 4),
+    mimeType: "image/png",
+    extension: "png",
+    storageMode: "png-srgb",
+    lossy: false,
+  };
 }
 
 export interface DecodedImage {
