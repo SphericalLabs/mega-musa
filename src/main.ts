@@ -1084,7 +1084,8 @@ function renderGenerationQueue(): void {
   const list = $("generationQueueList");
   const summary = $("generationQueueSummary");
   const cancelAll = $("cancelAllGenerations");
-  if (!section || !list || !summary || !cancelAll) return;
+  const cancelBillingNote = $("generationCancelBillingNote");
+  if (!section || !list || !summary || !cancelAll || !cancelBillingNote) return;
 
   section.style.display = generationJobs.length ? "block" : "none";
   clearChildren(list);
@@ -1100,6 +1101,9 @@ function renderGenerationQueue(): void {
   const cancelable = active.filter((job) => job.state !== "placing" && job.state !== "cancelling");
   cancelAll.style.display = cancelable.length ? "inline-flex" : "none";
   cancelAll.disabled = cancelable.length === 0;
+  cancelBillingNote.style.display = cancelable.some((job) => job.state === "generating")
+    ? "block"
+    : "none";
 
   for (const job of generationJobs) {
     const row = document.createElement("div");

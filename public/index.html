@@ -178,6 +178,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #generationQueue { display: none; margin-top: 16px; }
     #generationQueueHeader { min-height: 24px; margin: 0; }
     #generationQueueSummary { font-size: 11px; font-weight: 600; }
+    #generationCancelBillingNote { display: none; margin-top: 2px; }
     #generationQueueList { margin-top: 2px; }
     .generation-job { display: flex; align-items: flex-start; box-sizing: border-box;
                       width: 100%; margin-top: 6px; padding: 8px;
@@ -450,6 +451,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
           <span id="generationQueueSummary">Generation Queue</span>
           <sp-button id="cancelAllGenerations" variant="warning" size="s">Cancel All</sp-button>
         </div>
+        <div id="generationCancelBillingNote" class="muted">Requests already sent remain billable if canceled.</div>
         <div id="generationQueueList"></div>
       </div>
     </div>
