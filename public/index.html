@@ -330,6 +330,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
           </div>
           <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
         </div>
+        <div class="row">
+          <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
+        </div>
       </div>
     </div>
 
@@ -339,7 +342,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       <div id="referenceImagesSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="referenceImagesSectionContent">
         <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
         <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
-        <span>Reference Images</span>
+        <span>Image References</span>
       </div>
       <div id="referenceImagesSectionContent" class="section-content" role="region" aria-labelledby="referenceImagesSectionToggle">
         <div class="row spread">
@@ -355,9 +358,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
         <webview id="dropWebview" src="plugin:/drop-target.html" width="100%" height="64px"></webview>
         <div id="thumbs"></div>
         <div class="muted">Drag PNG, JPEG or WebP files onto the box above, or use <b>Paste</b> for an image on the clipboard. A macOS screenshot goes to the clipboard with <b>⌃⇧⌘4</b>.</div>
-        <div class="row">
-          <sp-checkbox id="includeSelection" checked>Include Photoshop selection</sp-checkbox>
-        </div>
       </div>
     </div>
 
@@ -386,6 +386,30 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <sp-divider size="s"></sp-divider>
 
+    <div id="aspectRatioSection" class="collapsible-section">
+      <div id="aspectRatioSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="aspectRatioSectionContent">
+        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
+        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
+        <span>Aspect Ratio</span>
+      </div>
+      <div id="aspectRatioSectionContent" class="section-content" role="region" aria-labelledby="aspectRatioSectionToggle">
+        <div class="field">
+          <div class="row">
+            <!-- Options for this picker are generated at runtime from the capability
+                 table in src/models.ts, so each model only offers supported ratios. -->
+            <sp-picker id="selRatio" size="s" class="grow">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+            <sp-button id="fitSelection" variant="primary" size="s">Fit Selection</sp-button>
+          </div>
+          <sp-button id="fitNearest" variant="primary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
+        </div>
+        <div class="muted"><b>Generate</b> adjusts the output area to a supported aspect ratio. It does not change your selection. It uses your selection as a layer mask. <b>Fit Selection</b> changes the selection to the ratio in the menu. <b>Fit to Nearest Aspect Ratio</b> fits the selection to the closest supported ratio and updates the menu.</div>
+      </div>
+    </div>
+
+    <sp-divider size="s"></sp-divider>
+
     <div id="recallSection" class="collapsible-section">
       <div id="recallSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="recallSectionContent">
         <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
@@ -409,29 +433,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
           <sp-button id="restoreRecallSelection" variant="primary" size="s" disabled>Restore Rectangle</sp-button>
         </div>
         <div id="recallSelectionNote" class="muted"></div>
-      </div>
-      <sp-divider size="s"></sp-divider>
-    </div>
-
-    <div id="aspectRatioSection" class="collapsible-section">
-      <div id="aspectRatioSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="aspectRatioSectionContent">
-        <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
-        <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
-        <span>Aspect Ratio</span>
-      </div>
-      <div id="aspectRatioSectionContent" class="section-content" role="region" aria-labelledby="aspectRatioSectionToggle">
-        <div class="field">
-          <div class="row">
-            <!-- Options for this picker are generated at runtime from the capability
-                 table in src/models.ts, so each model only offers supported ratios. -->
-            <sp-picker id="selRatio" size="s" class="grow">
-              <sp-menu slot="options"></sp-menu>
-            </sp-picker>
-            <sp-button id="fitSelection" variant="primary" size="s">Fit Selection</sp-button>
-          </div>
-          <sp-button id="fitNearest" variant="primary" size="s" style="width:100%; margin-top:4px;">Fit to Nearest Aspect Ratio</sp-button>
-        </div>
-        <div class="muted"><b>Generate</b> adjusts the output area to a supported aspect ratio. It does not change your selection. It uses your selection as a layer mask. <b>Fit Selection</b> changes the selection to the ratio in the menu. <b>Fit to Nearest Aspect Ratio</b> fits the selection to the closest supported ratio and updates the menu.</div>
       </div>
     </div>
 
