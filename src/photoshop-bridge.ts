@@ -18,7 +18,12 @@
  */
 
 import { applyAlphaMask, coverResampleRGBA, resampleGray } from "./image-codec";
-import { GenerationArchive, writeLayerGenerationArchive } from "./archive";
+import {
+  ArchivedGenerationGeometry,
+  GenerationArchive,
+  getRecallSelectionBounds,
+  writeLayerGenerationArchive,
+} from "./archive";
 import { archiveReferenceAssetsInActiveDocument } from "./reference-assets";
 import { RefImage } from "./references";
 import {
@@ -160,6 +165,30 @@ export async function getActiveArtboard(doc: any, anchorLayerId?: number | null)
   return { id: active.id, name: active.name || "Artboard", bounds };
 }
 
+// Called only inside a modal operation with the intended document active.
+async function replaceRectSelection(b: Bounds): Promise<void> {
+  const result = await action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "channel", _property: "selection" }],
+        to: {
+          _obj: "rectangle",
+          top: { _unit: "pixelsUnit", _value: b.top },
+          left: { _unit: "pixelsUnit", _value: b.left },
+          bottom: { _unit: "pixelsUnit", _value: b.bottom },
+          right: { _unit: "pixelsUnit", _value: b.right },
+        },
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
+    {}
+  );
+  if (result?.[0]?._obj === "error") {
+    throw new Error(result[0].message || "Photoshop could not restore the rectangular selection.");
+  }
+}
+
 // Replace the current selection with an exact rectangle (document pixels).
 // Used to snap a freely-drawn selection to a chosen aspect ratio.
 export async function setRectSelection(
@@ -169,27 +198,31 @@ export async function setRectSelection(
 ): Promise<void> {
   await runModal(
     "snap selection",
-    async () => withActiveDocument(docId ?? app.activeDocument?.id, async () => {
-      await action.batchPlay(
-        [
-          {
-            _obj: "set",
-            _target: [{ _ref: "channel", _property: "selection" }],
-            to: {
-              _obj: "rectangle",
-              top: { _unit: "pixelsUnit", _value: b.top },
-              left: { _unit: "pixelsUnit", _value: b.left },
-              bottom: { _unit: "pixelsUnit", _value: b.bottom },
-              right: { _unit: "pixelsUnit", _value: b.right },
-            },
-            _options: { dialogOptions: "dontDisplay" },
-          },
-        ],
-        {}
-      );
-    }),
+    async () => withActiveDocument(docId ?? app.activeDocument?.id, () => replaceRectSelection(b)),
     lease
   );
+}
+
+export async function restoreArchivedSelection(
+  docId: number,
+  layerId: number,
+  geometry: ArchivedGenerationGeometry | undefined
+): Promise<void> {
+  await runModal("restore original rectangle", async () => {
+    // Check after acquiring Photoshop's modal scope, not before waiting for it.
+    // A stale recall panel must never switch documents or alter a new target.
+    const doc = getActiveDoc();
+    const layers: any[] = Array.from(doc.activeLayers || []);
+    if (doc.id !== docId || layers.length !== 1 || layers[0].id !== layerId) {
+      throw new Error("Select the archived result layer again, then retry. The current selection is unchanged.");
+    }
+    if (doc.quickMaskMode) {
+      throw new Error("Exit Quick Mask mode before restoring the rectangle. The current selection is unchanged.");
+    }
+    const artboard = await getActiveArtboard(doc, layerId);
+    const bounds = getRecallSelectionBounds(geometry, Number(doc.width), Number(doc.height), artboard);
+    await replaceRectSelection(bounds);
+  });
 }
 
 export async function getSelectionBounds(docId?: number): Promise<Bounds | null> {

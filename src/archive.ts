@@ -17,6 +17,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import type { ActiveArtboard, Bounds } from "./photoshop-bridge";
+
 const { action } = require("photoshop");
 
 // generatorSettings shares one Photoshop property between plugins. A dedicated
@@ -50,6 +52,16 @@ export interface ReferenceAssetPoolMetadata {
   name: string;
 }
 
+export interface ArchivedGenerationGeometry {
+  // Preserve the original selection separately from the aspect-fitted crop.
+  // Without a drawn selection, recall uses the generation frame instead.
+  selectionBounds: Bounds | null;
+  generationBounds: Bounds;
+  documentWidth: number;
+  documentHeight: number;
+  artboard: { id: number; bounds: Bounds } | null;
+}
+
 export interface GenerationArchive {
   v: 1;
   prompt: string;
@@ -70,6 +82,77 @@ export interface GenerationArchive {
   // Stage 2 can add reusable in-file asset pointers without changing the Stage
   // 1 fields or invalidating records already stored in PSD/PSB files.
   references?: ArchivedReference[];
+  geometry?: ArchivedGenerationGeometry;
+}
+
+function isBounds(value: any): value is Bounds {
+  return (
+    value != null &&
+    [value.left, value.top, value.right, value.bottom].every(Number.isFinite) &&
+    value.right > value.left &&
+    value.bottom > value.top
+  );
+}
+
+function isGenerationGeometry(value: any): value is ArchivedGenerationGeometry {
+  return (
+    value != null &&
+    (value.selectionBounds === null || isBounds(value.selectionBounds)) &&
+    isBounds(value.generationBounds) &&
+    Number.isFinite(value.documentWidth) &&
+    value.documentWidth > 0 &&
+    Number.isFinite(value.documentHeight) &&
+    value.documentHeight > 0 &&
+    (value.artboard === null ||
+      (Number.isInteger(value.artboard?.id) && isBounds(value.artboard?.bounds)))
+  );
+}
+
+function sameBounds(a: Bounds, b: Bounds): boolean {
+  return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+// Checks geometry only: unchanged dimensions cannot prove the content is still
+// in its original position. Never scale, offset or clip the saved rectangle.
+export function getRecallSelectionBounds(
+  geometry: ArchivedGenerationGeometry | undefined,
+  documentWidth: number,
+  documentHeight: number,
+  artboard: ActiveArtboard | null
+): Bounds {
+  if (!isGenerationGeometry(geometry)) {
+    throw new Error("This generation has no readable saved rectangle. Prompt and settings are still available.");
+  }
+  if (
+    !Number.isFinite(documentWidth) || !Number.isFinite(documentHeight) ||
+    documentWidth <= 0 || documentHeight <= 0
+  ) {
+    throw new Error("Could not read the current canvas dimensions. Try again with an open document.");
+  }
+  if (geometry.documentWidth !== documentWidth || geometry.documentHeight !== documentHeight) {
+    throw new Error(
+      `Canvas changed from ${geometry.documentWidth} × ${geometry.documentHeight} to ` +
+      `${documentWidth} × ${documentHeight}. Draw a new selection.`
+    );
+  }
+  if (
+    geometry.artboard
+      ? !artboard || geometry.artboard.id !== artboard.id || !sameBounds(geometry.artboard.bounds, artboard.bounds)
+      : artboard !== null
+  ) {
+    throw new Error("The original artboard is missing, has changed or is no longer the target. Draw a new selection.");
+  }
+  const bounds = geometry.selectionBounds ?? geometry.generationBounds;
+  const target = artboard?.bounds ?? { left: 0, top: 0, right: documentWidth, bottom: documentHeight };
+  if (
+    bounds.left < target.left || bounds.top < target.top ||
+    bounds.right > target.right || bounds.bottom > target.bottom
+  ) {
+    throw new Error(
+      `The saved rectangle does not fit entirely inside the ${artboard ? "artboard" : "canvas"}. Draw a new selection.`
+    );
+  }
+  return bounds;
 }
 
 function isArchivedReference(value: any): value is ArchivedReference {
@@ -198,7 +281,14 @@ export async function readLayerGenerationArchive(
   layerId: number
 ): Promise<GenerationArchive | null> {
   const archive = await readLayerMetadata(docId, layerId);
-  if (isGenerationArchive(archive)) return archive;
+  if (isGenerationArchive(archive)) {
+    // Optional rectangle data must not make the prompt/settings unreadable.
+    if (archive.geometry !== undefined && !isGenerationGeometry(archive.geometry)) {
+      console.log("[Mega Musa] ignored invalid rectangle geometry in the generation archive.");
+      return { ...archive, geometry: undefined };
+    }
+    return archive;
+  }
   if (archive === null || isReferenceAssetMetadata(archive) || isReferenceAssetPoolMetadata(archive)) return null;
   console.log("[Mega Musa] ignored invalid generation archive metadata on the selected layer.");
   return null;

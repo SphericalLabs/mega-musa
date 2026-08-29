@@ -28,6 +28,7 @@ import {
   readRegion,
   placeResult,
   setRectSelection,
+  restoreArchivedSelection,
   readClipboardImage,
   readLayerThumbnail,
   ActiveArtboard,
@@ -205,6 +206,7 @@ let selectedRecall: {
 let recallRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let recallRefreshSequence = 0;
 let recallRefreshDeferred = false;
+let restoringRecallSelection = false;
 let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let descriptionInputRefreshSequence = 0;
 let hasDescriptionSelection = false;
@@ -892,6 +894,12 @@ function renderGenerationRecall(
   sourceParts.push(`placed at ${generation.outputWidth}×${generation.outputHeight}`);
   sourceParts.push(`Generated ${recallDateLabel(generation.createdAt)}`);
   $("recallSource").textContent = sourceParts.join(" · ");
+  $("restoreRecallSelection").disabled = restoringRecallSelection || !generation.geometry;
+  $("recallSelectionNote").textContent = !generation.geometry
+    ? "No rectangle was saved with this generation. Prompt and settings are still available."
+    : generation.geometry.selectionBounds
+      ? "Restores original coordinates only, without selection shape or feathering. Moved content is not tracked."
+      : "No selection was drawn; restores the original generation frame. Moved content is not tracked.";
 }
 
 async function refreshGenerationRecall(): Promise<void> {
@@ -997,6 +1005,24 @@ async function onCopyRecallPrompt(): Promise<void> {
         : "Could not copy the generation prompt: " + message,
       "error"
     );
+  }
+}
+
+async function onRestoreRecallSelection(): Promise<void> {
+  if (!selectedRecall || restoringRecallSelection) return;
+  const selected = selectedRecall;
+  restoringRecallSelection = true;
+  $("restoreRecallSelection").disabled = true;
+  setStatus("Checking the original rectangle…");
+  try {
+    await restoreArchivedSelection(selected.docId, selected.layerId, selected.generation.geometry);
+    scheduleDescriptionInputRefresh();
+    setStatus("Original rectangle restored at its saved coordinates. Check the selection before generating.", "ok");
+  } catch (err: any) {
+    setStatus("Original rectangle wasn't restored. " + (err?.message || String(err)), "error");
+  } finally {
+    restoringRecallSelection = false;
+    $("restoreRecallSelection").disabled = !selectedRecall?.generation.geometry;
   }
 }
 
@@ -2499,6 +2525,15 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       outputWidth: cropW,
       outputHeight: cropH,
       createdAt: new Date().toISOString(),
+      geometry: {
+        selectionBounds: isRegion ? { ...rawSelection! } : null,
+        generationBounds: { ...region },
+        documentWidth: docW,
+        documentHeight: docH,
+        artboard: activeArtboard
+          ? { id: activeArtboard.id, bounds: { ...activeArtboard.bounds } }
+          : null,
+      },
     };
     job.pendingPlacement = {
       region,
@@ -2919,6 +2954,7 @@ async function init(): Promise<void> {
     $("undoDescription").addEventListener("click", onUndoDescription);
     $("copyRecallPrompt").addEventListener("click", onCopyRecallPrompt);
     $("loadRecallSettings").addEventListener("click", onLoadRecallSettings);
+    $("restoreRecallSelection").addEventListener("click", onRestoreRecallSelection);
     await setupGenerationRecallTracking();
     $("fitSelection").addEventListener("click", onFitSelection);
     $("fitNearest").addEventListener("click", onFitNearest);
