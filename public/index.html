@@ -155,7 +155,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #recallText { flex: 1 1 auto; min-width: 0; margin-left: 8px; }
     #recallLayerName { margin: 5px 0 2px; overflow-wrap: break-word; }
     #recallDetails, #recallSource { margin-top: 5px; overflow-wrap: break-word; }
-    #loadRecallSettings { margin-left: 7px; }
+    #recallActions { flex-wrap: wrap; margin-bottom: 0; }
+    #recallActions > sp-button {
+      flex: 0 0 auto;
+      margin-bottom: 6px;
+      white-space: nowrap;
+    }
+    #copyRecallPrompt, #loadRecallSettings { margin-right: 7px; }
     /* The lines that close each section explain the controls above them rather
        than saying anything new, so they sit well below the labels — 30% of the
        way from a medium gray into the panel behind them, which lands at ~3.3:1
@@ -397,12 +403,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
             <div id="recallSource" class="muted"></div>
           </div>
         </div>
-        <div class="row">
+        <div id="recallActions" class="row">
           <sp-button id="copyRecallPrompt" variant="primary" size="s">Copy Prompt</sp-button>
           <sp-button id="loadRecallSettings" variant="primary" size="s">Load Settings</sp-button>
-        </div>
-        <div class="row">
-          <sp-button id="restoreRecallSelection" variant="primary" size="s" disabled>Restore Original Rectangle</sp-button>
+          <sp-button id="restoreRecallSelection" variant="primary" size="s" disabled>Restore Rectangle</sp-button>
         </div>
         <div id="recallSelectionNote" class="muted"></div>
       </div>
