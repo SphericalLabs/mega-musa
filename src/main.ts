@@ -121,8 +121,6 @@ const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 // large references instead of reducing their resolution.
 const REFERENCE_ARCHIVE_MAX_EDGE = 100000;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
-const PROMPT_MIN_HEIGHT_PX = 48;
-const PROMPT_MAX_HEIGHT_PX = 180;
 const RECALL_THUMBNAIL_MAX_EDGE = 96;
 const COLLAPSIBLE_SECTIONS = [
   "apiKeys",
@@ -230,25 +228,6 @@ function $(id: string): any {
   return document.getElementById(id);
 }
 
-function syncPromptSizer(): void {
-  const prompt = $("prompt");
-  const sizer = $("promptSizer");
-  if (!prompt || !sizer) return;
-  try {
-    // Grow with wrapped content until UXP's safe native-control height; longer
-    // prompts stay at the cap and use Spectrum's internal scrollbar.
-    const value = String(prompt.value || "");
-    sizer.textContent = value ? `${value}\n ` : " ";
-    const measuredHeight = Math.ceil(sizer.getBoundingClientRect().height || 0);
-    prompt.style.height = `${Math.min(
-      PROMPT_MAX_HEIGHT_PX,
-      Math.max(PROMPT_MIN_HEIGHT_PX, measuredHeight)
-    )}px`;
-  } catch {
-    /* Prompt resizing is cosmetic. */
-  }
-}
-
 function setSectionExpanded(sectionId: (typeof COLLAPSIBLE_SECTIONS)[number], expanded: boolean): void {
   const section = $(`${sectionId}Section`);
   const toggle = $(`${sectionId}SectionToggle`);
@@ -259,10 +238,6 @@ function setSectionExpanded(sectionId: (typeof COLLAPSIBLE_SECTIONS)[number], ex
   else section.classList.add("collapsed");
   toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
   content.setAttribute("aria-hidden", expanded ? "false" : "true");
-
-  // A hidden prompt cannot report its wrapped height. Re-measure as soon as it
-  // becomes visible so a long prompt restores at the correct height.
-  if (expanded && sectionId === "prompt") syncPromptSizer();
 }
 
 function setupCollapsibleSections(): void {
@@ -3026,11 +3001,6 @@ async function init(): Promise<void> {
       renderBudget(resetBudget());
       setStatus("Budget counter reset — counting from today.", "ok");
     });
-
-    // Re-measure on edits and panel resizing because both can change wrapping.
-    $("prompt").addEventListener("input", syncPromptSizer);
-    window.addEventListener("resize", syncPromptSizer);
-    syncPromptSizer();
 
     // The prompt is multiline, so unmodified Return inserts a line break.
     // Cmd+Return on macOS or Ctrl+Return on Windows fires Generate. Ignore the

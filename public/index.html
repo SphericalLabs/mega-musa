@@ -123,15 +123,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     #model, #resolution, #quality, #describeModel { width: 100%; }
     #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
-    /* UXP's Spectrum textarea clips when it becomes very tall. The invisible
-       mirror measures wrapped content, but the native field stops growing at a
-       safe height and scrolls internally beyond it. */
-    #promptAutosize { position: relative; width: 100%; }
-    #promptSizer { position: absolute; top: 0; left: 0; box-sizing: border-box;
-                   width: 100%; min-height: 48px; padding: 8px 12px;
-                   visibility: hidden; white-space: pre-wrap;
-                   overflow-wrap: break-word; font-size: 12px; line-height: 18px; }
-    #prompt { display: block; width: 100%; height: 48px; max-height: 180px; }
+    #prompt { display: block; width: 100%; height: 108px; overflow-y: auto; }
     #dropWebview { display: block; margin: 6px 0; }
     #thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
     .thumb { position: relative; width: 52px; height: 52px; border: 1px solid rgba(128,128,128,0.4);
@@ -328,10 +320,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       </div>
       <div id="promptSectionContent" class="section-content" role="region" aria-labelledby="promptSectionToggle">
         <div class="field">
-          <div id="promptAutosize">
-            <div id="promptSizer" aria-hidden="true"></div>
-            <sp-textarea id="prompt" placeholder="Enter the image instructions"></sp-textarea>
-          </div>
+          <sp-textarea id="prompt" rows="5" placeholder="Enter the image instructions"></sp-textarea>
           <div class="muted" style="margin-top:6px;">Press ⌘+Enter on macOS or Ctrl+Enter on Windows to generate.</div>
         </div>
         <div class="row">
