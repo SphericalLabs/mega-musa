@@ -230,7 +230,10 @@ for (const lateSelection of ["selection", "error"]) {
     resolveSelection = resolve;
     rejectSelection = reject;
   });
-  const test = panel("openai", AbortController, { action: { batchPlay: () => selection } });
+  const test = panel("openai", AbortController, {
+    app: { activeDocument: { id: 1 } },
+    action: { batchPlay: () => selection },
+  });
   test.elements.includeSelection.checked = true;
   const run = test.onDescribe();
   await test.onDescribe();

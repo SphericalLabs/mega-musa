@@ -12,7 +12,7 @@ const bundle = await build({
   stdin: {
     contents: `
       export { readLayerGenerationArchive, writeLayerGenerationArchive } from "./src/archive";
-      export { restoreArchivedSelection, selectionNeedsMask, setRectSelection } from "./src/photoshop-bridge";
+      export { getSelectionBounds, restoreArchivedSelection, selectionNeedsMask, setRectSelection } from "./src/photoshop-bridge";
     `,
     resolveDir: process.cwd(),
     loader: "ts",
@@ -47,6 +47,7 @@ let beforeModal = null;
 let selectionWrites = 0;
 let selectionError = null;
 let metadata;
+let batchPlayCalls = 0;
 
 const photoshop = {
   app,
@@ -67,6 +68,7 @@ const photoshop = {
   },
   action: {
     batchPlay: async ([command]) => {
+      batchPlayCalls += 1;
       if (command._target[0]._property === "generatorSettings") {
         if (command._obj === "set") metadata = command.to.json;
         return [{ generatorSettings: { json: metadata } }];
@@ -97,12 +99,16 @@ loadBundle((name) => {
   throw new Error(`Unexpected external module: ${name}`);
 }, module, module.exports);
 const {
+  getSelectionBounds,
   readLayerGenerationArchive,
   writeLayerGenerationArchive,
   restoreArchivedSelection,
   selectionNeedsMask,
   setRectSelection,
 } = module.exports;
+
+assert.equal(await getSelectionBounds(), null, "selection lookup without a document returns no selection");
+assert.equal(batchPlayCalls, 0, "selection lookup without a document must not issue Photoshop's Get command");
 
 const maskBounds = { left: 0, top: 0, right: 2, bottom: 2 };
 assert.equal(selectionNeedsMask(null), false);

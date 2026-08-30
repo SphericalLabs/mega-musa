@@ -247,6 +247,11 @@ export async function restoreArchivedSelection(
 }
 
 export async function getSelectionBounds(docId?: number): Promise<Bounds | null> {
+  // A selection belongs to a document. Avoid sending Photoshop a `get`
+  // command with an unresolved target when the panel loads, or the final
+  // document closes, while no explicit document was requested.
+  if (!Number.isFinite(docId) && !app.activeDocument) return null;
+
   const documentTarget = Number.isFinite(docId)
     ? { _ref: "document", _id: docId }
     : { _ref: "document", _enum: "ordinal", _value: "targetEnum" };
