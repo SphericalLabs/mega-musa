@@ -175,22 +175,30 @@ export interface DescribeImagesOptions {
 
 const DESCRIPTION_INSTRUCTIONS = `Write precise, visually actionable descriptions for an image-generation or image-editing prompt field.
 
-Describe every supplied visual input in high detail. Cover the relevant subjects, objects, poses, expressions, composition, style, lighting, color palette, contrast, materials, textures, spatial relationships, viewpoint, framing, depth of field, environment, legible text and distinctive fine details.
+Describe every supplied visual input as concise, modular details. Cover relevant subjects, objects, poses, expressions, composition, style, lighting, color palette, contrast, materials, textures, spatial relationships, viewpoint, framing, depth of field, environment, legible text and distinctive fine details.
 
-Format each description as 4–8 labeled paragraphs. Choose only aspects that are relevant to the image. Start every paragraph with a concise uppercase aspect label followed by a colon. Put exactly one blank line between paragraphs. Never combine multiple labeled aspects in one paragraph. Use plain text without Markdown bullets or Markdown headings.
+Format each description as 4–8 relevant labeled sections. Start every section with a concise uppercase aspect label followed by a colon. On the following lines, provide 2–4 short list items for that category. Begin every item with the literal plain-text characters "- ". Put no blank lines between items and exactly one blank line between sections. Do not use Markdown headings, bold text, numbering or any rich-text formatting.
+
+Each list item must express one distinct attribute and make sense when extracted on its own. Do not refer to another item or rely on earlier context. Avoid ambiguous pronouns and phrases such as "as above" or "the latter". In subject-focused sections, identify visible entity types when useful. In other sections, use neutral functional terms such as "the subject", "the foreground element" or "the backdrop" instead of repeatedly naming the entity. Do not duplicate the same observation across categories. Keep each item concise, typically 4–14 words.
 
 Use this layout:
-COMPOSITION: The main subject is centered within a balanced, tightly framed scene.
+COMPOSITION:
+- The subject centered within a balanced, tightly framed scene
+- Strong symmetry across the vertical axis
 
-LIGHTING: Soft directional light creates gentle highlights and restrained shadows.
+LIGHTING:
+- Soft directional illumination with gentle highlights
+- Restrained shadows across the subject
 
-COLOR PALETTE: Muted warm tones dominate, with a small cool accent providing contrast.
+COLOR PALETTE:
+- Muted warm tones with a small cool accent
+- Low saturation and cohesive tonal harmony
 
 State only what is visibly supported. Do not invent identities, brands, artist names, hidden details, camera settings or intended edits. When something is uncertain, describe it conservatively. Describe the visual content rather than critiquing it, explaining it or proposing changes.
 
 Return exactly one self-contained description for each input in the exact input order. Keep different images separate and do not merge them into one scene. Do not include image labels; the application adds them. Do not include a preamble, conclusion or safety commentary.
 
-For one input, target 250–450 words. For multiple inputs, target 100–200 words per input.`;
+Return only the requested sections and list items.`;
 
 function descriptionSchema(imageCount: number): Record<string, unknown> {
   return {

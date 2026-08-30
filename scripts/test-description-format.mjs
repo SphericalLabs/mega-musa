@@ -25,6 +25,9 @@ const expectedReportedDescription = reportedParagraphs.join("\n\n");
 const composition = "COMPOSITION: Two ceramic pitchers.";
 const lighting = "LIGHTING: Soft studio light.";
 const expectedPair = `${composition}\n\n${lighting}`;
+const bulletComposition = "COMPOSITION:\n- Centered framing\n- Strong vertical symmetry";
+const bulletLighting = "LIGHTING:\n- Soft diffused studio illumination\n- Restrained shadows across the subject";
+const expectedBulletPair = `${bulletComposition}\n\n${bulletLighting}`;
 const printedBackslashes = String.raw`DETAILS: The label reads "C:\new\renders\pitcher.png", "\n", "\r\n", "\t" and "\\".`;
 
 const cases = [
@@ -48,6 +51,22 @@ const cases = [
   ["quoted sentence boundary", 'COMPOSITION: A sign reads "Hello!" LIGHTING: Soft light.', 'COMPOSITION: A sign reads "Hello!"\n\nLIGHTING: Soft light.'],
   ["ampersand label", String.raw`COMPOSITION: Two pitchers.\n\nMATERIALS & TEXTURES: Matte clay.`, "COMPOSITION: Two pitchers.\n\nMATERIALS & TEXTURES: Matte clay."],
   ["slash and hyphen label", String.raw`COMPOSITION: Two pitchers.\n\nSTYLE/MEDIUM: Photo.\n\nFINE-DETAILS: Carvings.`, "COMPOSITION: Two pitchers.\n\nSTYLE/MEDIUM: Photo.\n\nFINE-DETAILS: Carvings."],
+  ["correct bullet sections", expectedBulletPair, expectedBulletPair],
+  [
+    "escaped bullet and section newlines",
+    String.raw`COMPOSITION:\n- Centered framing\n- Strong vertical symmetry\n\nLIGHTING:\n- Soft diffused studio illumination\n- Restrained shadows across the subject`,
+    expectedBulletPair,
+  ],
+  [
+    "blank lines between bullet items",
+    `COMPOSITION:\n\n- Centered framing\n\n\n- Strong vertical symmetry\n\n\n${bulletLighting}`,
+    expectedBulletPair,
+  ],
+  [
+    "indented bullets and irregular prefix spacing",
+    `COMPOSITION:\n  -   Centered framing\n\t-\tStrong vertical symmetry\n\n${bulletLighting}`,
+    expectedBulletPair,
+  ],
   ["unrelated backslashes", printedBackslashes, printedBackslashes],
   ["backslashes alongside a section separator", `${printedBackslashes}${String.raw`\n\n`}${lighting}`, `${printedBackslashes}\n\n${lighting}`],
   ["escapes within prose", String.raw`DETAILS: The sign shows \n and \r\n as text.`, String.raw`DETAILS: The sign shows \n and \r\n as text.`],

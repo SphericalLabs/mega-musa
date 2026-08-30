@@ -21,11 +21,14 @@ export function formatDescriptionParagraphs(description: string): string {
   return description
     .replace(/\r\n?/g, "\n")
     // Models can leave escaped newlines after JSON parsing. Decode only section
-    // separators before aspect labels, preserving backslashes elsewhere.
+    // separators and bullet boundaries, preserving backslashes elsewhere.
     .replace(/(?:[ \t]*(?:\\+[rn]|\n))+[ \t]*(?=[A-Z][A-Z0-9 &/-]{2,}:)/g, "\n\n")
+    .replace(/(?:[ \t]*(?:\\+[rn]|\n))+[ \t]*(?=-[ \t]+)/g, "\n")
     .replace(/(^|[.!?]["')\]]?)\s+([A-Z][A-Z0-9 &/-]{2,}:)/g, (_match: string, boundary: string, label: string) =>
       boundary ? `${boundary}\n\n${label}` : label
     )
+    .replace(/^[ \t]*-[ \t]+/gm, "- ")
+    .replace(/\n{2,}(?=- )/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
