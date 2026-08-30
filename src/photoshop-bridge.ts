@@ -624,10 +624,29 @@ async function renameActiveLayer(name: string): Promise<void> {
   );
 }
 
+// Defensively clear every independent lock on a newly created or duplicated
+// result before positioning or moving it. Repeat this during final stack
+// placement in case Photoshop reports inherited placement state.
+function unlockResultLayer(layer: any): void {
+  for (const property of [
+    "allLocked",
+    "pixelsLocked",
+    "positionLocked",
+    "transparentPixelsLocked",
+  ]) {
+    try {
+      layer[property] = false;
+    } catch (e: any) {
+      console.log(`[Mega Musa] could not clear result layer ${property}:`, e?.message || e);
+    }
+  }
+}
+
 // Results always belong at the document root, above every group and artboard.
 // Moving before the first root layer also extracts a nested result from its
 // current container. Avoid the move when it is already in the right place.
 export async function bringResultToDocumentFront(layer: any): Promise<void> {
+  unlockResultLayer(layer);
   const layerId = Number(layer?.id);
   if (isFrontOfDocument(layerId)) return;
   try {
@@ -925,6 +944,7 @@ async function createFileSmartObject(
       throw new Error("Photoshop copied the Smart Object but did not expose its destination layer.");
     }
 
+    unlockResultLayer(placedLayer);
     await selectLayerById(placedLayer.id);
     await renameActiveLayer(layerName);
     return {

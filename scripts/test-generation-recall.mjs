@@ -121,6 +121,12 @@ const {
 // the document's first root layer. This covers groups, subgroups and artboards
 // in one representative stack.
 const nestedResult = { id: 2 };
+Object.assign(nestedResult, {
+  allLocked: true,
+  pixelsLocked: true,
+  positionLocked: true,
+  transparentPixelsLocked: true,
+});
 const subgroup = { id: 3, layers: [nestedResult] };
 const artboard = { id: 4, layers: [subgroup], artboardEnabled: true };
 const existingRootLayer = { id: 5 };
@@ -135,6 +141,21 @@ nestedResult.move = (relativeLayer, placement) => {
 };
 app.activeDocument = placementDocument;
 await bringResultToDocumentFront(nestedResult);
+assert.deepEqual(
+  {
+    allLocked: nestedResult.allLocked,
+    pixelsLocked: nestedResult.pixelsLocked,
+    positionLocked: nestedResult.positionLocked,
+    transparentPixelsLocked: nestedResult.transparentPixelsLocked,
+  },
+  {
+    allLocked: false,
+    pixelsLocked: false,
+    positionLocked: false,
+    transparentPixelsLocked: false,
+  },
+  "result placement must clear every Photoshop layer lock"
+);
 assert.equal(moveArguments.relativeLayer, artboard);
 assert.equal(moveArguments.placement, "placeBefore");
 assert.deepEqual(
@@ -145,8 +166,10 @@ assert.deepEqual(
 
 let redundantMove = false;
 nestedResult.move = () => { redundantMove = true; };
+nestedResult.allLocked = true;
 await bringResultToDocumentFront(nestedResult);
 assert.equal(redundantMove, false, "an already topmost root layer must not be moved again");
+assert.equal(nestedResult.allLocked, false, "an already positioned result must still be unlocked");
 app.activeDocument = null;
 
 assert.equal(await getSelectionBounds(), null, "selection lookup without a document returns no selection");
