@@ -29,6 +29,7 @@ import {
 } from "./archive";
 import { RefImage, referenceImageFromBase64 } from "./references";
 import { executeHostModal, HostModalLease, runHostModalTask } from "./host-modal";
+import { deleteMegaMusaTemporaryFile } from "./temp-files";
 
 const { app, action, core, constants } = require("photoshop");
 const { storage } = require("uxp");
@@ -385,6 +386,7 @@ export async function archiveReferenceAssetsInActiveDocument(
     const tempFolder = await storage.localFileSystem.getTemporaryFolder();
     for (const reference of references) {
       let placedLayer: any | null = null;
+      let file: any | null = null;
       try {
         const sourceBytes = base64ToBytes(reference.base64);
         const hash = reference.archivedHash || await hashReferenceBytes(sourceBytes);
@@ -419,7 +421,7 @@ export async function archiveReferenceAssetsInActiveDocument(
           sourceByteLength: sourceBytes.length,
           lossy: prepared?.lossy || false,
         };
-        const file = await tempFolder.createFile(
+        file = await tempFolder.createFile(
           `mega-musa-${hash}-${storageMode}.${imageExtension(mimeType)}`,
           { overwrite: true }
         );
@@ -470,6 +472,8 @@ export async function archiveReferenceAssetsInActiveDocument(
         } catch {
           /* the final group hide still protects the document composite */
         }
+      } finally {
+        if (file) await deleteMegaMusaTemporaryFile(file);
       }
     }
   } finally {
@@ -491,22 +495,26 @@ async function exportEmbeddedReference(layerId: number, hash: string, mimeType: 
   const file = await tempFolder.createFile(
     `mega-musa-restore-${hash}-${unique}.${imageExtension(mimeType)}`
   );
-  const token = storage.localFileSystem.createSessionToken(file);
-  await selectLayer(layerId);
-  const result = await action.batchPlay(
-    [
-      {
-        _obj: "placedLayerExportContents",
-        null: { _path: token, _kind: "local" },
-        _options: { dialogOptions: "dontDisplay" },
-      },
-    ],
-    {}
-  );
-  const error = result?.[0]?._obj === "error" ? result[0] : null;
-  if (error) throw new Error(error.message || "Photoshop could not export the embedded reference.");
-  const buffer = await file.read({ format: storage.formats.binary });
-  return bytesToBase64(new Uint8Array(buffer));
+  try {
+    const token = storage.localFileSystem.createSessionToken(file);
+    await selectLayer(layerId);
+    const result = await action.batchPlay(
+      [
+        {
+          _obj: "placedLayerExportContents",
+          null: { _path: token, _kind: "local" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      {}
+    );
+    const error = result?.[0]?._obj === "error" ? result[0] : null;
+    if (error) throw new Error(error.message || "Photoshop could not export the embedded reference.");
+    const buffer = await file.read({ format: storage.formats.binary });
+    return bytesToBase64(new Uint8Array(buffer));
+  } finally {
+    await deleteMegaMusaTemporaryFile(file);
+  }
 }
 
 function openDocumentById(docId: number): any | null {

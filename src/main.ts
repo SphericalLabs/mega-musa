@@ -102,6 +102,7 @@ import {
   PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS,
   runHostModalTask,
 } from "./host-modal";
+import { clearMegaMusaTemporaryFiles } from "./temp-files";
 
 const { entrypoints } = require("uxp");
 const { action: photoshopAction } = require("photoshop");
@@ -2981,6 +2982,7 @@ async function init(): Promise<void> {
         },
       },
     });
+    await clearMegaMusaTemporaryFiles();
     setupCollapsibleSections();
 
     $("saveGeminiKey").addEventListener("click", async () => {

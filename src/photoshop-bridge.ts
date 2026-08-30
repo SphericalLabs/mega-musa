@@ -38,6 +38,7 @@ import {
   HostModalLease,
   runHostModalTask,
 } from "./host-modal";
+import { deleteMegaMusaTemporaryFile } from "./temp-files";
 
 const { app, action, constants, core, imaging } = require("photoshop");
 const { storage } = require("uxp");
@@ -852,15 +853,16 @@ async function createFileSmartObject(
   const encoded = encodeEmbeddedImage(rgba, width, height, reduceDocumentSize);
   let scratch: any | null = null;
   let placedLayer: any | null = null;
+  let sourceFile: any | null = null;
   try {
     const tempFolder = await storage.localFileSystem.getTemporaryFolder();
-    const file = await tempFolder.createFile(`${sourceMarker}.${encoded.extension}`, { overwrite: true });
+    sourceFile = await tempFolder.createFile(`${sourceMarker}.${encoded.extension}`, { overwrite: true });
     const fileBytes =
       encoded.bytes.byteOffset === 0 && encoded.bytes.byteLength === encoded.bytes.buffer.byteLength
         ? encoded.bytes.buffer
         : encoded.bytes.slice().buffer;
-    await file.write(fileBytes, { format: storage.formats.binary });
-    const token = storage.localFileSystem.createSessionToken(file);
+    await sourceFile.write(fileBytes, { format: storage.formats.binary });
+    const token = storage.localFileSystem.createSessionToken(sourceFile);
 
     scratch = await app.createDocument({
       width,
@@ -976,6 +978,7 @@ async function createFileSmartObject(
         /* only the plugin-created scratch document is eligible for closing */
       }
     }
+    if (sourceFile) await deleteMegaMusaTemporaryFile(sourceFile);
     if (openDocumentById(targetDocument.id)) app.activeDocument = targetDocument;
   }
 }
