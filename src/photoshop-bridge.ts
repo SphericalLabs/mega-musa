@@ -524,17 +524,16 @@ export async function readLayerThumbnail(
   );
 }
 
-// Is this layer already the topmost one inside whatever holds it — a group, an
-// artboard, or the document itself? `parent` is the containing group or artboard,
-// or the document for a top-level layer, and each exposes the sibling list with
-// the topmost layer first.
+// Is this layer already the document's topmost root-level layer? Checking the
+// document list rather than the layer's siblings prevents a topmost child of a
+// group or artboard from being mistaken for the top of the document.
 //
 // Answers false when the stack cannot be read, so an unreadable document leaves
 // the caller's move to decide rather than silently skipping it.
-function isFrontOfContainer(layer: any, layerId: number): boolean {
+function isFrontOfDocument(layerId: number): boolean {
   try {
-    const siblings: any[] = Array.from(layer?.parent?.layers || app.activeDocument.layers || []);
-    return siblings.length > 0 && siblings[0].id === layerId;
+    const rootLayers: any[] = Array.from(app.activeDocument?.layers || []);
+    return rootLayers.length > 0 && Number(rootLayers[0]?.id) === Number(layerId);
   } catch (e: any) {
     console.log("[Mega Musa] could not read the layer stack:", e?.message || e);
     return false;
@@ -625,27 +624,22 @@ async function renameActiveLayer(name: string): Promise<void> {
   );
 }
 
-// A result belongs at the top of its current group, artboard or document. Avoid
-// Photoshop's noisy unavailable-command alert when it is already there.
-async function bringResultToFront(layer: any): Promise<void> {
-  const layerId = layer.id;
-  if (isFrontOfContainer(layer, layerId)) return;
+// Results always belong at the document root, above every group and artboard.
+// Moving before the first root layer also extracts a nested result from its
+// current container. Avoid the move when it is already in the right place.
+export async function bringResultToDocumentFront(layer: any): Promise<void> {
+  const layerId = Number(layer?.id);
+  if (isFrontOfDocument(layerId)) return;
   try {
-    await selectLayerById(layerId);
-    await action.batchPlay(
-      [
-        {
-          _obj: "move",
-          _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
-          to: { _ref: "layer", _enum: "ordinal", _value: "front" },
-          _options: { dialogOptions: "dontDisplay" },
-        },
-      ],
-      {}
-    );
+    const frontLayer = Array.from(app.activeDocument?.layers || [])[0] as any;
+    if (!frontLayer) throw new Error("Photoshop did not expose the document layer stack.");
+    layer.move(frontLayer, constants.ElementPlacement.PLACEBEFORE);
+    if (!isFrontOfDocument(layerId)) {
+      throw new Error("Photoshop did not move the result to the document root.");
+    }
   } catch (e: any) {
     // Stack position is secondary to preserving an already returned paid image.
-    console.log("[Mega Musa] could not bring the result layer to the front:", e?.message || e);
+    console.log("[Mega Musa] could not move the result to the top of the document:", e?.message || e);
   }
 }
 
@@ -837,7 +831,6 @@ function nextSmartObjectMarker(): string {
 // Smart Object is duplicated into the user's document.
 async function createFileSmartObject(
   targetDocument: any,
-  anchorLayer: any,
   rgba: Uint8Array,
   width: number,
   height: number,
@@ -850,7 +843,6 @@ async function createFileSmartObject(
   if (targetWidth <= 0 || targetHeight <= 0) {
     throw new Error("The Smart Object destination is empty.");
   }
-  const destinationParent = anchorLayer?.parent || null;
   const existingTargetLayerIds = new Set(
     descendantLayers(targetDocument).map((layer) => Number(layer.id)).filter(Number.isFinite)
   );
@@ -933,9 +925,6 @@ async function createFileSmartObject(
       throw new Error("Photoshop copied the Smart Object but did not expose its destination layer.");
     }
 
-    if (isLayerContainer(destinationParent)) {
-      placedLayer.move(destinationParent, constants.ElementPlacement.PLACEINSIDE);
-    }
     await selectLayerById(placedLayer.id);
     await renameActiveLayer(layerName);
     return {
@@ -1121,7 +1110,7 @@ async function placeRasterFallback(
   );
   const layer = app.activeDocument.activeLayers[0];
   await renameActiveLayer(layerName);
-  await bringResultToFront(layer);
+  await bringResultToDocumentFront(layer);
 
   let clip: PlacementClip = "none";
   let masked = false;
@@ -1220,7 +1209,6 @@ export async function placeResult(
         try {
           const created = await createFileSmartObject(
             document,
-            anchorLayer,
             rgba,
             width,
             height,
@@ -1231,7 +1219,7 @@ export async function placeResult(
           incompleteSmartObject = created.layer;
           resultStorage = created.storage;
           await positionSmartObjectAtBounds(incompleteSmartObject, bounds);
-          await bringResultToFront(incompleteSmartObject);
+          await bringResultToDocumentFront(incompleteSmartObject);
 
           if (clippingSelection) {
             await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, clippingSelection);
@@ -1298,10 +1286,9 @@ export async function placeResult(
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
       // Reference archiving temporarily selects and may create other layers.
-      // Reassert the result's final stack position after every placement-side
-      // effect so the latest arriving image is the frontmost layer in its
-      // frozen document, artboard or group.
-      await bringResultToFront(resultLayer);
+      // Reassert the result's final root-level stack position after every
+      // placement-side effect, including creation of the reference archive.
+      await bringResultToDocumentFront(resultLayer);
       const placement = {
         clip,
         layerId,

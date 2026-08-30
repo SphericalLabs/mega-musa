@@ -12,7 +12,13 @@ const bundle = await build({
   stdin: {
     contents: `
       export { readLayerGenerationArchive, writeLayerGenerationArchive } from "./src/archive";
-      export { getSelectionBounds, restoreArchivedSelection, selectionNeedsMask, setRectSelection } from "./src/photoshop-bridge";
+      export {
+        bringResultToDocumentFront,
+        getSelectionBounds,
+        restoreArchivedSelection,
+        selectionNeedsMask,
+        setRectSelection,
+      } from "./src/photoshop-bridge";
     `,
     resolveDir: process.cwd(),
     loader: "ts",
@@ -51,7 +57,10 @@ let batchPlayCalls = 0;
 
 const photoshop = {
   app,
-  constants: { LayerKind: { GROUP: "group" } },
+  constants: {
+    ElementPlacement: { PLACEBEFORE: "placeBefore" },
+    LayerKind: { GROUP: "group" },
+  },
   core: {
     executeAsModal: async (target) => {
       const hook = beforeModal;
@@ -99,6 +108,7 @@ loadBundle((name) => {
   throw new Error(`Unexpected external module: ${name}`);
 }, module, module.exports);
 const {
+  bringResultToDocumentFront,
   getSelectionBounds,
   readLayerGenerationArchive,
   writeLayerGenerationArchive,
@@ -106,6 +116,38 @@ const {
   selectionNeedsMask,
   setRectSelection,
 } = module.exports;
+
+// A result nested in a subgroup inside an artboard must be extracted before
+// the document's first root layer. This covers groups, subgroups and artboards
+// in one representative stack.
+const nestedResult = { id: 2 };
+const subgroup = { id: 3, layers: [nestedResult] };
+const artboard = { id: 4, layers: [subgroup], artboardEnabled: true };
+const existingRootLayer = { id: 5 };
+const placementDocument = { id: 1, layers: [artboard, existingRootLayer] };
+nestedResult.parent = subgroup;
+let moveArguments = null;
+nestedResult.move = (relativeLayer, placement) => {
+  moveArguments = { relativeLayer, placement };
+  subgroup.layers = [];
+  placementDocument.layers = [nestedResult, artboard, existingRootLayer];
+  nestedResult.parent = placementDocument;
+};
+app.activeDocument = placementDocument;
+await bringResultToDocumentFront(nestedResult);
+assert.equal(moveArguments.relativeLayer, artboard);
+assert.equal(moveArguments.placement, "placeBefore");
+assert.deepEqual(
+  placementDocument.layers.map((layer) => layer.id),
+  [2, 4, 5],
+  "a nested result must become the document's topmost root layer"
+);
+
+let redundantMove = false;
+nestedResult.move = () => { redundantMove = true; };
+await bringResultToDocumentFront(nestedResult);
+assert.equal(redundantMove, false, "an already topmost root layer must not be moved again");
+app.activeDocument = null;
 
 assert.equal(await getSelectionBounds(), null, "selection lookup without a document returns no selection");
 assert.equal(batchPlayCalls, 0, "selection lookup without a document must not issue Photoshop's Get command");
@@ -253,4 +295,4 @@ selectionError = null;
 await setRectSelection(geometry.generationBounds, 1);
 assert.deepEqual(app.activeDocument.selection, geometry.generationBounds, "existing fit-selection callers still work");
 
-console.log("generation recall tests passed (metadata, geometry, artboards, stale targets and host errors)");
+console.log("generation recall tests passed (root placement, metadata, geometry, artboards, stale targets and host errors)");

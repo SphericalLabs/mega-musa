@@ -2228,8 +2228,8 @@ async function completeGenerationPlacement(job: GenerationJob): Promise<void> {
           : "Done — result added as a raster layer; the fully opaque selection needed no mask."
     : pending.activeArtboard
       ? placement.smartObject
-        ? `Done — result embedded in active artboard “${pending.activeArtboard.name}” as a Smart Object.`
-        : `Done — result added to active artboard “${pending.activeArtboard.name}” as a raster layer.`
+        ? `Done — result framed to active artboard “${pending.activeArtboard.name}” and embedded at the top of the document as a Smart Object.`
+        : `Done — result framed to active artboard “${pending.activeArtboard.name}” and added at the top of the document as a raster layer.`
       : placement.smartObject
         ? "Done — full-image result embedded as a Smart Object."
         : "Done — full-image result added as a raster layer.";
@@ -2531,7 +2531,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     }
     const rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
 
-    updateGenerationJob(job, "placing", "Placing result at the top of its layer container…");
+    updateGenerationJob(job, "placing", "Placing result at the top of the document…");
     // What produced this layer, for the bracketed tail of its name. The OpenAI
     // models return one fixed size, so their exact output is more use than the
     // requested tier; the Gemini models frame to a ratio, so there the tier is
