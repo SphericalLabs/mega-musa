@@ -95,6 +95,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     .section-content { margin: 0 2px 0 4px;  }
     .row { display: flex; align-items: center; margin: 6px 0; }
     .row.spread { justify-content: space-between; }
+    
+    #generationOptions { margin: 6px 0; }
+    #generationOptions > .row { margin: 0; }
     .grow { flex: 1; }
     .field { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
     .field > .row { margin: 0; }
@@ -441,11 +444,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
 
     <div class="section-content">
       <sp-button id="generate" variant="cta" style="width:100%">Generate</sp-button>
-      <div class="row">
-        <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
-      </div>
-      <div class="row">
-        <sp-checkbox id="reduceDocumentSize">Reduce document size (JPEG 90, lossy)</sp-checkbox>
+      <div id="generationOptions">
+        <div class="row">
+          <sp-checkbox id="placeAsSmartObject" checked>Place as Smart Object</sp-checkbox>
+        </div>
+        <div class="row">
+          <sp-checkbox id="reduceDocumentSize">Reduce document size (JPEG 90, lossy)</sp-checkbox>
+        </div>
       </div>
       <div id="status">Loading…</div>
       <div id="note"></div>
