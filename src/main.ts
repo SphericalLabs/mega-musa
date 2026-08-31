@@ -116,6 +116,9 @@ const WEBVIEW_CHUNK_SIZE = 192 * 1024;
 const REFERENCE_RESIZE_TIMEOUT_MS = 120000;
 const REFERENCE_THUMBNAIL_MAX_EDGE = 256;
 const DESCRIPTION_INPUT_MAX_EDGE = 2048;
+const PROMPT_MIN_HEIGHT = 48;
+const PROMPT_MAX_HEIGHT = 2000;
+const PROMPT_RESIZE_KEY_STEP = 24;
 // This value prevents scaling while remaining finite for the WebView protocol.
 // Browser canvas limits fail safely back to the original file for unusually
 // large references instead of reducing their resolution.
@@ -260,6 +263,57 @@ function setupCollapsibleSections(): void {
       toggleSection();
     });
   }
+}
+
+function setupPromptResize(): void {
+  const prompt = $("prompt");
+  const handle = $("promptResizeHandle");
+  if (!prompt || !handle) return;
+
+  const applyHeight = (height: number, persist: boolean) => {
+    const nextHeight = Math.min(PROMPT_MAX_HEIGHT, Math.max(PROMPT_MIN_HEIGHT, Math.round(height)));
+    prompt.style.height = `${nextHeight}px`;
+    handle.setAttribute("aria-valuenow", String(nextHeight));
+    handle.setAttribute("aria-valuemin", String(PROMPT_MIN_HEIGHT));
+    handle.setAttribute("aria-valuemax", String(PROMPT_MAX_HEIGHT));
+    handle.setAttribute("aria-valuetext", `${nextHeight} pixels high`);
+    if (persist) saveSetting("prompt.height", String(nextHeight));
+  };
+
+  const storedHeight = Number(loadSetting("prompt.height", String(PROMPT_MIN_HEIGHT)));
+  applyHeight(Number.isFinite(storedHeight) ? storedHeight : PROMPT_MIN_HEIGHT, false);
+
+  handle.addEventListener("mousedown", (event: MouseEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = prompt.getBoundingClientRect().height || PROMPT_MIN_HEIGHT;
+    handle.classList.add("dragging");
+
+    const onMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      applyHeight(startHeight + moveEvent.clientY - startY, false);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      handle.classList.remove("dragging");
+      const height = prompt.getBoundingClientRect().height || PROMPT_MIN_HEIGHT;
+      applyHeight(height, true);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  handle.addEventListener("keydown", (event: KeyboardEvent) => {
+    let delta = 0;
+    if (event.key === "ArrowDown") delta = PROMPT_RESIZE_KEY_STEP;
+    else if (event.key === "ArrowUp") delta = -PROMPT_RESIZE_KEY_STEP;
+    else if (event.key !== "Home") return;
+    event.preventDefault();
+    const height = prompt.getBoundingClientRect().height || PROMPT_MIN_HEIGHT;
+    applyHeight(event.key === "Home" ? PROMPT_MIN_HEIGHT : height + delta, true);
+  });
 }
 
 // A cancel is not a failure, so the run's catch has to tell the two apart. The
@@ -2959,6 +3013,7 @@ async function init(): Promise<void> {
     });
     await clearMegaMusaTemporaryFiles();
     setupCollapsibleSections();
+    setupPromptResize();
 
     $("saveGeminiKey").addEventListener("click", async () => {
       const apiKey = ($("geminiApiKey").value || "").trim();
