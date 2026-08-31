@@ -217,7 +217,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        runtime without the media query still lands on dark, which is Photoshop's
        shipping theme; the light themes override it below. */
     #themeProbe { position: absolute; top: 0; left: 0; width: 0; height: 0;
-                  overflow: hidden; color: rgb(255, 255, 255); }
+                  overflow: hidden; color: rgb(255, 255, 255);
+                  background-color: var(--uxp-host-background-color); }
     /* Photoshop's third theme is a mid-gray panel, and a quiet gray has nowhere
        to recede to on one: the ranks below would come out washed out at the same
        colours that read as calm on the two dark themes. It keeps the dark ladder

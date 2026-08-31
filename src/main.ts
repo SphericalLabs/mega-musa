@@ -1411,12 +1411,13 @@ const pendingDropFiles = new Map<string, PendingDropFile>();
 const pendingReferenceResizes = new Map<string, PendingReferenceResize>();
 let dropWebviewReady = false;
 let dropTheme = "";
+let dropBackgroundColor = "";
 let referenceResizeSequence = 0;
 
 // How often the Photoshop theme is re-read. UXP fires no event when the user
 // switches it, so the panel restyles itself through CSS while the WebView would
 // keep painting the old colours until something tells it otherwise.
-const THEME_POLL_MS = 2000;
+const THEME_POLL_MS = 300;
 
 function safeCount(value: any): number {
   const count = Number(value);
@@ -1666,14 +1667,51 @@ function panelTheme(): "dark" | "light" {
   }
 }
 
+function panelBackground(theme: "dark" | "light"): string {
+  try {
+    const probe = $("themeProbe");
+    const color = probe ? String(getComputedStyle(probe).backgroundColor || "").trim() : "";
+    const compact = color.replace(/\s+/g, "").toLowerCase();
+    if (color && compact !== "transparent" && compact !== "rgba(0,0,0,0)") return color;
+  } catch {
+    /* Fall back to an opaque approximation for runtimes without host colors. */
+  }
+  return theme === "light" ? "rgb(239, 239, 239)" : "rgb(50, 50, 50)";
+}
+
+function dropSurface(theme: "dark" | "light", backgroundColor: string): string {
+  if (theme === "light") return "rgb(255, 255, 255)";
+  // Spectrum text fields sit about 45 RGB levels below Photoshop's panel
+  // surface in both dark themes and stop at #080808 in the darkest one. Match
+  // that contrast without making the WebView transparent again.
+  const rgb = backgroundColor.match(
+    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i
+  );
+  const hex = backgroundColor.match(/^#([\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i)?.[1] || "";
+  const channels = rgb
+    ? rgb.slice(1, 4).map(Number)
+    : hex.length === 3
+      ? hex.split("").map((value) => parseInt(value + value, 16))
+      : hex.length >= 6
+        ? [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
+        : null;
+  if (!channels) return "rgb(8, 8, 8)";
+  const fieldChannels = channels.map((value) => Math.max(8, Math.round(value) - 45));
+  return `rgb(${fieldChannels.join(", ")})`;
+}
+
 // The drop target is a real system WebView: left alone it follows the macOS
-// appearance rather than Photoshop's theme. Push the panel's theme across the
-// bridge so it matches the rest of the panel instead.
+// appearance rather than Photoshop's theme. Push the panel's theme and exact
+// host background across the bridge so it matches the rest of the panel and
+// remains opaque while its backing surface is moved or resized.
 function syncDropTheme(force = false): void {
   const theme = panelTheme();
-  if (theme === dropTheme && !force) return;
+  const backgroundColor = panelBackground(theme);
+  const surfaceColor = dropSurface(theme, backgroundColor);
+  if (theme === dropTheme && backgroundColor === dropBackgroundColor && !force) return;
   dropTheme = theme;
-  postToDropWebview({ type: "theme", theme });
+  dropBackgroundColor = backgroundColor;
+  postToDropWebview({ type: "theme", theme, backgroundColor, surfaceColor });
 }
 
 function failPendingDropFile(fileId: string): void {
