@@ -20,7 +20,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 
 ## Requirements
 
-- Adobe Photoshop 24.0+
+- Adobe Photoshop 27.4 or later (required)
 - Node.js 18+ and npm
 - UXP Developer Tool
 - A Gemini API key and/or OpenAI API key
@@ -28,6 +28,8 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 Keys are stored in UXP secure storage. Requests go directly to the selected provider. No project server receives your keys or images. See [Data retention](#data-retention) for what the provider keeps.
 
 ## Build and load
+
+Install Photoshop 27.4 or later before loading Mega Musa. The plugin manifest enforces this minimum version; older Photoshop versions cannot load this build.
 
 ```bash
 npm install

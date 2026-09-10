@@ -6,7 +6,7 @@
   "main": "index.html",
   "host": {
     "app": "PS",
-    "minVersion": "24.0.0"
+    "minVersion": "27.4.0"
   },
   "requiredPermissions": {
     "localFileSystem": "request",
