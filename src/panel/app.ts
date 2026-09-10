@@ -39,7 +39,10 @@ export function createPanel() {
   const settings = createSettingsController(refreshSelection);
   const description = createDescriptionController({
     references, processor, queue,
-    onBusyChange: () => generation.updateGenerateControl()
+    onBusyChange: () => {
+      generation.updateGenerateControl();
+      refreshActivity();
+    }
   });
   const recall = createRecallController({
     queue, references, settings,
@@ -71,8 +74,13 @@ export function createPanel() {
     description.scheduleDescriptionInputRefresh();
   }
 
+  function refreshActivity(): void {
+    $("generationActivity").style.display = queue.hasActive || description.busy ? "block" : "none";
+  }
+
   function refreshQueue(): void {
     renderGenerationQueue(queue, workflow.retryGenerationPlacement);
+    refreshActivity();
     generation.updateGenerateControl();
     description.updateDescriptionControls();
     recall.flushDeferredGenerationRecallRefresh();
