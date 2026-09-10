@@ -7,10 +7,13 @@ const bundle = await build({
     contents: 'export * from "./src/models"; export { generateOpenAIImage } from "./src/openai";',
     resolveDir: process.cwd(), loader: "ts",
   },
-  bundle: true, format: "cjs", platform: "node", write: false,
+  bundle: true, format: "cjs", platform: "node", write: false, external: ["uxp"],
 });
 const module = { exports: {} };
-runInThisContext(`(function(module,exports){${bundle.outputFiles[0].text}\n})`)(module, module.exports);
+runInThisContext(`(function(module,exports,require){${bundle.outputFiles[0].text}\n})`)(module, module.exports, (name) => {
+  if (name === "uxp") return { storage: {} };
+  throw new Error(`Unexpected module: ${name}`);
+});
 const { modelSpec, estimatedUSD, actualUsageUSD, outputFrame, generateOpenAIImage } = module.exports;
 const expected = { low: 0.00588, medium: 0.01317, high: 0.05268, xhigh: 0.09366, max: 0.21072 };
 for (const name of ["sunburst", "flare"]) {
@@ -62,6 +65,6 @@ const sunburst = modelSpec("openai:gpt-image-2.5-sunburst");
 const output = estimatedUSD(sunburst, "2K", "2048x2048", "low");
 assert.ok(Math.abs(estimatedTotalUSD(sunburst, "2K", "2048x2048", "low") - output - 0.01) < 1e-10);
 // The estimate has one fixed overhead; input image count is not a pricing argument.
-assert.equal(resolutionMenuLabel("2K", sunburst, "1:1", "low"), "2K / CHF 0.02");
+assert.equal(resolutionMenuLabel("2K", sunburst, "1:1", "low"), "2K / USD 0.02");
 assert.equal(estimatedTotalUSD({ id: "unknown", imageSizes: [], aspectRatios: [] }, "auto", undefined, "auto"), null);
 console.log("Input allowance and estimated total tests passed.");

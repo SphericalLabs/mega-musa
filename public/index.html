@@ -124,7 +124,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     .label { font-size: 11px; color: rgb(198, 198, 198); }
     /* Pickers size to their content by default, which clips the longer model
        names. Fill the panel width instead. */
-    #model, #resolution, #quality, #describeModel { width: 100%; }
+    #model, #resolution, #quality, #describeModel, #displayCurrency { width: 100%; }
     #qualityField { display: none; }
     sp-divider { margin: 10px 0; }
     #prompt { display: block; width: 100%; height: 48px; overflow-y: auto; }
@@ -263,7 +263,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       <div id="apiKeysSectionToggle" class="section-toggle" role="button" tabindex="0" aria-expanded="true" aria-controls="apiKeysSectionContent">
         <span class="section-chevron section-chevron-expanded" aria-hidden="true">&#9662;</span>
         <span class="section-chevron section-chevron-collapsed" aria-hidden="true">&#9656;</span>
-        <span>API Keys</span>
+        <span>API Keys / Currency</span>
       </div>
       <div id="apiKeysSectionContent" class="section-content" role="region" aria-labelledby="apiKeysSectionToggle">
         <div class="field">
@@ -281,6 +281,13 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
           </div>
         </div>
         <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
+        <div class="field">
+          <span class="label">Display currency</span>
+          <sp-picker id="displayCurrency" size="s" aria-label="Display currency">
+            <sp-menu slot="options"></sp-menu>
+          </sp-picker>
+          <div id="currencyNote" class="muted"></div>
+        </div>
       </div>
     </div>
 

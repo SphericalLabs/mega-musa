@@ -20,7 +20,10 @@
 
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import { errorMessage } from "./errors";
-import { formatMoney, formatMoneyRange } from "./currency";
+import {
+  CURRENCIES, currencyNote, displayCurrency, formatMoney, formatMoneyRange,
+  refreshExchangeRates, setDisplayCurrency,
+} from "./currency";
 import {
   getActiveDoc,
   getActiveArtboard,
@@ -2811,7 +2814,7 @@ function preferredDescriptionModel(): string {
   return DEFAULT_OPENAI_DESCRIPTION_MODEL;
 }
 
-function refreshDescriptionModelSelection(): void {
+function refreshDescriptionModelSelection(current?: string): void {
   const stored = loadSetting("describeModel", "");
   const storedSpec = descriptionModelSpec(stored);
   const selected = storedSpec && descriptionApiKey(storedSpec) ? stored : preferredDescriptionModel();
@@ -2820,8 +2823,20 @@ function refreshDescriptionModelSelection(): void {
     DESCRIPTION_MODELS.map((model) => ({
       value: model.id, label: `${model.label} (ca. ${formatMoneyRange(...model.estimateRangeUSD)})`,
     })),
-    selected
+    current || selected
   );
+}
+
+function refreshCurrencyLabels(): void {
+  $("currencyNote").textContent = currencyNote();
+  refreshResolutionLabels();
+  refreshDescriptionModelSelection($("describeModel")?.value);
+  renderBudget();
+}
+
+async function updateExchangeRates(): Promise<void> {
+  await refreshExchangeRates();
+  refreshCurrencyLabels();
 }
 
 function buildQualityMenu(modelId: string, selected: string): ImageQuality {
@@ -3005,6 +3020,8 @@ async function onFitNearest(): Promise<void> {
 }
 
 async function restoreSettings(): Promise<void> {
+  buildMenu("displayCurrency", CURRENCIES, displayCurrency());
+  $("currencyNote").textContent = currencyNote();
   setValueSafe($("geminiApiKey"), await loadApiKey());
   setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
   refreshDescriptionModelSelection();
@@ -3032,6 +3049,11 @@ async function restoreSettings(): Promise<void> {
 }
 
 function persistSettingsHooks(): void {
+  $("displayCurrency")?.addEventListener("change", () => {
+    setDisplayCurrency($("displayCurrency").value);
+    refreshCurrencyLabels();
+    void updateExchangeRates();
+  });
   for (const id of PICKERS) {
     if (id === "selRatio" || id === "quality") continue;
     $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
@@ -3151,6 +3173,7 @@ async function init(): Promise<void> {
     renderGenerationQueue();
     renderBudget();
     setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
+    void updateExchangeRates();
   } catch (err: any) {
     setStatus("Init error: " + errorMessage(err), "error");
   }

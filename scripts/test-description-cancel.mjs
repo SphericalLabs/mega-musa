@@ -306,7 +306,7 @@ for (const lateSelection of ["selection", "error"]) {
   const test = panel("openai", AbortController, {}, settings);
   const initial = test.loadBudget();
   assert.ok(Math.abs(initial.usd - 1.25 / 0.8103) < 1e-12);
-  assert.match(test.budgetText(initial).total, /CHF 1\.25$/);
+  assert.match(test.budgetText(initial).total, /USD 1\.54$/);
   assert.equal(settings.get("nbp.budgetCHF"), "1.25", "retain the old CHF total");
   assert.equal(Number(settings.get("nbp.budgetUSD")), initial.usd);
   assert.equal(test.loadBudget().usd, initial.usd, "migration must run only once");
@@ -329,12 +329,12 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(saved.since, "2026-08-01T12:00:00.000Z");
   const reloaded = panel("openai", AbortController, {}, settings);
   assert.equal(JSON.stringify(reloaded.loadBudget()), JSON.stringify(saved));
-  assert.match(reloaded.budgetText(saved).total, /CHF 1\.41$/);
+  assert.match(reloaded.budgetText(saved).total, /USD 1\.75$/);
   for (const imagesAnalyzed of [0, 3]) {
-    for (const [chf, formatted] of [[0, "0.00"], [0.004, "0.00"], [14.638, "14.64"]]) {
-      const budget = { ...saved, imagesAnalyzed, usd: chf / 0.8103 };
-      assert.ok(reloaded.budgetText(budget).total.endsWith(`CHF ${formatted}`));
-      assert.equal(budget.usd, chf / 0.8103, "display rounding must preserve the stored amount");
+    for (const [usd, formatted] of [[0, "0.00"], [0.004, "0.00"], [14.638, "14.64"]]) {
+      const budget = { ...saved, imagesAnalyzed, usd };
+      assert.ok(reloaded.budgetText(budget).total.endsWith(`USD ${formatted}`));
+      assert.equal(budget.usd, usd, "display rounding must preserve the stored amount");
     }
   }
   const reset = reloaded.resetBudget();

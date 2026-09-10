@@ -18,7 +18,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 - Cancel one queued generation from its row or cancel every waiting and running generation with **Cancel All**. A request that has already reached the provider counts as billed and is added to the spend counter.
 - Sunburst and Flare support Low, Medium, High, XHigh, Max and Auto quality. GPT Image 2 supports up to High. Resolution defaults to 2K and quality to Low; saved preferences take priority.
 - Generation estimates include one flat USD 0.01 overhead for the prompt, all references and canvas input combined, regardless of image count. This is a rough allowance; API-reported token usage replaces the estimate when available.
-- Track image generation and Describe costs in one local USD total displayed in CHF, with separate counts for generated and described images.
+- Track image generation and Describe costs in one local USD total displayed in your selected currency, with separate counts for generated and described images.
 
 ## Requirements
 
@@ -96,13 +96,21 @@ Use these settings according to the required tradeoff:
 
 PSD is the safest archival master for Photoshop-specific behavior. Photoshop can preserve layer data in TIFF, but other applications may ignore it; verify Mega Musa Recall on a representative layered TIFF before switching an archive workflow from PSD.
 
+### Display currency
+
+Choose **Display currency** under **API Keys**: EUR, CHF, USD, JPY, KRW, CNY, GBP, CAD, AUD, INR or BRL. The default is USD; a saved currency preference takes priority. Price menus and the budget update immediately when a rate is available.
+
+On startup, non-USD selections fetch [ECB reference rates through Frankfurter](https://frankfurter.dev/providers/ecb/) in the background unless a successful lookup is already cached for the current UTC day. Switching away from USD also triggers a lookup when needed. USD requires no lookup. All supported rates are cached together, so switching currencies does not require separate requests. The [ECB publishes rates around 16:00 CET on working days](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html); weekends and holidays use the latest published rates. The selector shows the rate date. These are display estimates; payment providers may use different rates and add fees.
+
+Offline connections, service errors and a five-second timeout fail silently. The plugin keeps the last successful rates, or displays amounts explicitly in USD if no rate is available. A failed lookup can retry on the next startup. Only currency codes are sent to Frankfurter; API keys, prompts, images and spending amounts are not included. Stored USD spending is never changed by exchange-rate updates; historical totals are displayed using the latest cached rate.
+
 ### Describe budget
 
-**Describe Images** adds its cost to the same budget as image generation. The **images described** counter counts each input image: one Photoshop selection plus nine references adds 10, even though they share one API request. No Describe request count is shown. The cost for the whole request is added once, without multiplying it by the image count. Returned usage accounts for input, output, reasoning and cached tokens, including OpenAI cache writes. The calculator uses [OpenAI pricing](https://developers.openai.com/api/docs/pricing) and [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), checked August 28, 2026, with the panel's existing USD-to-CHF reference rate. It assumes paid API usage; free tiers, credits, taxes and account-specific discounts are not detected.
+**Describe Images** adds its cost to the same budget as image generation. The **images described** counter counts each input image: one Photoshop selection plus nine references adds 10, even though they share one API request. No Describe request count is shown. The cost for the whole request is added once, without multiplying it by the image count. Returned usage accounts for input, output, reasoning and cached tokens, including OpenAI cache writes. The calculator uses [OpenAI pricing](https://developers.openai.com/api/docs/pricing) and [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), checked August 28, 2026, with conversion to the selected display currency. It assumes paid API usage; free tiers, credits, taxes and account-specific discounts are not detected.
 
 If usage is missing, the budget uses the midpoint of the model's displayed price range per input image and marks those images as estimated. Canceling after sending a request also adds that estimate once; its input images count as described and are marked canceled and estimated. A late response does not add cost or images again or replace the estimate. Canceling during preparation adds nothing. Responses with usable billing information still count if their description text cannot be parsed; transport errors and rejected requests without usage add neither cost nor described images.
 
-All pricing, input allowances and stored budget amounts use USD. CHF conversion happens only for display. On the first update, existing CHF spend is divided by the historical 0.8103 reference rate and saved once as USD, preserving its displayed CHF value, counters and start date. The original CHF storage key remains as a backup; resets and reloads do not repeat the conversion.
+All pricing, input allowances and stored budget amounts use USD. Currency conversion happens only for display. On the first update, existing CHF spend is divided by the historical 0.8103 reference rate and saved once as USD, preserving its value at that historical rate, counters and start date. The original CHF storage key remains as a backup; resets and reloads do not repeat the conversion.
 
 The total always shows two decimal places; stored amounts are not rounded. Counts and costs survive a panel reload. **Undo** restores the prompt without refunding usage. **Reset** clears spend, generation counts and description counts together. When upgrading from the old Describe request counter, the counters for described images start at zero because historical input counts were not saved. Existing CHF spend, generation counts and the budget's start date are preserved. This is a local estimate, not the provider's invoice.
 
