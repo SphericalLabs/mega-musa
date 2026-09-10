@@ -41,6 +41,9 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
        few px as the panel crosses the height where scrolling begins. */
     #scroll { position: absolute; top: 0; left: 0; right: 0; bottom: 0;
               overflow-y: auto; padding: 8px 10px 14px; }
+    /* Outside the scrolling content so activity stays visible at every scroll position. */
+    #generationActivity { display: none; position: absolute; top: 0; left: 0; bottom: 0;
+                          width: 3px; background: rgb(226,75,74); }
     /* Section headers sit one step brighter than body text, the way Photoshop's
        own panel headings do. A neutral row avoids UXP's pill-shaped HTML button
        treatment; the disclosure arrow is a text glyph, for the reason set out
@@ -467,6 +470,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       </div>
     </div>
   </div>
+
+  <div id="generationActivity" aria-hidden="true"></div>
 
   <dialog id="noticeDialog" class="notice-dialog" aria-labelledby="noticeDialogTitle">
     <form method="dialog">

@@ -1142,6 +1142,7 @@ function renderGenerationQueue(): void {
   clearChildren(list);
 
   const active = generationJobs.filter(generationJobIsActive);
+  $("generationActivity").style.display = active.length ? "block" : "none";
   const waiting = active.filter((job) => job.state === "waiting").length;
   const failed = generationJobs.length - active.length;
   const summaryParts = [`${active.length} active`];
