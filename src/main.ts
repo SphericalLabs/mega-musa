@@ -2864,7 +2864,7 @@ function applyModelCapabilities(
   const quality = buildQualityMenu(
     modelId,
     isOpenAIModel(modelId)
-      ? preferQuality || loadSetting("quality", $("quality")?.value || "auto")
+      ? preferQuality || loadSetting("quality", "low")
       : "auto"
   );
 
@@ -2993,8 +2993,8 @@ async function restoreSettings(): Promise<void> {
   applyModelCapabilities(
     $("model").value || DEFAULT_MODEL,
     loadSetting("selRatio", "1:1"),
-    loadSetting("resolution", "auto"),
-    loadSetting("quality", "auto")
+    loadSetting("resolution", "2K"),
+    loadSetting("quality", "low")
   );
   // Canvas input and Smart Objects default on. Lossy document-size reduction is
   // opt-in; an existing saved preference still wins over either default.
