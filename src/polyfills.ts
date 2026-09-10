@@ -65,7 +65,7 @@ if (typeof g.TextDecoder === "undefined") {
           ? input
           : new Uint8Array((input as ArrayBufferView).buffer ?? (input as ArrayBuffer));
       let out = "";
-      for (let i = 0; i < bytes.length; ) {
+      for (let i = 0; i < bytes.length;) {
         const c = bytes[i++];
         if (c < 0x80) {
           out += String.fromCharCode(c);
@@ -90,4 +90,4 @@ if (typeof g.TextDecoder === "undefined") {
   };
 }
 
-export {};
+export { };

@@ -18,8 +18,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { loadSetting, saveSetting } from "./storage";
 import { formatMoney } from "./currency";
+import { loadSetting, saveSetting } from "./storage";
 
 // Frozen historical rate: never use a future display rate to migrate old totals.
 const LEGACY_USD_CHF = 0.8103;

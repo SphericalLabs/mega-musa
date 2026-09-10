@@ -1,0 +1,86 @@
+/* Copyright (C) 2026 Sphericals. SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception. */
+
+/* --------------------------------------------------------------------------
+   Host theme
+   -------------------------------------------------------------------------- */
+
+/* The panel sends its Photoshop theme through syncDropTheme; WebView media queries
+   follow the OS theme. Keep the page opaque to avoid white flashes during reflow. */
+:root {
+  color-scheme: dark;
+  --host-background-color: rgb(50, 50, 50);
+  --drop-surface-color: rgb(8, 8, 8);
+  background-color: var(--host-background-color);
+}
+
+:root.theme-light {
+  color-scheme: light;
+  --drop-surface-color: rgb(255, 255, 255);
+}
+
+/* --------------------------------------------------------------------------
+   Page layout
+   -------------------------------------------------------------------------- */
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background-color: var(--host-background-color);
+}
+
+body {
+  position: relative;
+  box-sizing: border-box;
+  padding: 2px;
+  font: 11px system-ui, sans-serif;
+}
+
+/* --------------------------------------------------------------------------
+   Drop target and interaction states
+   -------------------------------------------------------------------------- */
+
+#dropZone {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px dashed rgba(128, 128, 128, 0.65);
+  border-radius: 4px;
+  /* Match the panel's explanatory text in the dark and light themes. */
+  color: rgb(128, 128, 128);
+  background-color: var(--drop-surface-color);
+  pointer-events: none;
+  user-select: none;
+}
+
+:root.theme-light #dropZone {
+  color: rgb(120, 120, 120);
+}
+
+#dropZone.over {
+  border-color: rgba(64, 140, 240, 0.95);
+  background: rgba(64, 140, 240, 0.18);
+}
+
+#dropZone.full {
+  opacity: 0.55;
+}
+
+/* --------------------------------------------------------------------------
+   File input overlay
+   -------------------------------------------------------------------------- */
+
+#fileInput {
+  position: absolute;
+  inset: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}

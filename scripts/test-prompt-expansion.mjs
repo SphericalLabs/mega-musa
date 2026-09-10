@@ -5,25 +5,17 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
-const testDirectory = await mkdtemp(join(tmpdir(), "mega-musa-prompt-expansion-"));
-const bundlePath = join(testDirectory, "prompt-expansion.mjs");
-
-try {
-  await build({
+const bundle = await build({
     entryPoints: ["src/prompt-expansion.ts"],
     bundle: true,
     format: "esm",
     platform: "node",
-    outfile: bundlePath,
+    write: false,
     logLevel: "silent",
   });
-  const { expandPromptTemplate } = await import(pathToFileURL(bundlePath).href);
+  const { expandPromptTemplate } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
 
   const checks = [
     () => assert.deepEqual(expandPromptTemplate("a plain prompt"), ["a plain prompt"]),
@@ -75,6 +67,3 @@ try {
 
   for (const check of checks) check();
   console.log(`prompt expansion tests passed (${checks.length} checks)`);
-} finally {
-  await rm(testDirectory, { recursive: true, force: true });
-}

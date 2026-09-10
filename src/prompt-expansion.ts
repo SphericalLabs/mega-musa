@@ -49,7 +49,7 @@ const ESCAPABLE = new Set(["{", "}", ",", "\\"]);
 class PromptParser {
   private index = 0;
 
-  constructor(private readonly input: string) {}
+  constructor(private readonly input: string) { }
 
   parse(): Sequence {
     const sequence = this.parseSequence(false);

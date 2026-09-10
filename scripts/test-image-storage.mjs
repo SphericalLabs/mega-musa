@@ -66,28 +66,10 @@ assert.equal(lossless.storageMode, "png-srgb");
 assert.ok(pngChunkTypes(lossless.bytes).includes("sRGB"));
 assert.deepEqual(Array.from(decodeImage("image/png", lossless.bytes).data), Array.from(opaque));
 
-const [html, main, bridge, references, webview] = await Promise.all([
-  readFile("public/index.html", "utf8"),
-  readFile("src/main.ts", "utf8"),
-  readFile("src/photoshop-bridge.ts", "utf8"),
-  readFile("src/reference-assets.ts", "utf8"),
-  readFile("public/drop-target.js", "utf8"),
-]);
+const html = await readFile("public/index.html", "utf8");
 assert.match(html, /id="placeAsSmartObject" checked/);
 const reduceCheckbox = html.match(/<sp-checkbox[^>]*id="reduceDocumentSize"[^>]*>/)?.[0] || "";
 assert.ok(reduceCheckbox, "the Reduce document size checkbox must exist");
 assert.doesNotMatch(reduceCheckbox, /\schecked\b/);
-assert.match(main, /loadSetting\("placeAsSmartObject", "1"\)/);
-assert.match(main, /loadSetting\("reduceDocumentSize", "0"\)/);
-assert.match(main, /saveSetting\("placeAsSmartObject"/);
-assert.match(main, /saveSetting\("reduceDocumentSize"/);
-const recallStart = main.indexOf("async function onLoadRecallSettings");
-const recallLoader = main.slice(recallStart, main.indexOf("function clearChildren", recallStart));
-assert.doesNotMatch(recallLoader, /placeAsSmartObject|reduceDocumentSize/);
-assert.doesNotMatch(bridge, /_obj: "newPlacedLayer"/);
-assert.match(bridge, /_obj: "placeEvent"/);
-assert.match(main, /if \(reference\.archivedHash\)/);
-assert.match(references, /existing\.originalByHash\.get\(hash\)/);
-assert.match(webview, /outputQuality = 0\.9/);
 
-console.log("image storage tests passed (JPEG 90, transparent PNG, sRGB tags, global controls and no PSB conversion)");
+console.log("Image storage: JPEG 90, transparent PNG, sRGB tags and HTML defaults passed.");

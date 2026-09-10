@@ -88,7 +88,7 @@ export class HostModalTimeoutError extends Error {
   constructor(commandName: string, timeoutSeconds: number) {
     super(
       `Photoshop stayed busy for ${timeoutSeconds} seconds while Mega Musa tried to ${commandName}. ` +
-        "Finish the active Photoshop tool, dialog or other plugin operation, then retry."
+      "Finish the active Photoshop tool, dialog or other plugin operation, then retry."
     );
     this.name = "HostModalTimeoutError";
     this.commandName = commandName;

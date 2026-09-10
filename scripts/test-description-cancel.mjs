@@ -5,7 +5,6 @@
  */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
@@ -13,10 +12,15 @@ import { build } from "esbuild";
 // Test real panel handlers with controlled host, WebView and provider responses.
 const bundle = await build({
   stdin: {
-    contents: `${await readFile("src/main.ts", "utf8")}
-      export { onDescribe, onUndoDescription, updateDescriptionControls, onReferenceResizeMessage, DESCRIPTION_MODELS };
-      export { loadBudget, resetBudget, addToBudget, addDescriptionToBudget, budgetText, descriptionUsageUSD, estimatedDescriptionUSD };
-      export function setTestReferences(images) { refs = images; dropWebviewReady = true; }
+    contents: `
+      import "./polyfills";
+      export { createDescriptionController } from "./panel/description";
+      export { createGenerationController } from "./generation/controller";
+      export { ReferenceCollection } from "./references/collection";
+      export { ReferenceImageProcessor } from "./references/processor";
+      export { GenerationQueue } from "./generation/queue";
+      export { DESCRIPTION_MODELS, descriptionUsageUSD, estimatedDescriptionUSD } from "./describe";
+      export { loadBudget, resetBudget, addToBudget, addDescriptionToBudget, budgetText } from "./budget";
     `,
     resolveDir: resolve("src"),
     loader: "ts",
@@ -79,7 +83,20 @@ function panel(provider = "openai", Controller = AbortController, photoshop = {}
     AbortController: Controller, Event, atob, btoa, setTimeout, clearTimeout, setInterval, clearInterval,
     fetch: (url, init) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
   });
-  const api = module.exports;
+  const exports = module.exports;
+  const references = new exports.ReferenceCollection();
+  const queue = new exports.GenerationQueue();
+  const processor = new exports.ReferenceImageProcessor(elements.dropWebview.postMessage);
+  processor.setReady(true);
+  const description = exports.createDescriptionController({ references, processor, queue,
+    onBusyChange: () => generation.updateGenerateControl() });
+  const generation = exports.createGenerationController({ references, processor, queue,
+    workflow: { runGenerationJob() {}, retryGenerationPlacement() {} },
+    descriptionBusy: () => description.busy });
+  const api = { ...exports, ...description,
+    setTestReferences: (images) => references.replace(images),
+    onReferenceResizeMessage: (message) => processor.handleMessage(message),
+  };
   const model = api.DESCRIPTION_MODELS.find((model) => model.provider === provider);
   elements.describeModel.value = model.id;
   const reportedUsage = provider === "openai"

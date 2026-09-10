@@ -104,7 +104,7 @@ export async function refreshExchangeRates(): Promise<void> {
       const rates: Record<string, Rate> = {};
       for (const row of rows) {
         if (row?.base !== "USD" || !QUOTES.includes(row.quote) ||
-            !Number.isFinite(row.rate) || row.rate <= 0 || !validDate(row.date) || row.date > today) return;
+          !Number.isFinite(row.rate) || row.rate <= 0 || !validDate(row.date) || row.date > today) return;
         rates[row.quote] = { rate: row.rate, date: row.date };
       }
       if (!QUOTES.every((quote) => rates[quote])) return;

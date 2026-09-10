@@ -18,7 +18,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { base64ToBytes, bytesToBase64 } from "./image-codec";
+import { base64ToBytes, bytesToBase64 } from "./images/base64";
 
 const { storage } = require("uxp");
 

@@ -40,6 +40,10 @@ npm run build
 
 In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After changes, run `npm run watch` and click **Reload**. Run `npm run typecheck` for a TypeScript check.
 
+## Development
+
+Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps.
+
 ## Use
 
 1. Save the API key for the selected provider.

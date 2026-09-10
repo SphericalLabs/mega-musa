@@ -19,21 +19,22 @@
  */
 
 import esbuild from "esbuild";
-import { cpSync, mkdirSync, rmSync } from "fs";
+import { cpSync, mkdirSync } from "fs";
+import { join } from "path";
 
 const watch = process.argv.includes("--watch");
+const outdir = process.argv.find((argument) => argument.startsWith("--outdir="))?.slice(9) || "dist";
 
 // Load dist/manifest.json in the UXP Developer Tool.
-rmSync("dist", { recursive: true, force: true });
-mkdirSync("dist", { recursive: true });
-cpSync("public", "dist", { recursive: true });
-cpSync("LICENSE", "dist/LICENSE");
-cpSync("LICENSE-EXCEPTION", "dist/LICENSE-EXCEPTION");
+mkdirSync(outdir, { recursive: true });
+cpSync("public", outdir, { recursive: true });
+cpSync("LICENSE", join(outdir, "LICENSE"));
+cpSync("LICENSE-EXCEPTION", join(outdir, "LICENSE-EXCEPTION"));
 
 const options = {
-  entryPoints: ["src/main.ts"],
+  entryPoints: { index: "src/main.ts", "drop-target": "src/webview/drop-target.ts" },
   bundle: true,
-  outfile: "dist/index.js",
+  outdir,
   format: "iife",
   platform: "browser",
   target: ["es2020"],
@@ -52,5 +53,5 @@ if (watch) {
   console.log("watching src/ — rebuilding dist/ on change…");
 } else {
   await esbuild.build(options);
-  console.log("built -> dist/");
+  console.log(`built -> ${outdir}/`);
 }

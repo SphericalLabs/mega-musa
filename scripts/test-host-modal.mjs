@@ -5,22 +5,14 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
-const testDirectory = await mkdtemp(join(tmpdir(), "mega-musa-host-modal-"));
-const bundlePath = join(testDirectory, "host-modal.mjs");
-
-try {
-  await build({
+const bundle = await build({
     entryPoints: ["src/host-modal.ts"],
     bundle: true,
     format: "esm",
     platform: "node",
-    outfile: bundlePath,
+    write: false,
     logLevel: "silent",
   });
   const {
@@ -28,7 +20,7 @@ try {
     HostModalTimeoutError,
     isHostModalBusyError,
     runHostModalTask,
-  } = await import(pathToFileURL(bundlePath).href);
+  } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
 
   const events = [];
   let releaseFirst;
@@ -122,6 +114,3 @@ try {
   assert.ok(attempts >= 1);
 
   console.log("host modal tests passed (FIFO, reentrancy, recovery and timeout)");
-} finally {
-  await rm(testDirectory, { recursive: true, force: true });
-}
