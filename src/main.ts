@@ -785,7 +785,7 @@ const MAX_RECALL_LAYER_NAME_DISPLAY = 50;
 // Picker labels carry a release year — "Nano Banana Pro (2025)" — which tells the
 // models apart when choosing one and is just noise once it is on a layer.
 function modelNameWithoutYear(label: string): string {
-  return label.replace(/\s*\(\d{4}\)\s*$/, "");
+  return label.replace(/\s*\(\d{4}\)\s*$/, "").replace(/^OpenAI GPT Image /, "GPT Image ");
 }
 
 // Name a result layer after the prompt that produced it, with the settings in
@@ -2639,14 +2639,15 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     const rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
 
     updateGenerationJob(job, "placing", "Placing result at the top of the document…");
-    // What produced this layer, for the bracketed tail of its name. The OpenAI
-    // models return one fixed size, so their exact output is more use than the
-    // requested tier; the Gemini models frame to a ratio, so there the tier is
-    // the resolution. A model with no resolution control contributes neither.
+    // Use the selected resolution tier across providers. For automatic or fixed
+    // sizes, infer the nearest tier from the output's pixel area.
     const layerDetails: string[] = [modelNameWithoutYear(spec.label)];
-    const resolutionDetail = frame.openaiSize || (spec.imageSizes.length ? resolutionLabel(resolution) : "");
-    if (resolutionDetail) layerDetails.push(resolutionDetail);
-    if (resolvedQuality) layerDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
+    const outputK = Math.sqrt(decoded.width * decoded.height) / 1024;
+    const inferredTier = outputK < Math.SQRT2 ? "1K" : outputK < 2 * Math.SQRT2 ? "2K" : "4K";
+    const resolutionDetail = spec.imageSizes.length && resolution !== "auto"
+      ? resolutionLabel(resolution)
+      : inferredTier;
+    layerDetails.push(resolutionDetail);
     const archive: GenerationArchive = {
       v: 1,
       prompt,
