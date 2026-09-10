@@ -21,11 +21,10 @@
 import { encode, decode } from "fast-png";
 import { decode as jpegDecode, encode as jpegEncode } from "jpeg-js";
 
-// --- base64 <-> bytes (UXP provides global btoa/atob) -----------------------
 
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
-  const chunk = 0x8000; // stay within String.fromCharCode.apply arg limits
+  const chunk = 0x8000; // Avoid exceeding function argument limits.
   for (let i = 0; i < bytes.length; i += chunk) {
     binary += (String.fromCharCode as any).apply(null, bytes.subarray(i, i + chunk));
   }
@@ -39,7 +38,6 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-// --- PNG/JPEG encode / decode ----------------------------------------------
 
 function uint32Bytes(value: number): Uint8Array {
   return Uint8Array.of(value >>> 24, value >>> 16, value >>> 8, value);
@@ -81,9 +79,8 @@ function pngHasChunk(bytes: Uint8Array, wanted: string): boolean {
   return false;
 }
 
-// Pixels produced by Mega Musa and the reference WebView are sRGB. Add the
-// standard PNG declaration when the encoder did not already include sRGB or an
-// ICC profile. The zero byte selects perceptual rendering intent.
+// Tag sRGB pixels without replacing an existing profile. Intent 0 is perceptual; this
+// does not convert pixel colors.
 export function tagPngAsSrgb(bytes: Uint8Array): Uint8Array {
   if (pngHasChunk(bytes, "sRGB") || pngHasChunk(bytes, "iCCP")) return bytes;
   const ihdrEnd = 8 + 12 + 13;
@@ -98,8 +95,7 @@ export function tagPngAsSrgb(bytes: Uint8Array): Uint8Array {
   return tagged;
 }
 
-// JPEG has no PNG-style sRGB chunk. This minimal Exif block records ColorSpace
-// 1 (sRGB), matching the explicitly sRGB pixels sent to the JPEG encoder.
+// Exif ColorSpace 1 declares the JPEG pixels as sRGB; this does not convert them.
 export function tagJpegAsSrgb(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 2 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
     throw new Error("Could not tag an invalid JPEG as sRGB.");
@@ -127,10 +123,8 @@ export function encodePng(data: Uint8Array, width: number, height: number, chann
 }
 
 export function encodeJpeg(data: Uint8Array, width: number, height: number, quality = 90): Uint8Array {
-  // jpeg-js is CommonJS. Bundlers therefore expose its internal `module`, which
-  // makes version 0.4.4 return Buffer.from(byteout) even in Photoshop UXP. Give
-  // that one synchronous call the only Buffer operation it needs, then restore
-  // the host global immediately instead of installing a Node polyfill.
+  // Bundled jpeg-js 0.4.4 takes its CommonJS Buffer.from path in UXP. Supply that
+  // operation only during this synchronous encode.
   const globals: any = globalThis as any;
   const hadBuffer = Object.prototype.hasOwnProperty.call(globals, "Buffer");
   const previousBuffer = globals.Buffer;
@@ -209,16 +203,13 @@ export function decodeJpeg(bytes: Uint8Array): DecodedImage {
   return { data, width: img.width, height: img.height, channels: 4 };
 }
 
-// Decode a model image response (PNG or JPEG) to pixels.
 export function decodeImage(mimeType: string, bytes: Uint8Array): DecodedImage {
   if (mimeType === "image/jpeg" || mimeType === "image/jpg") return decodeJpeg(bytes);
   if (mimeType === "image/png") return decodePng(bytes);
   throw new Error(`Unsupported image type from model: ${mimeType} (supported: PNG, JPEG).`);
 }
 
-// --- pixel helpers ----------------------------------------------------------
 
-// Normalize any channel count to packed RGBA.
 export function toRGBA(src: Uint8Array, width: number, height: number, channels: number): Uint8Array {
   if (channels === 4) return src;
   const count = width * height;
@@ -234,8 +225,7 @@ export function toRGBA(src: Uint8Array, width: number, height: number, channels:
   return out;
 }
 
-// Multiply a packed-RGBA image's alpha by a per-pixel coverage mask (0..255),
-// so the image becomes transparent where the mask is 0 (clips to a selection).
+// Multiply alpha by selection coverage (0..255), preserving existing transparency.
 export function applyAlphaMask(rgba: Uint8Array, mask: Uint8Array): void {
   const count = Math.min(Math.floor(rgba.length / 4), mask.length);
   for (let i = 0; i < count; i++) {
@@ -243,8 +233,7 @@ export function applyAlphaMask(rgba: Uint8Array, mask: Uint8Array): void {
   }
 }
 
-// Cover-fit (like CSS object-fit: cover): scale the source to fully cover
-// dw×dh, then center-crop the overflow. Preserves aspect — no distortion.
+// Scale proportionally to cover the destination, then center-crop the overflow.
 export function coverResampleRGBA(
   src: Uint8Array,
   sw: number,
@@ -253,10 +242,10 @@ export function coverResampleRGBA(
   dh: number
 ): Uint8Array {
   const out = new Uint8Array(dw * dh * 4);
-  const scale = Math.max(dw / sw, dh / sh); // max => fully covers, overflow trimmed
-  const winW = dw / scale; // visible source window (<= sw)
-  const winH = dh / scale; // visible source window (<= sh)
-  const sx0 = (sw - winW) / 2; // center anchor
+  const scale = Math.max(dw / sw, dh / sh);
+  const winW = dw / scale;
+  const winH = dh / scale;
+  const sx0 = (sw - winW) / 2;
   const sy0 = (sh - winH) / 2;
   const stepX = winW / dw;
   const stepY = winH / dh;
@@ -287,7 +276,7 @@ export function coverResampleRGBA(
   return out;
 }
 
-// Bilinear resample of a single-channel (grayscale) image.
+// Bilinear interpolation of single-channel coverage values.
 export function resampleGray(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
   if (sw === dw && sh === dh) return src;
   const out = new Uint8Array(dw * dh);
@@ -311,7 +300,7 @@ export function resampleGray(src: Uint8Array, sw: number, sh: number, dw: number
   return out;
 }
 
-// Bilinear resample of packed RGBA from (sw,sh) to (dw,dh).
+// Bilinear interpolation of packed RGBA channels.
 export function resampleRGBA(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
   if (sw === dw && sh === dh) return src;
   const out = new Uint8Array(dw * dh * 4);

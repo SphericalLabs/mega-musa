@@ -24,15 +24,7 @@ import { bytesToBase64, base64ToBytes } from "./image-codec";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// Official Gemini image aspect ratios (ai.google.dev/gemini-api image
-// generation → "Aspect ratios and image size"). The model only frames to one of
-// these; we snap the request to the nearest of them.
-//   1K / 2K / 4K example pixel sizes per ratio (width×height):
-//   1:1  1024² / 2048² / 4096²      2:3  848×1264  / 1696×2528 / 3392×5056
-//   3:2  1264×848 / 2528×1696 ...   3:4  896×1200  / 1792×2400 / 3584×4800
-//   4:3  1200×896 / ...             4:5  928×1152  / 1856×2304 / 3712×4608
-//   5:4  1152×928 / ...             9:16 768×1376  / 1536×2752 / 3072×5504
-//   16:9 1376×768 / ...             21:9 1584×672  / 3168×1344 / 6336×2688
+// Shared ratio choices exposed by the plugin; dimensions vary by model and resolution.
 export const SUPPORTED_ASPECT_RATIOS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "1:1", ratio: 1 },
   { label: "2:3", ratio: 2 / 3 },
@@ -46,9 +38,7 @@ export const SUPPORTED_ASPECT_RATIOS: ReadonlyArray<{ label: string; ratio: numb
   { label: "21:9", ratio: 21 / 9 },
 ];
 
-// Nearest supported aspect ratio to a width/height, with the log-space distance
-// (so e.g. 2:1 is equidistant from 1:1 and 4:1). logDistance ~0 means the shape
-// already matches an official ratio.
+// Log distance treats reciprocal ratio changes equally; zero means an exact match.
 export function aspectRatioInfo(width: number, height: number): { label: string; logDistance: number } {
   const target = Math.log((width || 1) / (height || 1));
   let best = SUPPORTED_ASPECT_RATIOS[0];
@@ -104,10 +94,10 @@ export interface GenerateOptions {
   apiKey: string;
   model: string;
   prompt: string;
-  baseImagePng?: Uint8Array; // omitted => generate from the prompt (+ references) alone
+  baseImagePng?: Uint8Array;
   references: RefImage[];
-  aspectRatio?: string; // undefined => let the model match the input
-  imageSize?: string; // undefined => let the model match the input
+  aspectRatio?: string; // Omitted values use the provider default.
+  imageSize?: string;
   signal?: AbortSignal;
 }
 
@@ -117,9 +107,6 @@ export interface GenerateResult {
   usage?: ImageUsage;
 }
 
-// Calls the Gemini generateContent REST endpoint with an image-in / image-out
-// request, using the JSON (camelCase) field names the REST API expects. With no
-// base image and no references the same endpoint is a plain text-to-image call.
 export async function generateEdit(opts: GenerateOptions): Promise<GenerateResult> {
   const parts: any[] = [{ text: opts.prompt }];
   if (opts.baseImagePng) {
@@ -138,8 +125,7 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
   }
   const body: any = { contents: [{ role: "user", parts }], generationConfig };
 
-  // Build the request init without a `signal` key unless one is provided —
-  // UXP's fetch throws on `signal: undefined` (it calls addEventListener on it).
+  // Omit absent signals: some UXP fetch implementations throw on signal: undefined.
   const requestInit: any = {
     method: "POST",
     headers: {
@@ -167,7 +153,6 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
     }
   }
 
-  // No image came back — surface any text or block reason the model returned.
   let text = "";
   for (const cand of candidates) {
     for (const part of cand?.content?.parts || []) {

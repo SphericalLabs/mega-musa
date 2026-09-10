@@ -39,9 +39,7 @@
     window.uxpHost.postMessage({ channel: CHANNEL, ...message });
   }
 
-  // Workaround: the drop WebView traps wheel events, so panel scrolling stops
-  // when the drop area moves under the cursor. Events cannot bubble to UXP;
-  // forward their deltas through the bridge so the host can keep scrolling.
+  // Forward wheel deltas because WebView events cannot bubble into the panel.
   window.addEventListener("wheel", (event) => {
     if (event.ctrlKey || !event.deltaY) return;
     event.preventDefault();
@@ -130,13 +128,11 @@
         const canvas = document.createElement("canvas");
         canvas.width = targetWidth;
         canvas.height = targetHeight;
-        // Canvas pixels use sRGB. Ask for it explicitly where the WebView
-        // supports color-space options, then fall back for older runtimes.
+        // Request sRGB when supported; older WebViews may reject the options object.
         let context = null;
         try {
           context = canvas.getContext("2d", { colorSpace: "srgb" });
         } catch {
-          /* Older WebViews reject the options object. */
         }
         if (!context) context = canvas.getContext("2d");
         if (!context) throw new Error("The image processor could not create a canvas.");
@@ -157,8 +153,7 @@
           outputType = opaque ? "image/jpeg" : "image/png";
           outputQuality = 0.9;
         }
-        // PNG ignores quality and preserves transparency. Compact opaque
-        // archive assets use the user-visible JPEG 90 policy.
+        // Compact archives use PNG for transparency and JPEG 90 for opaque pixels.
         const dataUrl = canvas.toDataURL(outputType, outputQuality);
         const comma = dataUrl.indexOf(",");
         if (comma < 0) throw new Error("The resized image could not be encoded.");
@@ -200,8 +195,7 @@
     if (receivingPromise) stopPromiseWait();
     if (dragIdleTimer !== null) window.clearTimeout(dragIdleTimer);
     dragIdleTimer = window.setTimeout(() => {
-      // Some macOS file promises are accepted by the native WebView without a
-      // DOM drop event. Check whether the real file input was populated anyway.
+      // Check the native input: macOS file promises can arrive without a drop event.
       dragIdleTimer = null;
       dragDepth = 0;
       dropZone.classList.remove("over");
@@ -315,9 +309,7 @@
   });
 
   fileInput.addEventListener("dragover", (event) => {
-    // Canceling dragover tells the browser this is an active drop target. The
-    // drop handler still leaves an empty file-promise drop uncanceled so the
-    // native file input can fulfill it.
+    // Enable dropping here; the drop handler must still allow native file promises.
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
     keepDragActive();
@@ -343,8 +335,7 @@
       return;
     }
 
-    // Do not prevent the default here. A real file input gives macOS's WebView
-    // a destination where it can fulfill an unsaved screenshot file promise.
+    // Leave the default action enabled so macOS can fulfill screenshot file promises.
     startPromiseWait();
   });
 
@@ -352,9 +343,7 @@
     addInputFiles();
   });
 
-  // Photoshop's Interface theme, as reported by the panel. This WebView cannot
-  // see it — its own prefers-color-scheme follows the macOS appearance — so the
-  // panel measures the theme and sends it here (see syncDropTheme in main.ts).
+  // The panel supplies Photoshop's theme because WebView media queries follow the OS.
   function applyTheme(theme, backgroundColor, surfaceColor) {
     document.documentElement.classList.toggle("theme-light", theme === "light");
     if (

@@ -4,10 +4,6 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-// Keep provider codes attached to readable messages, without a per-code catalog.
-// References: developers.openai.com/api/docs/guides/error-codes
-// ai.google.dev/gemini-api/docs/generate-content/api-errors
-// ai.google.dev/api/generate-content#FinishReason
 export function errorMessage(error: any): string {
   const message = typeof error?.message === "string" ? error.message
     : typeof error === "string" ? error : "Unexpected error.";

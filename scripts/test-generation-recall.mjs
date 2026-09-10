@@ -8,7 +8,6 @@ import assert from "node:assert/strict";
 import { runInThisContext } from "node:vm";
 import { build } from "esbuild";
 
-// Exercise the actual archive and bridge without Photoshop or disk fixtures.
 const bundle = await build({
   stdin: {
     contents: `
@@ -118,9 +117,7 @@ const {
   setRectSelection,
 } = module.exports;
 
-// A result nested in a subgroup inside an artboard must be extracted before
-// the document's first root layer. This covers groups, subgroups and artboards
-// in one representative stack.
+// Extract a result nested in a group and artboard to the document front.
 const nestedResult = { id: 2 };
 Object.assign(nestedResult, {
   allLocked: true,
@@ -218,8 +215,7 @@ async function expectBlocked(savedGeometry, pattern) {
   assert.equal(selectionWrites, previousWrites, "a rejected recall must not write a clipped or adjusted selection");
 }
 
-// Both rectangles survive serialization. Missing or malformed optional geometry
-// must not hide the prompt/settings or infer a position from output size.
+// Invalid geometry must preserve settings and never infer position from output size.
 await writeLayerGenerationArchive(1, 2, { ...archive, geometry });
 assert.deepEqual(await readLayerGenerationArchive(1, 2), { ...archive, geometry });
 const legacyArchive = clone(archive);
@@ -294,8 +290,7 @@ resetDocument(artboardGeometry);
 await expectBlocked(geometry, /original artboard/);
 await expectBlocked({ ...artboardGeometry, selectionBounds: { ...artboardGeometry.selectionBounds, left: -600 } }, /inside the artboard/);
 
-// Never follow a stale recall target or alter Quick Mask. Check after acquiring
-// the modal scope, even if the panel was current when the button was clicked.
+// Recheck stale recall targets and Quick Mask after acquiring modal scope.
 for (const change of [
   (doc) => { doc.id = 99; },
   (doc) => { doc.activeLayers = [{ id: 3 }]; },

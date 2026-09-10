@@ -60,9 +60,8 @@ export async function acquireHostModalTask(): Promise<HostModalReservation> {
   };
 }
 
-// One FIFO gate covers every Mega Musa workflow that can put Photoshop or a
-// plugin dialog into a modal state. Passing the active lease lets a workflow
-// call several modal bridge helpers atomically without reacquiring its own lock.
+// Serialize modal workflows through one FIFO gate. Pass the active lease to nested
+// helpers to avoid reacquiring the same lock.
 export async function runHostModalTask<T>(
   task: (lease: HostModalLease) => Promise<T>,
   lease?: HostModalLease
@@ -101,9 +100,8 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-// Photoshop 25.10+ honors timeOut itself. The short retry loop preserves the
-// same behavior on older supported hosts, where an unknown timeOut option is
-// ignored and modal contention is rejected immediately with error number 9.
+// Photoshop 25.10+ handles timeOut; retry modal acquisition on older hosts that reject
+// immediately with error 9.
 export async function executeHostModal<T>(
   core: PhotoshopCore,
   target: (executionContext: any, descriptor?: any) => Promise<T> | T,
@@ -128,8 +126,7 @@ export async function executeHostModal<T>(
         }
       );
     } catch (error: any) {
-      // Retrying an operation that already entered its modal callback could
-      // duplicate partial document changes. Only acquisition failures are safe.
+      // Retry acquisition only; rerunning a started callback could duplicate edits.
       if (targetStarted || !isHostModalBusyError(error)) throw error;
       const remainingMilliseconds = deadline - Date.now();
       if (remainingMilliseconds <= 0) {

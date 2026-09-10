@@ -18,8 +18,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// Lightweight persistence for panel settings. Keep ordinary UI preferences in
-// localStorage, but keep the API key in UXP secureStorage.
+// Preferences use localStorage; API keys use UXP secureStorage.
 
 const { storage } = require("uxp");
 
@@ -39,7 +38,7 @@ function clearLegacyApiKey(): void {
   try {
     localStorage.removeItem(KEY_API);
   } catch {
-    /* ignore */
+    /* Legacy cleanup is best effort. */
   }
 }
 
@@ -118,6 +117,6 @@ export function saveSetting(name: string, value: string): void {
   try {
     localStorage.setItem(PREFIX + name, value);
   } catch {
-    /* ignore */
+    /* Preference persistence must not interrupt panel actions. */
   }
 }

@@ -25,45 +25,33 @@ import { formatMoney, formatMoneyRange } from "./currency";
 type ExplicitQuality = Exclude<ImageQuality, "auto">;
 type QualityPrices = Partial<Record<ExplicitQuality, Record<string, number>>>;
 
-// Single source of truth for what each model can actually do. Both the UI (which
-// menu items exist) and the request builder (what gets sent) read this table, so
-// a picker can never offer something the API would reject. Adding a model is one
-// entry here plus the visible picker list — no separate API client.
+// The model table drives both picker options and provider request framing.
 
 export interface ModelSpec {
-  id: string; // the picker value; "openai:" prefix routes to the OpenAI client
-  label: string; // what the dropdown shows
-  // imageSize tokens the model accepts, coarsest-last. Empty = the model has no
-  // resolution control at all (its size falls out of the chosen ratio instead).
+  id: string; // The "openai:" prefix selects the OpenAI client.
+  label: string;
+  // Ascending resolution tokens; empty means aspect ratio controls size.
   imageSizes: string[];
-  // Ratios the model can frame to, as "w:h" labels.
   aspectRatios: string[];
-  // OpenAI models with a fixed menu of output sizes: the ratio picks the size.
   fixedSizes?: { ratio: number; size: string; label: string }[];
-  // USD for one OUTPUT image, keyed by imageSize token — the prompt and any input
-  // images (the canvas crop, reference photos) are billed on top of this. A
-  // [min, max] pair because for the OpenAI models the published price also
-  // depends on things the resolution menu does not pick. Omit a key to show no
-  // price for that tier; "auto" is only listed where the default is documented.
+  // USD output-only ranges by resolution token; input costs are added separately.
+  // Missing tiers have no estimate.
   prices?: Record<string, [number, number]>;
-  // Exact USD output prices for explicit OpenAI quality choices, keyed by the
-  // actual output size. GPT Image 2 is calculated from output tokens instead.
+  // USD output prices by quality and pixel size for fixed-size models.
   qualityPrices?: QualityPrices;
-  // Flexible sizes and model-specific output-token factors from OpenAI’s calculator.
+  // Output-token factors for models with flexible sizes.
   outputQualityFactors?: Partial<Record<ExplicitQuality, number>>;
 }
 
 export interface OutputFrame {
-  // Always one of the current model's picker options.
+  // Nearest picker label, which may approximate a flexible output's exact ratio.
   label: string;
-  // The exact requested ratio. Returned pixels are verified after decoding.
   ratio: number;
   geminiAspect?: string;
   openaiSize?: string;
 }
 
-// GPT Image 2 charges output image tokens rather than a fixed per-image amount.
-// OpenAI's calculator uses these quality factors and an output rate of $30/M.
+// Flexible-size output estimates use the quality factors below and this USD token rate.
 const GPT_IMAGE_2_OUTPUT_USD_PER_MILLION = 30;
 const OPENAI_TOKEN_RATES: Record<string, { textInput: number; imageInput: number; imageOutput: number }> = {
   "openai:gpt-image-2.5-sunburst": { textInput: 5, imageInput: 8, imageOutput: 30 },
@@ -80,11 +68,8 @@ const GPT_IMAGE_2_QUALITY_FACTORS: Record<"low" | "medium" | "high", number> = {
 
 const GPT_IMAGE_25_QUALITY_FACTORS = { low: 16, medium: 24, high: 48, xhigh: 64, max: 96 };
 
-// Every Gemini image model frames to the same ten ratios — that part does not
-// vary by model, only the resolution tiers do.
 const GEMINI_RATIOS = SUPPORTED_ASPECT_RATIOS.map((r) => r.label);
 
-// gpt-image-1 / 1.5 / mini only ever return these three.
 const OPENAI_FIXED = [
   { ratio: 1, size: "1024x1024", label: "1:1" },
   { ratio: 3 / 2, size: "1536x1024", label: "3:2" },
@@ -99,8 +84,7 @@ export const MODELS: ModelSpec[] = [
     label: "Nano Banana Pro (2025)",
     imageSizes: ["1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
-    // 1120 output tokens for both 1K and 2K, 2000 for 4K, at $120/1M — so 2K is
-    // free extra resolution here. Gemini defaults to 1K when no size is sent.
+    // 1K and 2K share the same output price; Auto is estimated at the 1K default.
     prices: {
       auto: [0.134, 0.134],
       "1K": [0.134, 0.134],
@@ -111,10 +95,8 @@ export const MODELS: ModelSpec[] = [
   {
     id: "gemini-3.1-flash-image",
     label: "Nano Banana 2 (2026)",
-    // The only model with the 512px tier.
     imageSizes: ["512px", "1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
-    // 747 / 1120 / 1680 / 2520 output tokens at $60/1M.
     prices: {
       auto: [0.067, 0.067],
       "512px": [0.045, 0.045],
@@ -128,7 +110,6 @@ export const MODELS: ModelSpec[] = [
     label: "Nano Banana (2025)",
     imageSizes: ["1K"],
     aspectRatios: GEMINI_RATIOS,
-    // 1290 output tokens at $30/1M.
     prices: { auto: [0.039, 0.039], "1K": [0.039, 0.039] },
   },
   ...[
@@ -143,13 +124,9 @@ export const MODELS: ModelSpec[] = [
   {
     id: "openai:gpt-image-2",
     outputQualityFactors: GPT_IMAGE_2_QUALITY_FACTORS,
-    // Takes any width/height on a 16px grid, so the tier just sets a pixel
-    // budget (see gptImage2Size) and the crop's own ratio is used as-is.
     label: "OpenAI GPT Image 2 (2026)",
     imageSizes: ["1K", "2K", "4K"],
     aspectRatios: GEMINI_RATIOS,
-    // Prices are calculated from the exact output dimensions at menu-build time.
-    // The API's quality:auto choice means the UI shows the low-to-high range.
   },
   {
     id: "openai:gpt-image-1.5",
@@ -196,14 +173,11 @@ export function modelSpec(id: string): ModelSpec {
   return MODELS.find((m) => m.id === id) || MODELS.find((m) => m.id === DEFAULT_MODEL)!;
 }
 
-// Smallest-to-largest, for snapping a tier the newly-picked model cannot do to
-// the closest one it can.
 const TIER_ORDER = ["512px", "1K", "2K", "4K"];
 
 export function resolutionLabel(token: string): string {
   if (token === "auto") return "Auto";
-  // Shown as 0.5K so it reads as one more step in the 1K / 2K / 4K ladder. The
-  // token itself stays "512px" — that is what the API and the saved setting use.
+  // Keep the API/storage token as 512px; display it as part of the K-tier scale.
   if (token === "512px") return "0.5K";
   return token;
 }
@@ -229,7 +203,7 @@ function imageOutputTokens(size: string, qualityFactor: number): number | null {
     return null;
   }
 
-  // The official calculator rounds exact half ties to the nearest even integer.
+  // Match the pricing calculator: round exact half ties to the nearest even integer.
   const shortAxis = qualityFactor * shortEdge / longEdge;
   const floor = Math.floor(shortAxis);
   const shortAxisFactor = shortAxis - floor === 0.5 ? floor + floor % 2 : Math.round(shortAxis);
@@ -279,9 +253,7 @@ function outputPriceRangeUSD(
   return spec.prices?.[token] || null;
 }
 
-// USD for one output image. Where the published price spans a range this menu
-// cannot pick between — for the OpenAI models the aspect ratio, plus the quality
-// tier they choose themselves — take the middle of it and mark it "ca.".
+// Use a priced explicit quality or fall back to the output price range midpoint.
 export function estimatedUSD(
   spec: ModelSpec,
   token: string,
@@ -324,7 +296,6 @@ function priceLabel(spec: ModelSpec, token: string, ratio: string, quality: Imag
   return formatMoneyRange(low, high);
 }
 
-// The resolution picker shows output cost plus the flat input allowance.
 export function resolutionMenuLabel(
   token: string,
   spec: ModelSpec,
@@ -332,17 +303,14 @@ export function resolutionMenuLabel(
   quality: ImageQuality = "auto"
 ): string {
   const label = resolutionLabel(token);
-  // Auto hands the choice to the model, so a figure beside it would read as a
-  // promise. Price it only where Auto is the entire menu (the fixed-size OpenAI
-  // models) and no tier row is there to carry the number. The table still knows
-  // what Auto costs — the budget counter uses it.
+  // Show an Auto price only when there are no explicit resolution tiers. Budget
+  // estimates still use Auto prices.
   if (token === "auto" && spec.imageSizes.length) return label;
   const price = priceLabel(spec, token, ratio, quality);
   return price ? `${label} / ${price}` : label;
 }
 
-// Exact token-based cost is available when the completed event includes the
-// input/output token breakdown and the model has published token rates.
+// Use response token counts when enough usage data and model rates are available.
 export function actualUsageUSD(spec: ModelSpec, usage: ImageUsage): number | null {
   const rates = OPENAI_TOKEN_RATES[spec.id];
   if (!rates) return null;
@@ -359,8 +327,7 @@ export function actualUsageUSD(spec: ModelSpec, usage: ImageUsage): number | nul
   return usd;
 }
 
-// Closest ratio in `options` to `want`, compared in log space so e.g. 2:1 sits
-// midway between 1:1 and 4:1 rather than being pulled toward the wide end.
+// Log distance treats reciprocal changes equally: 2:1 is midway between 1:1 and 4:1.
 export function nearestRatioLabel(want: string, options: string[]): string {
   if (!options.length) return "1:1";
   if (options.includes(want)) return want;
@@ -381,9 +348,7 @@ export function nearestRatioLabel(want: string, options: string[]): string {
   return best;
 }
 
-// Resolve the picker label and provider request framing together. This is the
-// only place that translates a crop's dimensions into a model output shape, so
-// the menu, crop fitting, request and price estimate cannot disagree.
+// Resolve provider framing and its nearest picker label together.
 export function outputFrame(
   spec: ModelSpec,
   tier: string,
@@ -422,8 +387,7 @@ export function outputFrame(
   return { label, ratio: ratioW / ratioH, geminiAspect: label };
 }
 
-// Closest tier `model` supports to `want`. "auto" always survives; an unknown or
-// unsupported token lands on the nearest neighbour in TIER_ORDER.
+// Snap known tiers by TIER_ORDER; unknown tokens or tierless models use Auto.
 export function nearestImageSize(want: string, spec: ModelSpec): string {
   if (want === "auto" || !spec.imageSizes.length) return "auto";
   if (spec.imageSizes.includes(want)) return want;

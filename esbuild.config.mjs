@@ -23,8 +23,7 @@ import { cpSync, mkdirSync, rmSync } from "fs";
 
 const watch = process.argv.includes("--watch");
 
-// Assemble the loadable plugin in dist/: static files from public/, plus the
-// bundled index.js. Point the UXP Developer Tool at dist/manifest.json.
+// Load dist/manifest.json in the UXP Developer Tool.
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist", { recursive: true });
 cpSync("public", "dist", { recursive: true });
@@ -38,7 +37,7 @@ const options = {
   format: "iife",
   platform: "browser",
   target: ["es2020"],
-  // Provided by the UXP runtime at load time — must not be bundled.
+  // Photoshop supplies these modules at runtime.
   external: ["photoshop", "uxp"],
   legalComments: "none",
   banner: {

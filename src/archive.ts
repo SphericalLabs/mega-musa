@@ -22,9 +22,7 @@ import type { ActiveArtboard, Bounds } from "./photoshop-bridge";
 
 const { action } = require("photoshop");
 
-// generatorSettings shares one Photoshop property between plugins. A dedicated
-// key keeps Mega Musa's record isolated instead of replacing another plugin's
-// layer metadata.
+// Namespace generatorSettings so writes preserve other plugins' layer metadata.
 export const ARCHIVE_SETTINGS_KEY = "io_sphericals_mega_musa";
 
 export type AssetStorageMode = "original" | "png-srgb" | "jpeg-90";
@@ -99,8 +97,7 @@ export interface GenerationArchive {
   outputWidth: number;
   outputHeight: number;
   createdAt: string;
-  // Stage 2 can add reusable in-file asset pointers without changing the Stage
-  // 1 fields or invalidating records already stored in PSD/PSB files.
+  // Optional asset pointers keep older prompt-only archives readable.
   references?: ArchivedReference[];
   geometry?: ArchivedGenerationGeometry;
 }
@@ -132,8 +129,7 @@ function sameBounds(a: Bounds, b: Bounds): boolean {
   return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
 }
 
-// Checks geometry only: unchanged dimensions cannot prove the content is still
-// in its original position. Never scale, offset or clip the saved rectangle.
+// Unchanged canvas/artboard bounds cannot prove that the content has not moved.
 export function getRecallSelectionBounds(
   geometry: ArchivedGenerationGeometry | undefined,
   documentWidth: number,
@@ -284,8 +280,7 @@ async function readLayerMetadata(docId: number, layerId: number): Promise<unknow
       {}
     );
   } catch {
-    // Most layers have no Mega Musa metadata. Photoshop may report that absence
-    // as a failed property lookup rather than an empty descriptor.
+    // Photoshop may report missing metadata as a failed property lookup.
     return null;
   }
 
@@ -306,8 +301,7 @@ async function readLayerMetadata(docId: number, layerId: number): Promise<unknow
   }
 }
 
-// This runs inside the same executeAsModal operation that creates the layer, so
-// the pixels and their provenance are committed together to the exact layer ID.
+// Called in layer creation's modal scope; metadata failure can leave pixels placed.
 export async function writeLayerGenerationArchive(
   docId: number,
   layerId: number,

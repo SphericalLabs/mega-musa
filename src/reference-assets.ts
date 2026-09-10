@@ -66,8 +66,7 @@ function rotateRight(value: number, count: number): number {
   return (value >>> count) | (value << (32 - count));
 }
 
-// Web Crypto is the fast path. The compact fallback keeps content-addressed
-// deduplication working in older UXP builds that expose no SubtleCrypto.
+// Fall back to local SHA-256 when UXP has no usable SubtleCrypto.
 function sha256Fallback(bytes: Uint8Array): string {
   const state = new Uint32Array([
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -229,8 +228,7 @@ async function getOrCreateAssetPool(doc: any): Promise<any> {
       name: REFERENCE_ASSET_GROUP_NAME,
     });
   } catch (error) {
-    // Do not leave a visible plugin group selected if Photoshop accepts the
-    // layer creation but rejects its metadata.
+    // Hide and lock the new group if metadata creation fails.
     setPoolEditable(group, false);
     throw error;
   }
@@ -246,9 +244,7 @@ function setPoolEditable(group: any, editable: boolean): void {
     }
   }
 
-  // The group and every archived reference keep their own eye disabled. Hiding
-  // only the parent protects the composite but leaves newly placed children
-  // visibly enabled when the archive group is expanded.
+  // Hide each child as well as the group so expanding the archive shows no enabled eyes.
   for (const layer of descendantLayers(group)) {
     try {
       layer.visible = false;
@@ -352,9 +348,8 @@ async function indexAssetLayers(docId: number, group: any): Promise<AssetIndex> 
   return assets;
 }
 
-// Called from placeResult's existing executeAsModal scope. Existing assets are
-// only read and reused. Compression is applied to newly supplied bytes before
-// this function runs, so opening an older document never migrates its archive.
+// Requires the target document and an active modal scope. Reuse existing assets; callers
+// prepare compressed bytes only for new assets.
 export async function archiveReferenceAssetsInActiveDocument(
   docId: number,
   references: RefImage[],
@@ -396,8 +391,7 @@ export async function archiveReferenceAssetsInActiveDocument(
           prepared?.storageMode || reference.archivedStorageMode || "original";
         const bytes = prepared ? base64ToBytes(prepared.base64) : sourceBytes;
         const mimeType = prepared?.mimeType || reference.mimeType;
-        // An untouched older asset is already the smallest possible document
-        // change. Prefer it over creating a newly compressed duplicate.
+        // Reuse an original asset before considering a compressed duplicate.
         const match =
           existing.originalByHash.get(hash) ||
           existing.byStorage.get(storageKey(hash, storageMode));
@@ -463,8 +457,7 @@ export async function archiveReferenceAssetsInActiveDocument(
       } catch (error: any) {
         failures.push(reference.name);
         console.log(`[Mega Musa] could not archive reference “${reference.name}”:`, error?.message || error);
-        // If placement succeeded but metadata did not, keep the orphan harmless
-        // inside the hidden pool. It is intentionally not treated as reusable.
+        // Hide incomplete assets; without metadata they cannot be reused.
         try {
           if (placedLayer) placedLayer.visible = false;
           if (placedLayer && placedLayer.parent?.id !== group.id) {
@@ -490,8 +483,7 @@ export async function archiveReferenceAssetsInActiveDocument(
 
 async function exportEmbeddedReference(layerId: number, hash: string, mimeType: string): Promise<string> {
   const tempFolder = await storage.localFileSystem.getTemporaryFolder();
-  // Export Contents opens Photoshop's Save/overwrite UI when its destination
-  // already exists. A unique temp target keeps Load Settings noninteractive.
+  // Use a fresh temp path so Export Contents does not prompt to overwrite a file.
   const unique = `${Date.now().toString(36)}-${restoreExportSequence++}`;
   const file = await tempFolder.createFile(
     `mega-musa-restore-${hash}-${unique}.${imageExtension(mimeType)}`
@@ -522,9 +514,8 @@ function openDocumentById(docId: number): any | null {
   return Array.from(app.documents || []).find((doc: any) => doc.id === docId) || null;
 }
 
-// Load Settings calls this explicitly. The prompt and ordinary controls are
-// restored before this starts, so missing or modified asset layers only affect
-// the references and are returned as a report instead of blocking the load.
+// Restore references after prompt/settings recall. Report missing or unreadable assets
+// without blocking the other restored settings.
 export async function restoreReferenceAssets(
   docId: number,
   references: ArchivedReference[],

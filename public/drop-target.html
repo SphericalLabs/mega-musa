@@ -24,15 +24,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    /* This page runs in a real system WebView, so prefers-color-scheme here
-       reports the macOS appearance — not Photoshop's Interface theme, which is
-       what the rest of the panel follows. The theme is pushed in over the
-       message bridge instead (see syncDropTheme in src/main.ts) and lands as a
-       class on the root element. Dark is the built-in default: it matches
-       Photoshop's shipping theme and the panel's own fallback, so the page is
-       already right in the common case before the first message arrives. The
-       page itself stays opaque so a WebView backing surface recreated during a
-       panel reflow cannot expose its white initialization color. */
+    /* The panel sends its Photoshop theme through syncDropTheme; WebView media queries
+       follow the OS theme. Keep the page opaque to avoid white flashes during reflow. */
     :root {
       color-scheme: dark;
       --host-background-color: rgb(50,50,50);
@@ -52,9 +45,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
       height: 100%;
       border: 1px dashed rgba(128,128,128,0.65);
       border-radius: 4px;
-      /* The label is an instruction, not a result, so it takes the same medium
-         gray as the panel's own explanatory lines (.muted in index.html) in each
-         theme — it never carries color of its own. */
+      /* Match the panel's explanatory text in the dark and light themes. */
       color: rgb(128,128,128);
       background-color: var(--drop-surface-color);
       pointer-events: none;

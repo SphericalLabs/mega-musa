@@ -18,10 +18,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// UXP's panel runtime does not define TextEncoder / TextDecoder, but fast-png
-// (via iobuffer) constructs them at module load. Provide minimal UTF-8
-// implementations before any consumer runs. This file is imported FIRST in
-// main.ts so the globals exist before fast-png initializes.
+// Import before fast-png: it and iobuffer construct text codecs at module load. These
+// minimal fallbacks cover hosts missing TextEncoder or TextDecoder.
 
 const g: any = globalThis as any;
 

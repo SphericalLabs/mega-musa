@@ -24,22 +24,18 @@ import { formatMoney } from "./currency";
 // Frozen historical rate: never use a future display rate to migrate old totals.
 const LEGACY_USD_CHF = 0.8103;
 
-// A running record of what this panel has cost, kept in localStorage next to the
-// other panel settings. When GPT Image 2 returns usage, the caller supplies the
-// token-based amount; otherwise it supplies the output plus input allowance estimate shown in the
-// resolution menu. Models without compatible published token rates still use
-// that estimate. Description requests share the USD total but count their input
-// images, including estimates when cancellation prevents reading usage.
+// USD totals combine generation and description charges. Callers supply usage costs or
+// estimates; description counters track input images.
 
 export interface Budget {
   usd: number;
-  images: number; // images it could price
-  unpriced: number; // images generated at a tier with no published price
-  cancelled: number; // runs stopped after the request went out — billed, no image
-  imagesAnalyzed: number; // input images in budgeted Describe requests
+  images: number; // Priced generation results.
+  unpriced: number; // Generation results without a usable price.
+  cancelled: number; // Requests canceled after sending, budgeted as potentially billed.
+  imagesAnalyzed: number; // Input images in budgeted Describe requests.
   analysisCancelled: number;
   analysisEstimates: number;
-  since: string; // ISO date of the last reset, or of first use
+  since: string; // ISO date of the last reset or first use.
 }
 
 function num(name: string): number {
@@ -60,7 +56,6 @@ function save(b: Budget): void {
 
 export function loadBudget(): Budget {
   const since = loadSetting("budgetSince", "");
-  // No stored start date means this is the first run — start the clock now.
   if (!since) return resetBudget();
   // A stored zero is already migrated. Keep the old key as a historical backup.
   if (loadSetting("budgetUSD", "") === "") {
@@ -71,8 +66,7 @@ export function loadBudget(): Budget {
     images: num("budgetImages"),
     unpriced: num("budgetUnpriced"),
     cancelled: num("budgetCancelled"),
-    // Old request counts cannot tell us how many images were analyzed.
-    // New keys start at zero without resetting the existing spend or date.
+    // Legacy request counts cannot recover image counts; new counters start at zero.
     imagesAnalyzed: num("budgetImagesAnalyzed"),
     analysisCancelled: num("budgetAnalysisCancelled"),
     analysisEstimates: num("budgetAnalysisEstimates"),
@@ -95,14 +89,8 @@ export function resetBudget(): Budget {
   return fresh;
 }
 
-// `usd` is null when a model/tier has no usable price estimate. Those runs are
-// counted separately rather than added as zero, so the total never implies an
-// unpriced image was free.
-//
-// `cancelled` marks a run the user stopped after its request had already reached
-// the provider: no image landed, but it is billed all the same, so the money goes
-// into the same total. The three counters are disjoint — every run lands in
-// exactly one of them — so they can be read as a breakdown of what was paid for.
+// Generation counters are disjoint. Null prices count as unpriced; cancellations after
+// sending retain any supplied estimate.
 export function addToBudget(usd: number | null, cancelled = false): Budget {
   const b = loadBudget();
   if (usd !== null) b.usd += usd;
@@ -125,9 +113,7 @@ export function addDescriptionToBudget(usd: number, imageCount: number, cancelle
 
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 
-// "4 Aug 2026". UXP ships only part of Intl, so toLocaleDateString can throw, or
-// quietly ignore the options and hand back a numeric month — accept its answer
-// only if a month name actually came out of it, else build the date here.
+// UXP Intl may throw or ignore month formatting; fall back to an English date.
 export function formatDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
@@ -144,10 +130,7 @@ export function formatDate(iso: string): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-// Two halves rather than one string: the panel puts the breakdown on its own
-// line, and a line it can lay out beats a newline the caller would have to talk
-// UXP into honouring. `counts` keeps its brackets — it reads as an aside under
-// the total either way, and nothing else has to know where the split was.
+// Separate fields let UXP lay out the total and breakdown on their own lines.
 export function budgetText(b: Budget): { total: string; counts: string } {
   const analysisDetails: string[] = [];
   if (b.analysisCancelled) analysisDetails.push(`${b.analysisCancelled} canceled`);

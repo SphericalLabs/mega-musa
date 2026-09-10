@@ -37,8 +37,7 @@ function setup(settings = new Map(), fetcher = async () => response(), timeout =
   return { ...module.exports, requests, settings, nextDay() { date = "2026-09-11"; }, timeout() { timedOut(); } };
 }
 
-// USD never requests rates. A fresh non-USD selection uses explicitly labeled
-// USD until the first successful lookup, without changing the saved selection.
+// Show USD until the first rate lookup succeeds; preserve the chosen display currency.
 const usd = setup();
 assert.equal(usd.displayCurrency(), "USD");
 await usd.refreshExchangeRates();
@@ -60,8 +59,7 @@ assert.equal(url.searchParams.get("base"), "USD");
 assert.deepEqual(url.searchParams.get("quotes").split(","), quotes);
 assert.equal(usd.requests[0][1].headers, undefined);
 
-// Switching currencies and restarting reuse today's cache. A new day refreshes
-// even when the provider's latest publication date is still yesterday.
+// Refresh daily even when the provider's publication date has not advanced.
 for (const quote of quotes) {
   usd.setDisplayCurrency(quote);
   await usd.refreshExchangeRates();
@@ -76,7 +74,7 @@ reloaded.nextDay();
 await reloaded.refreshExchangeRates();
 assert.equal(reloaded.requests.length, 1);
 
-// Failures preserve the complete old cache, with no partial or invalid updates.
+// Failed or invalid refreshes must preserve the complete cache.
 const savedCache = JSON.stringify({
   checkedDate: "2026-09-09",
   rates: Object.fromEntries(rows.map((row) => [row.quote, { rate: row.rate, date: row.date }])),
@@ -102,8 +100,7 @@ for (const fetcher of [
   assert.equal(settings.get("nbp.exchangeRates.ecb"), savedCache);
 }
 
-// A stalled request releases the refresh promise and cannot overwrite the cache
-// with a late response. Reopening after a failure can retry immediately.
+// A stalled request must release the refresh lock; late data cannot replace the cache.
 let resolveLate;
 const stalled = setup(new Map(), () => new Promise((resolve) => { resolveLate = resolve; }), true);
 stalled.setDisplayCurrency("CHF");
@@ -119,8 +116,7 @@ const retry = setup(stalled.settings);
 await retry.refreshExchangeRates();
 assert.equal(retry.formatMoney(2), "CHF 3.00");
 
-// UXP can omit AbortController or expose an unusable constructor. Neither case
-// may prevent a GET, and reconnecting must work without restarting Photoshop.
+// Missing or broken AbortController must not prevent requests or later retries.
 for (const Controller of [null, class { constructor() { throw new Error("unsupported"); } }]) {
   const test = setup(new Map(), async (_url, init) => {
     assert.equal(init.method, "GET");
@@ -144,8 +140,7 @@ reconnect.setDisplayCurrency("JPY");
 await reconnect.refreshExchangeRates();
 assert.equal(reconnect.formatMoney(2), "JPY 5.00");
 
-// Corrupt persistence falls back safely. Display changes never touch USD spend
-// or repeat the legacy CHF migration using the newly downloaded rate.
+// Display rates must never rewrite spend or repeat the historical CHF migration.
 const corrupt = setup(new Map([["nbp.exchangeRates.ecb", "broken"], ["nbp.displayCurrency", "unknown"]]));
 assert.equal(corrupt.displayCurrency(), "USD");
 assert.equal(corrupt.formatMoney(1), "USD 1.00");

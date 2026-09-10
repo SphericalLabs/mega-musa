@@ -38,16 +38,14 @@ export interface OpenAIGenerateOptions {
   apiKey: string;
   model: string;
   prompt: string;
-  baseImagePng?: Uint8Array; // omitted => generate from the prompt (+ references) alone
+  baseImagePng?: Uint8Array;
   references: RefImage[];
-  size: string; // exact OpenAI `size` value, e.g. "1024x1024" or "1456x1088"
+  size: string; // Exact pixel dimensions, e.g. "1456x1088".
   quality?: ImageQuality;
   signal?: AbortSignal;
 }
 
-// gpt-image-2 size constraints (from the Images guide): edges are multiples of
-// 16, longest edge <= 3840, total pixels within [655_360, 8_294_400], and the
-// long:short ratio must be <= 3:1.
+// Flexible output limits; dimensions also use a 16px grid and at most a 3:1 ratio.
 const G2_MAX_EDGE = 3840;
 const G2_MIN_PX = 655360;
 const G2_MAX_PX = 8294400;
@@ -96,11 +94,8 @@ function ceil16(n: number): number {
   return Math.max(16, Math.ceil(n / 16) * 16);
 }
 
-// Exact WxH (multiples of 16) at the crop's aspect ratio, sized to the requested
-// resolution tier and clamped to the constraints above. Because gpt-image-2 can
-// output any size, matching it to the crop ratio makes the later cover-fit a
-// pure scale — no zoom, trim or shift. `tier` is "1K"|"2K"|"4K" or undefined
-// (auto => match the source crop's own pixel count).
+// Approximate the crop ratio within the size limits and 16px grid. An omitted tier uses
+// the crop pixel count, clamped to those limits.
 export function gptImage2Size(cropW: number, cropH: number, tier?: string): string {
   const ratio = Math.min(3, Math.max(1 / 3, cropW / cropH));
   let targetPx: number;
@@ -117,12 +112,12 @@ export function gptImage2Size(cropW: number, cropH: number, tier?: string): stri
     w *= k;
     h *= k;
   }
-  // Floor to the 16px grid so we never exceed the edge / pixel ceilings…
+  // Round down to avoid exceeding the edge and pixel ceilings.
   w = floor16(w);
   h = floor16(h);
   if (w / h > 3) w = floor16(h * 3);
   if (h / w > 3) h = floor16(w * 3);
-  // …then nudge back up if flooring dropped us under the pixel floor.
+  // Rounding down may require restoring the minimum pixel area.
   if (w * h < G2_MIN_PX) {
     const k = Math.sqrt(G2_MIN_PX / (w * h));
     w = Math.min(G2_MAX_EDGE, ceil16(w * k));
@@ -216,10 +211,7 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   };
 }
 
-// Calls OpenAI's Images API with the cropped Photoshop region and any references
-// as multipart image[] parts. With no input images at all the edits endpoint is
-// not usable (it requires image[]), so we fall back to /images/generations — a
-// plain JSON text-to-image call. Either way the response is base64 image data.
+// The edits endpoint requires input images; prompt-only requests use generations.
 export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<GenerateResult> {
   const model = openAIModelId(opts.model);
   const textOnly = !opts.baseImagePng && opts.references.length === 0;

@@ -10,8 +10,7 @@ import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
 
-// Bundle the real panel with test-only access to its handlers and input state.
-// Photoshop, the resize WebView and provider responses stay under test control.
+// Test real panel handlers with controlled host, WebView and provider responses.
 const bundle = await build({
   stdin: {
     contents: `${await readFile("src/main.ts", "utf8")}
@@ -128,8 +127,7 @@ function expectIdle({ elements }) {
   }
 }
 
-// Cancel even when fetch ignores its signal or AbortController is unavailable.
-// An old response or error must not overwrite a new description or its controls.
+// Cancel works without AbortController; late responses cannot overwrite a newer run.
 for (const provider of ["openai", "gemini"]) {
   for (const Controller of [AbortController, null]) {
     for (const lateResult of ["success", "error"]) {
@@ -251,7 +249,6 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(test.elements.status.textContent, "Description canceled. Prompt unchanged.");
 }
 
-// A real provider error still reports failure and restores the controls.
 {
   const test = panel();
   const run = test.onDescribe();
@@ -268,7 +265,7 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(test.loadBudget().usd, 0);
 }
 
-// Published rates, cache read/write prices and output reasoning are applied once.
+// Account for cached input and reasoning tokens once.
 {
   const test = panel();
   const rates = {
@@ -297,8 +294,7 @@ for (const lateSelection of ["selection", "error"]) {
   }
 }
 
-// Legacy request counts are not image counts. Start the new counters at zero
-// without clearing any existing spend, generation counts or the reset date.
+// Legacy request counts cannot recover image counts; preserve spend and reset date.
 {
   const settings = new Map(Object.entries({ "nbp.budgetCHF": "1.25", "nbp.budgetImages": "4",
     "nbp.budgetUnpriced": "1", "nbp.budgetCancelled": "2", "nbp.budgetSince": "2026-08-01T12:00:00.000Z",
@@ -344,8 +340,7 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(JSON.stringify(reloaded.loadBudget()), JSON.stringify(reset));
 }
 
-// One Photoshop selection plus nine references is ten described images in one
-// request. Changing the current inputs must not change that request's count.
+// Count the captured selection and nine references, even if live inputs change later.
 for (const provider of ["openai", "gemini"]) {
   for (const canceled of [false, true]) {
     const test = panel(provider, AbortController, {
@@ -399,7 +394,7 @@ for (const provider of ["openai", "gemini"]) {
   }
 }
 
-// Missing or malformed usage estimates and counts every input image.
+// Missing or malformed usage falls back to an estimate for every input image.
 for (const provider of ["openai", "gemini"]) {
   for (const usage of [null, {}, { input_tokens: null, output_tokens: null,
     promptTokenCount: null, candidatesTokenCount: null }]) {

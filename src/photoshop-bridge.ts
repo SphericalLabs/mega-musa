@@ -92,9 +92,8 @@ export interface ImageBuffer {
 
 export interface RegionRead {
   image: ImageBuffer;
-  // Selection coverage (0..255) sized to the crop, present for region edits.
+  // Crop-sized coverage (0..255), present only when withMask is requested.
   mask?: Uint8Array;
-  // Human-readable diagnostics about what was actually read (dims, sel bounds).
   debug: string;
 }
 
@@ -108,8 +107,7 @@ export function selectionNeedsMask(selection: SelectionSnapshot | null): selecti
   if (!selection) return false;
   const width = selection.bounds.right - selection.bounds.left;
   const height = selection.bounds.bottom - selection.bounds.top;
-  // Preserve existing validation for malformed snapshots instead of silently
-  // treating them as fully opaque.
+  // Let mask creation reject malformed snapshots instead of treating them as opaque.
   if (width < 1 || height < 1 || selection.data.length !== width * height) return true;
   for (let i = 0; i < selection.data.length; i++) {
     if (selection.data[i] !== 255) return true;
@@ -159,14 +157,12 @@ async function exactArtboardBounds(docId: number, artboard: any): Promise<Bounds
     console.log("[Mega Musa] could not read exact artboard bounds:", e?.message || e);
   }
 
-  // Older Photoshop descriptors may omit artboardRect. For an artboard layer,
-  // its DOM bounds are the best available fallback.
+  // Fall back to DOM bounds when older descriptors omit artboardRect.
   return boundsFrom(artboard.boundsNoEffects) || boundsFrom(artboard.bounds);
 }
 
-// Resolve Photoshop's active artboard from the selected layer and its parents.
-// Returns null for ordinary, non-artboard documents. In a multi-artboard
-// document, refusing to guess prevents an accidental full-spread generation.
+// Use the selected layer's artboard or the sole artboard. Reject ambiguous targets to
+// avoid generating across the whole spread.
 export async function getActiveArtboard(doc: any, anchorLayerId?: number | null): Promise<ActiveArtboard | null> {
   const artboards: any[] = Array.from(doc.artboards || []);
   if (!artboards.length) return null;
@@ -221,8 +217,6 @@ async function replaceRectSelection(b: Bounds): Promise<void> {
   );
 }
 
-// Replace the current selection with an exact rectangle (document pixels).
-// Used to snap a freely-drawn selection to a chosen aspect ratio.
 export async function setRectSelection(
   b: Bounds,
   docId?: number,
@@ -241,8 +235,7 @@ export async function restoreArchivedSelection(
   geometry: ArchivedGenerationGeometry | undefined
 ): Promise<void> {
   await runModal("restore original rectangle", async () => {
-    // Check after acquiring Photoshop's modal scope, not before waiting for it.
-    // A stale recall panel must never switch documents or alter a new target.
+    // Recheck the recall target after waiting; the selection may have changed.
     const doc = getActiveDoc();
     const layers: any[] = Array.from(doc.activeLayers || []);
     if (doc.id !== docId || layers.length !== 1 || layers[0].id !== layerId) {
@@ -258,9 +251,7 @@ export async function restoreArchivedSelection(
 }
 
 export async function getSelectionBounds(docId?: number): Promise<Bounds | null> {
-  // A selection belongs to a document. Avoid sending Photoshop a `get`
-  // command with an unresolved target when the panel loads, or the final
-  // document closes, while no explicit document was requested.
+  // Avoid an unresolved Photoshop target when no document is open.
   if (!Number.isFinite(docId) && !app.activeDocument) return null;
 
   const documentTarget = Number.isFinite(docId)
@@ -290,9 +281,8 @@ export async function getSelectionBounds(docId?: number): Promise<Bounds | null>
   };
 }
 
-// Read selection coverage into a buffer covering all of `bounds`. Photoshop may
-// return only the non-empty part, so align its source bounds back into the full
-// region and leave everything outside it unselected.
+// Photoshop may return only nonempty selection bounds. Align coverage within the full
+// region and leave the rest unselected.
 async function readSelectionMask(docId: number, bounds: Bounds): Promise<Uint8Array> {
   const selection = await imaging.getSelection({
     documentID: docId,
@@ -351,8 +341,7 @@ async function readSelectionMask(docId: number, bounds: Bounds): Promise<Uint8Ar
   }
 }
 
-// Capture the final placement region before the provider request. Failure is
-// intentionally propagated so no request is billed without a usable fallback.
+// Capture selection coverage before sending; failure must stop the paid request.
 export async function captureSelection(
   docId: number,
   bounds: Bounds,
@@ -383,10 +372,8 @@ export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
     : null;
 }
 
-// Reshape `b` to exactly `targetRatio` (width / height), expanding within the
-// document when possible (so the whole selection stays covered) and shrinking
-// only if expansion would overflow the canvas. Stays centred on `b`. Used so the
-// crop's ratio equals the model's output ratio — then cover-fit adds no trim.
+// Prefer expansion to preserve selection coverage; shrink and reposition to fit the
+// limits. Pixel rounding can slightly change the target ratio.
 export function fitRegionToRatio(b: Bounds, targetRatio: number, limit: Bounds): Bounds {
   let w = b.right - b.left;
   let h = b.bottom - b.top;
@@ -417,9 +404,7 @@ export function fitRegionToRatio(b: Bounds, targetRatio: number, limit: Bounds):
   return { left, top, right: left + w, bottom: top + h };
 }
 
-// Modal step 1: read the flattened pixels inside `bounds`, plus (for region
-// edits) the selection coverage mask, resampled and positioned to line up with
-// the crop exactly — using getSelection's own returned sourceBounds.
+// Read the composite and optional selection coverage in modal scope.
 export async function readRegion(
   docId: number,
   bounds: Bounds,
@@ -430,8 +415,7 @@ export async function readRegion(
   const cropW = bounds.right - bounds.left;
   const cropH = bounds.bottom - bounds.top;
   const longest = Math.max(cropW, cropH);
-  // Request inputs never need a selection mask. Keeping capped reads to that
-  // path avoids making the mask-placement math below operate in two scales.
+  // Masked reads stay full-size so pixel and coverage coordinates align.
   const targetSize =
     !withMask && maxEdge && longest > maxEdge
       ? cropW >= cropH
@@ -481,10 +465,7 @@ export async function readRegion(
   );
 }
 
-// Read a small, proportional preview of one layer. Supplying layerID keeps the
-// thumbnail isolated from the rest of the document composite, while targetSize
-// lets Photoshop use its optimized thumbnail path instead of returning the
-// layer at full resolution.
+// Use layerID to isolate the preview and targetSize to cap the pixel read.
 export async function readLayerThumbnail(
   docId: number,
   layer: any,
@@ -535,12 +516,8 @@ export async function readLayerThumbnail(
   );
 }
 
-// Is this layer already the document's topmost root-level layer? Checking the
-// document list rather than the layer's siblings prevents a topmost child of a
-// group or artboard from being mistaken for the top of the document.
-//
-// Answers false when the stack cannot be read, so an unreadable document leaves
-// the caller's move to decide rather than silently skipping it.
+// Check document roots, since a group's first child is not the document front.
+// Unreadable stacks return false so the caller still attempts the move.
 function isFrontOfDocument(layerId: number): boolean {
   try {
     const rootLayers: any[] = Array.from(app.activeDocument?.layers || []);
@@ -633,9 +610,7 @@ async function renameActiveLayer(name: string): Promise<void> {
   );
 }
 
-// Defensively clear every independent lock on a newly created or duplicated
-// result before positioning or moving it. Repeat this during final stack
-// placement in case Photoshop reports inherited placement state.
+// Clear independent locks, including state inherited during placement.
 function unlockResultLayer(layer: any): void {
   for (const property of [
     "allLocked",
@@ -651,9 +626,7 @@ function unlockResultLayer(layer: any): void {
   }
 }
 
-// Results always belong at the document root, above every group and artboard.
-// Moving before the first root layer also extracts a nested result from its
-// current container. Avoid the move when it is already in the right place.
+// Moving before the first root layer also extracts results from groups and artboards.
 export async function bringResultToDocumentFront(layer: any): Promise<void> {
   unlockResultLayer(layer);
   const layerId = Number(layer?.id);
@@ -684,8 +657,7 @@ async function makeSelectionMask(): Promise<void> {
     ],
     {}
   );
-  // Photoshop creates layer masks linked by default. Keeping that default makes
-  // later Move/Free Transform operations scale the result and mask as one unit.
+  // Keep the default linked mask so later transforms move the result and mask together.
 }
 
 async function loadLayerTransparencyAsSelection(layerId: number): Promise<void> {
@@ -707,9 +679,8 @@ async function loadLayerTransparencyAsSelection(layerId: number): Promise<void> 
   );
 }
 
-// Placement can change Photoshop's live marquee while switching documents or
-// moving the new layer. Rebuild the exact captured 8-bit selection through a
-// temporary layer's transparency, then create the result layer mask from it.
+// Placement can change the live selection. Rebuild captured coverage through a temporary
+// layer's transparency before creating the result mask.
 async function makeLayerMaskFromSnapshot(
   docId: number,
   resultLayerId: number,
@@ -849,10 +820,8 @@ function nextSmartObjectMarker(): string {
   return `__mega_musa_result_${Date.now()}_${smartObjectMarkerSequence}`;
 }
 
-// Embed a normal image file instead of converting a pixel layer to a Smart
-// Object, which makes Photoshop store an internal PSB. The scratch document
-// only establishes the exact outer transform before the embedded image-backed
-// Smart Object is duplicated into the user's document.
+// Embed an image file to avoid an internal PSB. Size its outer transform in a scratch
+// document before duplicating it into the target.
 async function createFileSmartObject(
   targetDocument: any,
   rgba: Uint8Array,
@@ -911,9 +880,7 @@ async function createFileSmartObject(
     if (!embeddedSource) throw new Error("Photoshop did not create the embedded Smart Object.");
     await renameActiveLayer(sourceMarker);
 
-    // Size the document around the embedded Smart Object before copying it.
-    // Image Size changes the Smart Object's outer transform but preserves its
-    // original full-resolution pixels inside the embedded source.
+    // Image Size sets the outer transform while preserving the embedded source pixels.
     if (width !== targetWidth || height !== targetHeight) {
       await batchPlay(
         [
@@ -995,8 +962,7 @@ async function createFileSmartObject(
 }
 
 async function smartObjectBounds(layer: any): Promise<Bounds | null> {
-  // smartObjectMore.transform describes the four transformed source corners and
-  // remains accurate when the source has transparent pixels at an outside edge.
+  // Transformed source corners include transparent margins that pixel bounds can omit.
   try {
     const result = await batchPlay(
       [
@@ -1056,9 +1022,8 @@ async function moveActiveLayer(offsetX: number, offsetY: number): Promise<void> 
   );
 }
 
-// The scratch document already sized the Smart Object to the raster placement
-// rectangle. Only translate it here; Photoshop 2026 can reject Transform while
-// a freshly duplicated Smart Object is still in the placement modal operation.
+// The scratch document already sized the Smart Object. Only translate here; Photoshop
+// can reject Transform during placement.
 async function positionSmartObjectAtBounds(layer: any, target: Bounds): Promise<void> {
   const targetW = target.right - target.left;
   const targetH = target.bottom - target.top;
@@ -1175,10 +1140,8 @@ async function placeRasterFallback(
   return { layer, clip };
 }
 
-// Modal step 2: preserve the provider image at full resolution inside an
-// image-backed Smart Object, pre-size it to the raster-equivalent `bounds` and attach a
-// linked layer mask afterwards when the target shape needs clipping. Any Smart
-// Object failure falls back to raster placement so a paid result is preserved.
+// Try full-resolution Smart Object placement when requested; fall back to raster if it
+// fails. Apply captured selection coverage where clipping is needed.
 export async function placeResult(
   docId: number,
   bounds: Bounds,
@@ -1196,8 +1159,7 @@ export async function placeResult(
   timeoutSeconds: number = DEFAULT_HOST_MODAL_TIMEOUT_SECONDS
 ): Promise<PlacementResult> {
   const historyName = "Mega Musa: place result";
-  // A hard rectangular selection already matches the placed layer's bounds.
-  // Only shape or feathering that hides pixels needs a separate layer mask.
+  // Opaque rectangular coverage needs no separate layer mask.
   const clippingSelection = selectionNeedsMask(selection) ? selection : null;
   return await runModal(
     "place result",
@@ -1284,8 +1246,7 @@ export async function placeResult(
         archive.references = assets.references;
         referenceArchiveFailures = assets.failures.length;
       } catch (e: any) {
-        // Asset storage is provenance, not the paid output. Preserve the result
-        // and still mark this as a Stage 2 record with no reusable pointers.
+        // Preserve the generated result if reference archiving fails.
         archive.references = [];
         referenceArchiveFailures = references.length;
         console.log("[Mega Musa] could not archive reference assets:", e?.message || e);
@@ -1295,14 +1256,11 @@ export async function placeResult(
       try {
         await writeLayerGenerationArchive(docId, layerId, archive);
       } catch (e: any) {
-        // The generated pixels are already placed. A metadata failure should be
-        // visible to the caller, but must not discard a paid result.
+        // Report metadata failure without discarding the placed pixels.
         archiveSaved = false;
         console.log("[Mega Musa] could not save the layer generation archive:", e?.message || e);
       }
-      // Reference archiving temporarily selects and may create other layers.
-      // Reassert the result's final root-level stack position after every
-      // placement-side effect, including creation of the reference archive.
+      // Restore the result to the front after reference archiving changes the stack.
       await bringResultToDocumentFront(resultLayer);
       const placement = {
         clip,
@@ -1320,34 +1278,23 @@ export async function placeResult(
   );
 }
 
-// Longest edge kept for a pasted reference. A 6000px screenshot is slow to
-// PNG-encode in the UXP JS engine and inflates the request body far past what the
-// models actually consume, so oversized pastes are resampled down by Photoshop.
+// Cap pasted references to limit PNG encoding time and request size.
 const PASTE_MAX_EDGE = 2048;
 
 export interface PastedImage extends ImageBuffer {
-  // Size of what was on the clipboard, before any downscale to PASTE_MAX_EDGE.
+  // Clipboard dimensions before any paste downscaling.
   originalWidth: number;
   originalHeight: number;
 }
 
-// Read the system clipboard as pixels by having Photoshop paste it. UXP's own
-// clipboard API is text-only — no version of it documents image support — but
-// Photoshop pastes anything the OS clipboard holds.
-//
-// It pastes into an empty document that is then grown to the pasted layer and
-// trimmed back to it. Success is judged on the pixels that come out, not on a
-// side effect like layer count — a paste can quietly do nothing. Whatever
-// happened along the way is attached to the error, so a failure names the step
-// that failed instead of a generic "nothing on the clipboard".
+// Paste through Photoshop into a scratch document to read clipboard images. Validate
+// returned pixels because a paste can silently do nothing.
 export async function readClipboardImage(lease?: HostModalLease): Promise<PastedImage> {
-  // Creating, modifying and closing documents all need modal scope.
   return await runModal(
     "paste reference",
     async () => {
       const trace: string[] = [];
-      // The user's own document: never closed, never read from. Guards the
-      // closeWithoutSaving below against ever touching their artwork.
+      // Guard scratch cleanup against closing the user's document.
       const userDocId: number | undefined = app.activeDocument?.id;
 
       const scratch = await app.createDocument({
@@ -1359,9 +1306,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         profile: SRGB_PROFILE,
       });
       if (!scratch) throw new Error("Could not create a scratch document for the paste.");
-      // paste follows the active document, so make sure that is the scratch and
-      // not the user's artwork. This is what makes the paste land where we can
-      // read it — without it, the pixels go into whatever the user had open.
+      // Paste targets the active document, so activate the scratch document first.
       try {
         app.activeDocument = scratch;
       } catch (e: any) {
@@ -1382,8 +1327,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
       } catch (e: any) {
         trace.push(`paste: ${e?.message || e}`);
       }
-      // Grow the canvas to wherever the layer landed, then shave the transparent
-      // surround off. Either can fail harmlessly on an empty document.
+      // Reveal and trim the paste; empty documents may reject either operation.
       for (const cmd of [
         { _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } },
         {
@@ -1440,8 +1384,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         const components = imageData.components || 4;
         imageData.dispose();
 
-        // The real test: did any opaque pixel actually arrive? A paste that
-        // silently did nothing leaves a fully transparent document behind.
+        // A silent no-op paste leaves every pixel transparent.
         if (components === 4) {
           let opaque = false;
           for (let i = 3; i < data.length; i += 4) {
@@ -1459,12 +1402,11 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
 
         return { data, width, height, components, originalWidth, originalHeight };
       } finally {
-        // Only ever close a document this function created.
         if (scratch && scratch.id !== userDocId) {
           try {
             await scratch.closeWithoutSaving();
           } catch {
-            /* ignore close failures */
+            /* Scratch cleanup must not discard successfully read pixels. */
           }
         }
       }
@@ -1473,10 +1415,8 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
   );
 }
 
-// Cover-fit `rgba` (srcW x srcH, RGBA) to dstW x dstH with Photoshop's Image Size
-// engine, then read the centered destination crop. Proportions stay constrained,
-// so an unexpected provider ratio can never stretch. The scratch doc is always
-// closed without saving. Throws on failure so the caller can use the JS fallback.
+// Cover-fit through Photoshop's Image Size and read a centered crop. Propagate failures
+// so the caller can use the JavaScript fallback.
 async function scaleViaPhotoshopInModal(
   rgba: Uint8Array,
   srcW: number,
@@ -1561,7 +1501,7 @@ async function scaleViaPhotoshopInModal(
     }
 
     if (comps === 4) return new Uint8Array(raw);
-    // Expand to RGBA with opaque alpha (alpha is reapplied by the mask step).
+    // Use opaque alpha when absent; selection coverage is applied during placement.
     const px = dstW * dstH;
     const rgbaOut = new Uint8Array(px * 4);
     for (let i = 0; i < px; i++) {
@@ -1575,7 +1515,7 @@ async function scaleViaPhotoshopInModal(
     try {
       await scratch.closeWithoutSaving();
     } catch {
-      /* ignore close failures */
+      /* Scratch cleanup must not discard the scaled pixels. */
     }
   }
 }
@@ -1588,9 +1528,7 @@ export async function scaleViaPhotoshop(
   dstH: number,
   lease?: HostModalLease
 ): Promise<Uint8Array> {
-  // Creating and closing the scratch document both modify Photoshop's state, so
-  // they belong inside modal scope alongside the pixel work — outside it,
-  // createDocument is rejected with "make may modify the state of Photoshop".
+  // Scratch document creation and cleanup also require modal scope.
   return await runModal(
     "scale result",
     () => scaleViaPhotoshopInModal(rgba, srcW, srcH, dstW, dstH),

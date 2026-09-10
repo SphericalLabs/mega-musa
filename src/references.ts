@@ -26,18 +26,16 @@ export interface RefImage {
   name: string;
   mimeType: string;
   base64: string;
-  dataUrl: string; // for the thumbnail <img>
+  dataUrl: string;
   thumbnailDataUrl?: string; // PNG fallback for UXP, which cannot preview WebP reliably
-  // Prepared only for a newly queued generation. The visible/reference source
-  // remains untouched so API requests still receive the expected image.
+  // Prepared for document storage only; preview and request source bytes stay unchanged.
   archiveAsset?: {
     mimeType: "image/png" | "image/jpeg";
     base64: string;
     storageMode: "png-srgb" | "jpeg-90";
     lossy: boolean;
   };
-  // Restored references retain the identity of their existing in-document
-  // asset. Reusing them never recompresses or duplicates that asset.
+  // Keep restored asset identity so it can be reused without recompression.
   archivedHash?: string;
   archivedStorageMode?: "original" | "png-srgb" | "jpeg-90";
 }
@@ -49,7 +47,6 @@ const EXT_MIME: Record<string, string> = {
   webp: "image/webp",
 };
 
-// The extensions in the file picker below, spelled for humans.
 export const REF_FORMATS = "PNG, JPEG or WebP";
 
 function mimeForName(name: string): string | null {
@@ -107,8 +104,6 @@ async function entryToRef(entry: any, name: string, mimeType: string): Promise<R
   return { name, mimeType, base64, dataUrl: `data:${mimeType};base64,${base64}` };
 }
 
-// Opens a file picker (multi-select), reads each chosen image, and returns
-// up to `maxCount` reference entries with inline base64 + a data URL preview.
 export async function pickReferenceImages(maxCount: number): Promise<RefImage[]> {
   const fs = storage.localFileSystem;
   const picked = await fs.getFileForOpening({
@@ -125,8 +120,7 @@ export async function pickReferenceImages(maxCount: number): Promise<RefImage[]>
   return out;
 }
 
-// The WebView sends base64 because UXP's message bridge does not transfer
-// ArrayBuffers. Trust the bytes, not the extension or browser-reported MIME.
+// Check bytes because the WebView's filename and reported MIME may be wrong.
 export function referenceImageFromBase64(name: string, base64: string): RefImage | null {
   const mimeType = mimeForBytes(base64ToBytes(base64));
   if (!mimeType) return null;

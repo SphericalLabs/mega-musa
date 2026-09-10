@@ -39,8 +39,7 @@ function pngChunkTypes(bytes) {
 }
 
 const opaque = Uint8Array.of(255, 0, 0, 255, 0, 255, 0, 255);
-// Photoshop UXP has no Node Buffer. Reproduce that runtime explicitly so this
-// test cannot pass merely because it is running under Node.
+// Remove Node's Buffer so the test exercises the UXP encoding fallback.
 const nodeBuffer = globalThis.Buffer;
 globalThis.Buffer = undefined;
 let compact;
@@ -83,7 +82,7 @@ assert.match(main, /loadSetting\("reduceDocumentSize", "0"\)/);
 assert.match(main, /saveSetting\("placeAsSmartObject"/);
 assert.match(main, /saveSetting\("reduceDocumentSize"/);
 const recallStart = main.indexOf("async function onLoadRecallSettings");
-const recallLoader = main.slice(recallStart, main.indexOf("// UXP's DOM does not support", recallStart));
+const recallLoader = main.slice(recallStart, main.indexOf("function clearChildren", recallStart));
 assert.doesNotMatch(recallLoader, /placeAsSmartObject|reduceDocumentSize/);
 assert.doesNotMatch(bridge, /_obj: "newPlacedLayer"/);
 assert.match(bridge, /_obj: "placeEvent"/);

@@ -18,9 +18,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// Minimal ambient typings for the UXP runtime modules we use. These are
-// provided by Photoshop at load time (kept `external` in the bundle), so we
-// only declare the surface this plugin touches. Loosely typed on purpose.
+// Partial, intentionally loose typings for modules supplied by Photoshop at runtime.
 
 interface PhotoshopImageData {
   components: number;

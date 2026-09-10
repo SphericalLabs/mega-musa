@@ -124,9 +124,8 @@ const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 const PROMPT_MIN_HEIGHT = 48;
 const PROMPT_MAX_HEIGHT = 2000;
 const PROMPT_RESIZE_KEY_STEP = 24;
-// This value prevents scaling while remaining finite for the WebView protocol.
-// Browser canvas limits fail safely back to the original file for unusually
-// large references instead of reducing their resolution.
+// Use a high finite cap to preserve archive resolution for normal inputs; failed canvas
+// conversions retain the original bytes.
 const REFERENCE_ARCHIVE_MAX_EDGE = 100000;
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
 const RECALL_THUMBNAIL_MAX_EDGE = 96;
@@ -142,8 +141,7 @@ const COLLAPSIBLE_SECTIONS = [
 
 let refs: RefImage[] = [];
 const pendingReferenceThumbnails = new WeakMap<RefImage, Promise<string>>();
-// An override applies only to one exact document mode/profile/depth state in
-// this panel session. Changing any of those properties creates a new warning.
+// Scope accepted warnings to each document/mode/profile/depth state for this session.
 const acceptedDocumentWarnings = new Set<string>();
 let describing = false;
 let descriptionJob: CancellableJob | null = null;
@@ -321,8 +319,6 @@ function setupPromptResize(): void {
   });
 }
 
-// A cancel is not a failure, so the run's catch has to tell the two apart. The
-// AbortError check covers UXP's fetch rejecting the request itself first.
 function cancelledError(): Error {
   const err: any = new Error("Cancelled.");
   err.nbpCancelled = true;
@@ -337,10 +333,7 @@ function throwIfCancelled(job: CancellableJob): void {
   if (job.cancelRequested) throw cancelledError();
 }
 
-// Best-effort teardown of the in-flight request. UXP's fetch reads `signal`, but
-// AbortController is not guaranteed to exist in every UXP build — where it is
-// missing we simply send no signal, and the run still ends immediately because
-// awaitCancellable settles on its own.
+// awaitCancellable releases the panel even when UXP lacks a usable AbortController.
 function newAbortController(): { signal?: any; abort(): void } {
   const Ctor: any = (globalThis as any).AbortController;
   if (typeof Ctor === "function") {
@@ -353,11 +346,8 @@ function newAbortController(): { signal?: any; abort(): void } {
   return { abort() {} };
 }
 
-// Cancel must free the panel at once, so the run waits on a race between the
-// request and the Cancel button rather than on the request alone. Whichever
-// settles first wins; the loser's later settlement is handled here, so an
-// abandoned request cannot reach the global unhandledrejection hook and overwrite
-// the status the user is reading.
+// Cancel releases the panel immediately. Handle late rejections here so they cannot
+// overwrite status through the global error handler.
 function awaitCancellable<T>(
   job: CancellableJob,
   request: Promise<T>,
@@ -524,8 +514,7 @@ async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> 
     await dialog.showModal({ lockDocumentFocus: true });
     return modalNoticeAction;
   } catch (err: any) {
-    // Escape and the window close button mean Close for blockers and Cancel for
-    // warnings. Neither should create another user-facing error.
+    // Dismissal closes blockers and cancels warnings without reporting an error.
     console.log(`[Mega Musa] ${notice.kind} dialog closed:`, errorMessage(err));
     return "cancel";
   } finally {
@@ -540,9 +529,7 @@ function setStatus(message: string, kind: "info" | "error" | "ok" = "info"): voi
   el.className = kind === "info" ? "" : kind;
 }
 
-// A second, persistent line under the status box. Status text is replaced on
-// every step of a run; the note survives so framing decisions the plugin made on
-// the user's behalf stay readable while the request is in flight and afterwards.
+// Keep framing notes visible while transient status messages change.
 function setNote(message: string): void {
   const el = $("note");
   if (!el) return;
@@ -587,8 +574,7 @@ function placementCoversEntireTarget(
     return false;
   }
   if (!selection) return true;
-  // Bounding boxes alone are insufficient: an ellipse or feathered selection
-  // can touch every target edge while leaving original pixels visible inside it.
+  // Matching bounds do not guarantee full coverage for shaped or feathered selections.
   for (let i = 0; i < selection.data.length; i += 1) {
     if (selection.data[i] !== 255) return false;
   }
@@ -627,7 +613,6 @@ function documentBitsPerChannel(value: any): number | null {
   const numeric = Number(value);
   if (numeric === 1 || numeric === 8 || numeric === 16 || numeric === 32) return numeric;
 
-  // UXP exposes "bitDepth8", "bitDepth16" and "bitDepth32".
   const depth = /^bitDepth(1|8|16|32)$/i.exec(String(value ?? ""));
   if (depth) return Number(depth[1]);
 
@@ -661,7 +646,7 @@ function getDocumentState(doc: any): DocumentState {
   try {
     quickMaskMode = Boolean(doc?.quickMaskMode);
   } catch {
-    /* Quick Mask is unavailable on older hosts. */
+    /* Older hosts may not expose quickMaskMode. */
   }
   return {
     mode,
@@ -778,35 +763,27 @@ async function confirmDocumentColorSpace(state: DocumentState): Promise<boolean>
 
 async function confirmDocumentWarnings(state: DocumentState, coversEntireTarget: boolean): Promise<boolean> {
   if (!(await confirm16BitDocument(state))) return false;
-  // A full, opaque result has no internal boundary against the old pixels. The
-  // color conversion still applies, but there is no seam for it to reveal.
+  // Skip seam warnings for full opaque coverage; color conversion still applies.
   if (!coversEntireTarget && !(await confirmDocumentColorSpace(state))) return false;
   return true;
 }
 
-// Photoshop stops accepting a layer name past 255 characters.
 const MAX_LAYER_NAME = 255;
 const MAX_RECALL_LAYER_NAME_DISPLAY = 50;
 
-// Picker labels carry a release year — "Nano Banana Pro (2025)" — which tells the
-// models apart when choosing one and is just noise once it is on a layer.
 function modelNameWithoutYear(label: string): string {
   return label.replace(/\s*\(\d{4}\)\s*$/, "").replace(/^OpenAI GPT Image /, "GPT Image ");
 }
 
-// Name a result layer after the prompt that produced it, with the settings in
-// brackets at the end, so a stack of results stays readable at a glance. Only an
-// overlong prompt is cut — the bracketed settings are short and always survive.
+// Reserve space for the settings suffix; truncate only the prompt.
 function resultLayerName(prompt: string, details: string[]): string {
-  // A layer name is one line, so a multi-line prompt collapses into one.
   const text = prompt.replace(/\s+/g, " ").trim();
   const suffix = details.length ? ` [${details.join(", ")}]` : "";
   const room = Math.max(1, MAX_LAYER_NAME - suffix.length);
   if (text.length <= room) return `${text}${suffix}`;
-  const clipped = text.slice(0, room - 1); // one character back for the ellipsis
+  const clipped = text.slice(0, room - 1);
   const lastSpace = clipped.lastIndexOf(" ");
-  // Prefer a word boundary, but only a late one — cutting a long prompt back to
-  // its first few words would lose more than ending mid-word does.
+  // Avoid losing most of the prompt just to end at a word boundary.
   const cut = lastSpace > room * 0.6 ? clipped.slice(0, lastSpace) : clipped;
   return `${cut}…${suffix}`;
 }
@@ -878,8 +855,7 @@ function renderGenerationRecall(
   if (generation.resolution) {
     details.push(generation.resolution === "auto" ? "Default resolution" : resolutionLabel(generation.resolution));
   }
-  // Quality is an OpenAI API control. Gemini's stored "auto" value is only an
-  // internal placeholder and must not be presented as a generation setting.
+  // Gemini's stored Auto quality is a placeholder; hide it in recall details.
   if (generation.quality && isOpenAIModel(generation.model)) {
     const requestedQuality = imageQualityLabel(normalizeImageQuality(generation.quality));
     const resolvedQuality = generation.resolvedQuality
@@ -940,8 +916,7 @@ async function refreshGenerationRecall(): Promise<void> {
   const generation = await readLayerGenerationArchive(docId, layerId);
   if (sequence !== recallRefreshSequence) return;
 
-  // A document or layer may have changed while batchPlay was reading. Never
-  // render the old layer's metadata under a newer selection.
+  // Selection can change during the metadata read; discard stale results.
   try {
     const currentDoc = getActiveDoc();
     const currentLayers: any[] = Array.from(currentDoc.activeLayers || []);
@@ -994,8 +969,7 @@ async function setupGenerationRecallTracking(): Promise<void> {
       }
     );
   } catch (err: any) {
-    // Manual refresh on panel show, reference changes and after generation still
-    // works if an older host cannot register notifications.
+    // Manual refreshes still work if host notifications are unavailable.
     console.log("[Mega Musa] could not watch Photoshop input:", err?.message || err);
   }
   scheduleGenerationRecallRefresh();
@@ -1125,7 +1099,6 @@ async function onLoadRecallSettings(): Promise<void> {
   }
 }
 
-// UXP's DOM does not support setting innerHTML — clear by removing children.
 function clearChildren(el: any): void {
   while (el && el.firstChild) el.removeChild(el.firstChild);
 }
@@ -1342,9 +1315,7 @@ function renderThumbs(): void {
           console.log("[Mega Musa] WebP thumbnail failed:", errorMessage(err));
         });
     }
-    // A plain element, not an sp-action-button: Spectrum paints the glyph in the
-    // theme's text colour, which vanished on light references. The badge styles
-    // itself against the thumbnail instead (see .thumb .remove in index.html).
+    // Use a plain badge so its contrast stays independent of the panel theme.
     const remove = document.createElement("div");
     remove.className = "remove";
     remove.title = `Remove ${ref.name}`;
@@ -1423,9 +1394,7 @@ let dropTheme = "";
 let dropBackgroundColor = "";
 let referenceResizeSequence = 0;
 
-// How often the Photoshop theme is re-read. UXP fires no event when the user
-// switches it, so the panel restyles itself through CSS while the WebView would
-// keep painting the old colours until something tells it otherwise.
+// Poll the CSS theme so the separate WebView follows Photoshop theme changes.
 const THEME_POLL_MS = 300;
 
 function safeCount(value: any): number {
@@ -1440,7 +1409,7 @@ function postToDropWebview(message: Record<string, unknown>): boolean {
     webview.postMessage({ channel: DROP_CHANNEL, ...message });
     return true;
   } catch {
-    /* The WebView may still be loading; its ready message retries this. */
+    /* The WebView may be loading; callers handle an unavailable bridge. */
     return false;
   }
 }
@@ -1591,9 +1560,7 @@ async function prepareReferenceArchiveImages(
   if (!reduceDocumentSize) return references;
   const prepared: RefImage[] = [];
   for (const reference of references) {
-    // A reference restored from any existing document archive is immutable.
-    // Its stored bytes and identity are reused even if the global preference is
-    // now different.
+    // Reuse restored assets even when the document-size preference has changed.
     if (reference.archivedHash) {
       prepared.push(reference);
       continue;
@@ -1610,8 +1577,7 @@ async function prepareReferenceArchiveImages(
       let bytes = base64ToBytes(compact.base64);
       const storageMode = compact.mimeType === "image/jpeg" ? "jpeg-90" : "png-srgb";
       bytes = compact.mimeType === "image/jpeg" ? tagJpegAsSrgb(bytes) : tagPngAsSrgb(bytes);
-      // Re-encoding an already compressed JPEG can occasionally grow it. Keep
-      // the exact source bytes when JPEG 90 would not reduce the document.
+      // JPEG re-encoding can increase size; keep the original bytes when it does.
       if (reference.mimeType === "image/jpeg" && bytes.length >= base64ToBytes(reference.base64).length) {
         prepared.push(reference);
         continue;
@@ -1626,7 +1592,6 @@ async function prepareReferenceArchiveImages(
         },
       });
     } catch (error: any) {
-      // Compression is an optimization, not a reason to lose provenance.
       console.log(
         `[Mega Musa] kept original reference “${reference.name}” because compact storage failed:`,
         error?.message || error
@@ -1657,17 +1622,12 @@ function syncDropCapacity(): void {
   postToDropWebview({ type: "capacity", remaining: MAX_REFS - refs.length });
 }
 
-// Photoshop's Interface theme reaches the panel as CSS only, so #themeProbe in
-// index.html restates it as a colour this can read: white under the dark themes,
-// black under the light ones. Everything unexpected — no probe, a runtime without
-// the prefers-color-scheme mapping or without getComputedStyle — counts as dark,
-// Photoshop's default. This runs on a timer, so it must never throw: the panel's
-// global error handler would otherwise overwrite the status line every tick.
+// Read the CSS theme probe: black means light, otherwise dark. Polling must stay
+// nonthrowing so theme failures cannot replace panel status.
 function panelTheme(): "dark" | "light" {
   try {
     const probe = $("themeProbe");
     const color = probe ? String(getComputedStyle(probe).color || "") : "";
-    // Black in any notation means the light-theme rule won.
     return /^(#000(000)?$|rgba?\(\s*0\s*,\s*0\s*,\s*0\b)/.test(color.trim().toLowerCase())
       ? "light"
       : "dark";
@@ -1690,9 +1650,7 @@ function panelBackground(theme: "dark" | "light"): string {
 
 function dropSurface(theme: "dark" | "light", backgroundColor: string): string {
   if (theme === "light") return "rgb(255, 255, 255)";
-  // Spectrum text fields sit about 45 RGB levels below Photoshop's panel
-  // surface in both dark themes and stop at #080808 in the darkest one. Match
-  // that contrast without making the WebView transparent again.
+  // Approximate Spectrum's dark text-field contrast with an opaque surface.
   const rgb = backgroundColor.match(
     /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i
   );
@@ -1709,10 +1667,7 @@ function dropSurface(theme: "dark" | "light", backgroundColor: string): string {
   return `rgb(${fieldChannels.join(", ")})`;
 }
 
-// The drop target is a real system WebView: left alone it follows the macOS
-// appearance rather than Photoshop's theme. Push the panel's theme and exact
-// host background across the bridge so it matches the rest of the panel and
-// remains opaque while its backing surface is moved or resized.
+// Send Photoshop theme colors to the OS WebView; keep its surface opaque during reflow.
 function syncDropTheme(force = false): void {
   const theme = panelTheme();
   const backgroundColor = panelBackground(theme);
@@ -1764,14 +1719,12 @@ function finishDropBatch(batchId: string): void {
 
 function onDropWebviewMessage(event: any): void {
   const webview = $("dropWebview");
-  // The bridge is local-only in the manifest. Checking the exact WebView source
-  // as well prevents another embedded page from injecting image data.
+  // Accept bridge messages only from this panel's drop WebView.
   if (!webview || event.source !== webview) return;
   const message = event.data;
   if (!message || message.channel !== DROP_CHANNEL || typeof message.type !== "string") return;
 
-  // Continue panel scrolling while the cursor is over the separate drop WebView.
-  // Its wheel events arrive through the message bridge instead of bubbling here.
+  // WebView wheel events arrive by message because they cannot bubble into the panel.
   if (message.type === "scroll") {
     const scroll = $("scroll");
     if (scroll && typeof message.deltaY === "number" && Number.isFinite(message.deltaY)) {
@@ -1785,8 +1738,7 @@ function onDropWebviewMessage(event: any): void {
   if (message.type === "ready") {
     dropWebviewReady = true;
     syncDropCapacity();
-    // Forced: a fresh page starts on its built-in default, so it needs the theme
-    // even when nothing has changed since the last time it was sent.
+    // A reloaded page needs the theme even if the panel colors have not changed.
     syncDropTheme(true);
     if (refs.some((ref) => ref.mimeType === "image/webp" && !ref.thumbnailDataUrl)) renderThumbs();
     return;
@@ -1917,15 +1869,9 @@ function setupDropWebview(): void {
     }
     setStatus("Drag-and-drop could not load. Add Files and Paste still work.", "error");
   });
-  // Nothing announces a theme switch, so the panel watches for one itself. The
-  // check is a single getComputedStyle read and only posts when the theme has
-  // actually changed, so it stays idle in the normal case.
   setInterval(() => syncDropTheme(), THEME_POLL_MS);
 }
 
-// Add the clipboard image as a reference. Photoshop performs the paste (see
-// readClipboardImage), so this covers everything it can paste — an image copied
-// in a browser, a file copied in Finder, another app's canvas.
 async function onPasteRef(): Promise<void> {
   if (refs.length >= MAX_REFS) {
     setStatus(`Maximum ${MAX_REFS} reference images.`, "error");
@@ -1952,8 +1898,7 @@ async function onPasteRef(): Promise<void> {
       "ok"
     );
   } catch (err: any) {
-    // The bridge attaches a step-by-step trace to the message; mirror it to the
-    // console too, since the status box is narrow.
+    // Keep the paste trace in the console; the status box is narrow.
     console.log("[Mega Musa] paste failed:", errorMessage(err));
     setStatus("Could not paste: " + errorMessage(err), "error");
   }
@@ -2201,12 +2146,9 @@ async function onGenerate(): Promise<void> {
   }
 
   const spec = modelSpec(model);
-  // The resolution menu is already rebuilt per model, but clamp again here so a
-  // tier this model cannot produce can never reach the API.
+  // Revalidate the resolution in case the picker still holds a stale value.
   const resolution = nearestImageSize($("resolution").value || "auto", spec);
-  // Unticked: the canvas contributes nothing to the request. With no reference
-  // images either, that makes this a plain text-to-image generation which is
-  // still placed into the selection's area and shape.
+  // Disabling canvas input still preserves the selection or target as placement bounds.
   const includeSelection = isChecked($("includeSelection"));
   const placeAsSmartObject = isChecked($("placeAsSmartObject"));
   const reduceDocumentSize = isChecked($("reduceDocumentSize"));
@@ -2416,18 +2358,13 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     }
     const isRegion = !!sel;
 
-    // Region edit: crop to exactly the selection, so the model spends its full
-    // resolution on the detail. No context margin is added around it — how much
-    // surrounding image the model gets to blend into, and how soft the edge is,
-    // are the user's to decide by drawing (and feathering) the selection. In an
-    // artboard document, output framing never escapes the active artboard.
+    // Start from the selection or active target; aspect fitting may expand or shrink it
+    // within the target bounds.
     const baseRegion: Bounds = isRegion ? (sel as Bounds) : targetBounds;
     const baseW = baseRegion.right - baseRegion.left;
     const baseH = baseRegion.bottom - baseRegion.top;
 
-    // Resolve the menu label and exact provider output shape once, then fit the
-    // crop to that shape. An existing selection is not modified, so a lasso,
-    // ellipse or feathered selection still survives as the result's layer mask.
+    // Fit the crop while preserving the existing selection shape for placement.
     const frame = outputFrame(spec, resolution, baseW, baseH);
     const ratioLabel = frame.label;
     const region = fitRegionToRatio(baseRegion, frame.ratio, targetBounds);
@@ -2465,9 +2402,6 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       : tierLongEdge[resolution] || 1024;
     const requestMaxEdge = Math.max(REQUEST_MIN_MAX_EDGE, outputLongEdge);
 
-    // Nothing was selected: use the active artboard, or the full image in a
-    // non-artboard document. Make that framing the live selection so the user
-    // can see exactly which area is in play.
     const notes: string[] = [];
     if (
       isRegion &&
@@ -2481,8 +2415,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       notes.push(`Only the part of the selection inside active artboard “${activeArtboard.name}” is used.`);
     }
     if (!isRegion) {
-      // Cancelled while the document was being read: stop before touching the
-      // user's selection, and before anything has been sent.
+      // Check cancellation before creating a visible selection for the fitted target.
       throwIfCancelled(job);
       await setRectSelection(region, docId, snapshotLease);
       const cropped = cropW !== targetW || cropH !== targetH;
@@ -2529,8 +2462,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
             ? `Reading active artboard “${activeArtboard.name}”…`
             : "Reading full image…"
       );
-      // withMask=false: the selection shape is applied later as a Photoshop layer
-      // mask, so we don't read/resample it here (and leave the selection untouched).
+      // Apply selection coverage during placement, leaving request pixels unmasked.
       const read = await readRegion(docId, region, false, requestMaxEdge, snapshotLease);
       if (Math.max(read.image.width, read.image.height) > requestMaxEdge) {
         throw new Error("Photoshop returned a canvas input larger than the request limit.");
@@ -2566,7 +2498,6 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
         ? "from references"
         : "text-to-image";
     const qualitySuffix = isOpenAIModel(model) ? `, ${imageQualityLabel(quality)} quality` : "";
-    // Last free exit: after this the request is on its way and is billed.
     throwIfCancelled(job);
     await waitForGenerationSlot(job);
     const baseReq = {
@@ -2595,21 +2526,17 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
             imageSize: resolution === "auto" ? undefined : resolution,
             signal: controller.signal,
           });
-      // Prepare one shared full-resolution reference archive while the provider
-      // is working, after the free cancellation/preflight stages are complete.
+      // Prepare the shared reference archive while the provider request is in flight.
       void job.archiveReferences();
       result = await awaitCancellable(job, request, controller);
     } finally {
       releaseGenerationSlot(job);
     }
-    // The image is here and paid for. Cancelling from now on could only throw it
-    // away, so its queue action is disabled while the paid result is placed.
+    // Disable cancellation during placement to preserve the returned image.
     job.cancelInFlight = null;
     updateGenerationJob(job, "placing", "Preparing returned image…");
 
-    // Charged the moment the image comes back, not once it lands on the canvas —
-    // a failure in the scaling or placing below still costs money. GPT Image 2
-    // can replace the preflight estimate with its completed-event usage.
+    // Record cost before decoding or placement; prefer usage data when available.
     const actualCost = result.usage ? actualUsageUSD(spec, result.usage) : null;
     const budgetCharge = actualCost ?? job.sentCharge;
     renderBudget(addToBudget(budgetCharge));
@@ -2645,8 +2572,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     const rgba = toRGBA(decoded.data, decoded.width, decoded.height, decoded.channels);
 
     updateGenerationJob(job, "placing", "Placing result at the top of the document…");
-    // Use the selected resolution tier across providers. For automatic or fixed
-    // sizes, infer the nearest tier from the output's pixel area.
+    // Auto and fixed-size outputs need an inferred tier for the archive and layer label.
     const layerDetails: string[] = [modelNameWithoutYear(spec.label)];
     const outputK = Math.sqrt(decoded.width * decoded.height) / 1024;
     const inferredTier = outputK < Math.SQRT2 ? "1K" : outputK < 2 * Math.SQRT2 ? "2K" : "4K";
@@ -2699,10 +2625,8 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     await completeGenerationPlacement(job);
   } catch (err: any) {
     if (isCancelledError(err)) {
-      // Stopping the wait does not stop the provider: once the request is out it
-      // is generated and billed whether or not the answer is ever collected. So a
-      // cancel from that point on is charged like any other image, at the frozen
-      // estimate — the real usage figure only ever arrives with the response.
+      // Canceling the wait cannot confirm provider cancellation. Budget sent requests at
+      // the frozen estimate because final usage is unavailable.
       if (job.requestSent) {
         renderBudget(addToBudget(job.sentCharge, true));
         setStatus(
@@ -2732,9 +2656,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
   }
 }
 
-// Some Spectrum widgets (sp-picker, sp-slider) expose `value` as a getter only,
-// so assigning to it throws. Set the property when allowed, else fall back to the
-// reflected attribute — and never throw out of settings restore.
+// Some Spectrum value setters throw; fall back to the attribute during restore.
 function setValueSafe(el: any, v: string): void {
   if (!el) return;
   try {
@@ -2746,13 +2668,10 @@ function setValueSafe(el: any, v: string): void {
   try {
     el.setAttribute("value", v);
   } catch {
-    /* ignore */
   }
 }
 
-// sp-checkbox exposes `checked` as a property, but fall back to the reflected
-// attribute (and default to on) so a runtime quirk can never silently turn the
-// canvas input off.
+// Fall back to the checked attribute; missing or unreadable controls default to on.
 function isChecked(el: any): boolean {
   if (!el) return true;
   if (typeof el.checked === "boolean") return el.checked;
@@ -2774,11 +2693,9 @@ function setCheckedSafe(el: any, on: boolean): void {
     if (on) el.setAttribute("checked", "");
     else el.removeAttribute("checked");
   } catch {
-    /* ignore */
   }
 }
 
-// Replace a picker's options wholesale and select `selected`.
 function buildMenu(pickerId: string, options: { value: string; label: string }[], selected: string): void {
   const picker = $(pickerId);
   const menu = picker?.querySelector("sp-menu");
@@ -2795,7 +2712,7 @@ function buildMenu(pickerId: string, options: { value: string; label: string }[]
 }
 
 function buildModelMenu(): void {
-  // Keep the capability table intact while exposing only the requested picker entries.
+  // Retain hidden models in the table for archive recall.
   const visibleModels = MODELS.filter((model) =>
     ["gemini-3-pro-image", "gemini-3.1-flash-image", "openai:gpt-image-2.5-sunburst", "openai:gpt-image-2.5-flare", "openai:gpt-image-2"].includes(model.id)
   );
@@ -2889,12 +2806,8 @@ function refreshResolutionLabels(): void {
   buildResolutionMenu(spec, $("selRatio")?.value || "1:1", $("resolution")?.value || "auto", quality);
 }
 
-// Rebuild the ratio and resolution menus from the picked model's entry in the
-// capability table. A choice the new model also supports is kept; anything else
-// snaps to the nearest thing it can actually do, and the caller gets a sentence
-// explaining the move so it never happens silently.
-// `preferRatio`/`preferSize`/`preferQuality` override what the pickers currently
-// show — used at startup, where stored settings should win over markup defaults.
+// Restore preferred settings and reconcile them with model capabilities. Return notes
+// for adjusted ratio or resolution choices.
 function applyModelCapabilities(
   modelId: string,
   preferRatio?: string,
@@ -2947,19 +2860,16 @@ function hasOption(picker: any, v: string): boolean {
 function setPickerSafe(picker: any, v: string): void {
   if (!picker) return;
   setValueSafe(picker, v);
-  // Ensure the matching menu item reflects as selected.
   try {
     picker.querySelectorAll("sp-menu-item").forEach((item: any) => {
       if (item.getAttribute("value") === v) item.setAttribute("selected", "");
       else item.removeAttribute("selected");
     });
   } catch {
-    /* ignore */
   }
 }
 
-// Manual "Fit selection" — reshape the current selection to the chosen ratio
-// now, so the user can preview the shape. Generate also does this automatically.
+// Fit the live selection explicitly; region generation preserves its original shape.
 async function onFitSelection(): Promise<void> {
   const v = $("selRatio").value || "1:1";
   try {
@@ -2984,8 +2894,6 @@ async function onFitSelection(): Promise<void> {
   }
 }
 
-// "Fit to nearest aspect ratio" — detect the closest official ratio to the
-// current selection, set it in the dropdown, and fit the selection to it.
 async function onFitNearest(): Promise<void> {
   try {
     const doc = getActiveDoc();
@@ -3025,23 +2933,18 @@ async function restoreSettings(): Promise<void> {
   setValueSafe($("geminiApiKey"), await loadApiKey());
   setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
   refreshDescriptionModelSelection();
-  // The model menu is generated from the capability table. Only restore a stored
-  // model the table still lists — one dropped since last session would otherwise
-  // leave the picker blank while still being sent to the API.
+  // Restore only visible model options so stale settings cannot leave the picker blank.
   buildModelMenu();
   const storedModel = loadSetting("model", "");
   if (storedModel && hasOption($("model"), storedModel)) setPickerSafe($("model"), storedModel);
   else if (storedModel) saveSetting("model", "");
-  // Ratio and resolution menus follow from the model, restoring each stored
-  // choice that model supports and snapping the rest.
   applyModelCapabilities(
     $("model").value || DEFAULT_MODEL,
     loadSetting("selRatio", "1:1"),
     loadSetting("resolution", "2K"),
     loadSetting("quality", "low")
   );
-  // Canvas input and Smart Objects default on. Lossy document-size reduction is
-  // opt-in; an existing saved preference still wins over either default.
+  // Lossy document-size reduction is opt-in.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
   refreshResolutionLabels();
   setCheckedSafe($("placeAsSmartObject"), loadSetting("placeAsSmartObject", "1") !== "0");
@@ -3066,7 +2969,6 @@ function persistSettingsHooks(): void {
     saveSetting("selRatio", $("selRatio").value);
     refreshResolutionLabels();
   });
-  // Switching model re-derives which ratios and resolutions are on offer.
   $("model")?.addEventListener("change", () => {
     const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);
     if (note) setStatus(note);
@@ -3089,7 +2991,6 @@ function persistSettingsHooks(): void {
 
 async function init(): Promise<void> {
   try {
-    // Register the panel entrypoint declared in manifest.json.
     entrypoints.setup({
       panels: {
         nbpEditorPanel: {
@@ -3146,9 +3047,7 @@ async function init(): Promise<void> {
       setStatus("Budget counter reset — counting from today.", "ok");
     });
 
-    // The prompt is multiline, so unmodified Return inserts a line break.
-    // Cmd+Return on macOS or Ctrl+Return on Windows fires Generate. Ignore the
-    // shortcut mid-composition so an IME candidate can still be confirmed.
+    // Keep plain Return and IME confirmation for text entry; Cmd/Ctrl+Return generates.
     $("prompt").addEventListener("keydown", (e: KeyboardEvent) => {
       if (e.key !== "Enter" && e.key !== "Return") return;
       if ((e as any).isComposing) return;
@@ -3157,8 +3056,7 @@ async function init(): Promise<void> {
       onGenerate();
     });
 
-    // Cmd/Ctrl+V pastes the clipboard image as a reference — but only outside a
-    // text field, so pasting text into the prompt or a key field still works.
+    // Intercept image paste only outside text fields so normal text paste keeps working.
     document.addEventListener("keydown", (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || (e.key !== "v" && e.key !== "V")) return;
       const tag = String((e.target as any)?.tagName || "").toUpperCase();
@@ -3179,7 +3077,6 @@ async function init(): Promise<void> {
   }
 }
 
-// Surface otherwise-silent errors directly in the panel.
 try {
   const g: any = globalThis as any;
   g.addEventListener?.("unhandledrejection", (e: any) =>
@@ -3189,7 +3086,7 @@ try {
     setStatus("Script error: " + (e?.message || "unknown"), "error")
   );
 } catch {
-  /* no global event target in this runtime */
+  /* Global error hooks may be unavailable in this runtime. */
 }
 
 if (document.readyState === "loading") {

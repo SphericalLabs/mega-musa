@@ -43,7 +43,7 @@ export interface DescriptionModelSpec {
 export const DEFAULT_OPENAI_DESCRIPTION_MODEL = "openai:gpt-5.6-luna:high";
 export const DEFAULT_GEMINI_DESCRIPTION_MODEL = "gemini:gemini-3.7-flash:high";
 
-// Existing rough ranges converted to USD at the former 0.8103 reference rate.
+// Fallback CHF estimates converted to USD at the historical 0.8103 CHF/USD rate.
 export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
   {
     id: "openai:gpt-5.6-luna:none",
@@ -135,9 +135,8 @@ export interface DescriptionUsage {
   serviceTier?: string;
 }
 
-// Standard paid-tier USD prices per million tokens, checked 2026-08-28:
+// USD per million tokens; rate snapshot from 2026-08-28.
 // https://developers.openai.com/api/docs/pricing
-// https://developers.openai.com/api/docs/guides/prompt-caching
 // https://ai.google.dev/gemini-api/docs/pricing
 const DESCRIPTION_TOKEN_RATES: Record<string, { input: number; output: number }> = {
   "gpt-5.6-luna": { input: 0.2, output: 1.2 },
@@ -162,11 +161,11 @@ export function descriptionUsageUSD(
   const writes = usage.cacheWriteInputTokens ?? 0;
   if (![inputTokens, outputTokens, cached, writes].every((n) => Number.isFinite(n) && n >= 0)) return null;
   if (cached + writes > inputTokens) return null;
-  // Both providers discount cache reads by 90%. GPT-5.6 cache writes cost 1.25x.
+  // Cache pricing: https://developers.openai.com/api/docs/guides/prompt-caching
   const input = inputTokens - cached - writes + cached * 0.1 + writes * 1.25;
   const tier = usage.serviceTier;
   const tierMultiplier = tier === "fast" || tier === "priority" ? 2 : tier === "flex" ? 0.5 : 1;
-  // Gemini's published Flash promotion ends after December 2026.
+  // The configured Gemini Flash promotion expires on January 1, 2027.
   const promotionMultiplier = model.model === "gemini-3.7-flash" && at.getTime() >= Date.UTC(2027, 0, 1) ? 2 : 1;
   return ((input * rates.input + outputTokens * rates.output) / 1000000) * tierMultiplier * promotionMultiplier;
 }
