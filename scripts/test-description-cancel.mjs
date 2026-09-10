@@ -262,7 +262,7 @@ for (const lateSelection of ["selection", "error"]) {
   expectIdle(test);
   assert.equal(test.elements.prompt.value, "Original prompt");
   assert.equal(test.elements.undoDescription.disabled, true);
-  assert.match(test.elements.status.textContent, /Description error:.*Provider unavailable/);
+  assert.match(test.elements.status.textContent, /Description error:.*Could not receive a response/);
   assert.equal(test.elements.status.className, "error");
   assert.equal(test.loadBudget().imagesAnalyzed, 0);
   assert.equal(test.loadBudget().chf, 0);

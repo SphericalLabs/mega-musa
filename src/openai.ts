@@ -18,6 +18,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { requestJson, checkOpenAIOutput } from "./errors";
+
 import { base64ToBytes } from "./image-codec";
 import {
   ImageQuality,
@@ -243,17 +245,8 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
   }
   if (opts.signal) requestInit.signal = opts.signal;
 
-  let res: Response;
-  try {
-    res = await fetch(textOnly ? GENERATIONS_ENDPOINT : EDITS_ENDPOINT, requestInit);
-  } catch (err: any) {
-    throw new Error(`OpenAI network request failed before an HTTP response: ${err?.message || err}`);
-  }
-  const json: any = await res.json().catch(() => null);
-  if (!res.ok) {
-    const msg = json?.error?.message || json?.error || `HTTP ${res.status} ${res.statusText}`;
-    throw new Error(String(msg));
-  }
+  const json = await requestJson("OpenAI", textOnly ? GENERATIONS_ENDPOINT : EDITS_ENDPOINT, requestInit);
+  checkOpenAIOutput(json);
 
   const result = resultFromJson(json);
   if (result) return result;

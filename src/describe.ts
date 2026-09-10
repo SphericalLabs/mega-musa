@@ -18,6 +18,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { requestJson, apiError, checkOpenAIOutput, checkGeminiOutput } from "./errors";
+
 import { USD_CHF } from "./models";
 
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
@@ -266,7 +268,7 @@ function openAIOutputText(json: any): string {
       if (content?.type === "output_text" && typeof content.text === "string") {
         pieces.push(content.text);
       } else if (content?.type === "refusal" && content.refusal) {
-        throw new Error(String(content.refusal));
+        throw apiError("OpenAI", { code: "refusal", message: content.refusal });
       }
     }
   }
@@ -306,20 +308,8 @@ async function describeWithOpenAI(opts: DescribeImagesOptions): Promise<Descript
     },
   };
 
-  let response: Response;
-  try {
-    response = await fetch(
-      OPENAI_RESPONSES_ENDPOINT,
-      requestInit(body, { Authorization: `Bearer ${opts.apiKey}` }, opts.signal)
-    );
-  } catch (error: any) {
-    throw new Error(`OpenAI description request failed before an HTTP response: ${error?.message || error}`);
-  }
-
-  const json: any = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(String(json?.error?.message || json?.error || `HTTP ${response.status} ${response.statusText}`));
-  }
+  const json = await requestJson("OpenAI", OPENAI_RESPONSES_ENDPOINT,
+    requestInit(body, { Authorization: `Bearer ${opts.apiKey}` }, opts.signal));
   const rawUsage = json?.usage;
   const usage: DescriptionUsage | undefined = rawUsage
     ? {
@@ -333,6 +323,7 @@ async function describeWithOpenAI(opts: DescribeImagesOptions): Promise<Descript
       }
     : undefined;
   opts.onUsage?.(usage);
+  checkOpenAIOutput(json);
   const text = openAIOutputText(json);
   if (!text) throw new Error("OpenAI returned no image description.");
   return { descriptions: parseDescriptionJson(text, opts.images.length), usage };
@@ -372,20 +363,8 @@ async function describeWithGemini(opts: DescribeImagesOptions): Promise<Descript
     },
   };
 
-  let response: Response;
-  try {
-    response = await fetch(
-      `${GEMINI_MODELS_ENDPOINT}/${encodeURIComponent(opts.model.model)}:generateContent`,
-      requestInit(body, { "x-goog-api-key": opts.apiKey }, opts.signal)
-    );
-  } catch (error: any) {
-    throw new Error(`Gemini description request failed before an HTTP response: ${error?.message || error}`);
-  }
-
-  const json: any = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(String(json?.error?.message || json?.error || `HTTP ${response.status} ${response.statusText}`));
-  }
+  const json = await requestJson("Gemini", `${GEMINI_MODELS_ENDPOINT}/${encodeURIComponent(opts.model.model)}:generateContent`,
+    requestInit(body, { "x-goog-api-key": opts.apiKey }, opts.signal));
   const rawUsage = json?.usageMetadata;
   const candidates = finiteNumber(rawUsage?.candidatesTokenCount);
   const thoughts = finiteNumber(rawUsage?.thoughtsTokenCount);
@@ -400,6 +379,7 @@ async function describeWithGemini(opts: DescribeImagesOptions): Promise<Descript
       }
     : undefined;
   opts.onUsage?.(usage);
+  checkGeminiOutput(json);
   const text = geminiOutputText(json);
   if (!text) {
     const reason = json?.promptFeedback?.blockReason || json?.candidates?.[0]?.finishReason;

@@ -19,6 +19,7 @@
  */
 
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
+import { errorMessage } from "./errors";
 import {
   getActiveDoc,
   getActiveArtboard,
@@ -522,7 +523,7 @@ async function showModalNotice(notice: ModalNotice): Promise<ModalNoticeAction> 
   } catch (err: any) {
     // Escape and the window close button mean Close for blockers and Cancel for
     // warnings. Neither should create another user-facing error.
-    console.log(`[Mega Musa] ${notice.kind} dialog closed:`, err?.message || String(err));
+    console.log(`[Mega Musa] ${notice.kind} dialog closed:`, errorMessage(err));
     return "cancel";
   } finally {
     modalNoticeOpen = false;
@@ -1008,7 +1009,7 @@ async function onCopyRecallPrompt(): Promise<void> {
     }
     setStatus("Generation prompt copied to the clipboard.", "ok");
   } catch (err: any) {
-    const message = err?.message || String(err);
+    const message = errorMessage(err);
     setStatus(
       /manifest version|clipboard access not supported/i.test(message)
         ? "Photoshop is still using Mega Musa’s old manifest. Remove the plugin from UXP Developer Tool, add dist/manifest.json again, then reload it."
@@ -1029,7 +1030,7 @@ async function onRestoreRecallSelection(): Promise<void> {
     scheduleDescriptionInputRefresh();
     setStatus("Original rectangle restored at its saved coordinates. Check the selection before generating.", "ok");
   } catch (err: any) {
-    setStatus("Original rectangle wasn't restored. " + (err?.message || String(err)), "error");
+    setStatus("Original rectangle wasn't restored. " + errorMessage(err), "error");
   } finally {
     restoringRecallSelection = false;
     $("restoreRecallSelection").disabled = !selectedRecall?.generation.geometry;
@@ -1111,7 +1112,7 @@ async function onLoadRecallSettings(): Promise<void> {
       [
         "Generation prompt and available settings loaded.",
         ...messages,
-        "Embedded references could not be restored: " + (err?.message || String(err)),
+        "Embedded references could not be restored: " + errorMessage(err),
       ].join(" "),
       "error"
     );
@@ -1331,7 +1332,7 @@ function renderThumbs(): void {
           img.src = dataUrl;
         })
         .catch((err: any) => {
-          console.log("[Mega Musa] WebP thumbnail failed:", err?.message || String(err));
+          console.log("[Mega Musa] WebP thumbnail failed:", errorMessage(err));
         });
     }
     // A plain element, not an sp-action-button: Spectrum paints the glyph in the
@@ -1367,7 +1368,7 @@ async function onAddRefs(): Promise<void> {
       renderThumbs();
     }
   } catch (err: any) {
-    setStatus("Could not load references: " + (err?.message || String(err)), "error");
+    setStatus("Could not load references: " + errorMessage(err), "error");
   }
 }
 
@@ -1934,8 +1935,8 @@ async function onPasteRef(): Promise<void> {
   } catch (err: any) {
     // The bridge attaches a step-by-step trace to the message; mirror it to the
     // console too, since the status box is narrow.
-    console.log("[Mega Musa] paste failed:", err?.message || String(err));
-    setStatus("Could not paste: " + (err?.message || String(err)), "error");
+    console.log("[Mega Musa] paste failed:", errorMessage(err));
+    setStatus("Could not paste: " + errorMessage(err), "error");
   }
 }
 
@@ -2101,7 +2102,7 @@ async function onDescribe(): Promise<void> {
           (requestSent ? " Final provider billing may differ." : "")
       );
     } else {
-      setStatus("Description error: " + (error?.message || String(error)) + descriptionChargeText(), "error");
+      setStatus("Description error: " + errorMessage(error) + descriptionChargeText(), "error");
     }
   } finally {
     job.cancelInFlight = null;
@@ -2160,7 +2161,7 @@ async function onGenerate(): Promise<void> {
   try {
     expandedPrompts = expandPromptTemplate(promptTemplate, MAX_BRACKET_GENERATION_JOBS);
   } catch (err: any) {
-    setStatus("Prompt expansion error: " + (err?.message || String(err)), "error");
+    setStatus("Prompt expansion error: " + errorMessage(err), "error");
     return;
   }
 
@@ -2176,7 +2177,7 @@ async function onGenerate(): Promise<void> {
       return;
     }
   } catch (err: any) {
-    setStatus("Error: " + (err?.message || String(err)), "error");
+    setStatus("Error: " + errorMessage(err), "error");
     return;
   }
 
@@ -2221,7 +2222,7 @@ async function onGenerate(): Promise<void> {
     for (const jobId of jobIds) pendingGenerationJobIds.delete(jobId);
     updateGenerateControl();
     pumpGenerationSlots();
-    setStatus("Error: " + (err?.message || String(err)), "error");
+    setStatus("Error: " + errorMessage(err), "error");
     return;
   }
   const jobs: GenerationJob[] = expandedPrompts.map((prompt, index) => ({
@@ -2349,7 +2350,7 @@ async function retryGenerationPlacement(job: GenerationJob): Promise<void> {
   try {
     await completeGenerationPlacement(job);
   } catch (error: any) {
-    const message = error?.message || String(error);
+    const message = errorMessage(error);
     if (!preserveTimedOutPlacement(job, error)) {
       job.pendingPlacement = null;
       updateGenerationJob(job, "failed", "Error: " + message);
@@ -2694,7 +2695,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
       }
       removeGenerationJob(job);
     } else {
-      const message = err?.message || String(err);
+      const message = (job.pendingPlacement ? "Image generated, but Photoshop placement failed. " : "") + errorMessage(err);
       if (!preserveTimedOutPlacement(job, err)) {
         job.pendingPlacement = null;
         updateGenerationJob(job, "failed", "Error: " + message);
@@ -2938,7 +2939,7 @@ async function onFitSelection(): Promise<void> {
     await setRectSelection(fitRegionToRatio(targetSelection, rw / rh, limit));
     setStatus(`Selection fitted to ${v} — preview the shape, then Generate.`, "ok");
   } catch (err: any) {
-    setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
+    setStatus("Couldn't fit selection: " + errorMessage(err), "error");
   }
 }
 
@@ -2973,7 +2974,7 @@ async function onFitNearest(): Promise<void> {
     await setRectSelection(fitRegionToRatio(targetSelection, frame.ratio, limit));
     setStatus(`Fitted to nearest ratio: ${frame.label}.`, "ok");
   } catch (err: any) {
-    setStatus("Couldn't fit selection: " + (err?.message || String(err)), "error");
+    setStatus("Couldn't fit selection: " + errorMessage(err), "error");
   }
 }
 
@@ -3061,7 +3062,7 @@ async function init(): Promise<void> {
         refreshDescriptionModelSelection();
         setStatus(apiKey ? "Gemini API key saved securely." : "Gemini API key cleared.", "ok");
       } catch (err: any) {
-        setStatus("Could not save Gemini API key: " + (err?.message || String(err)), "error");
+        setStatus("Could not save Gemini API key: " + errorMessage(err), "error");
       }
     });
     $("saveOpenAIKey").addEventListener("click", async () => {
@@ -3071,7 +3072,7 @@ async function init(): Promise<void> {
         refreshDescriptionModelSelection();
         setStatus(apiKey ? "OpenAI API key saved securely." : "OpenAI API key cleared.", "ok");
       } catch (err: any) {
-        setStatus("Could not save OpenAI API key: " + (err?.message || String(err)), "error");
+        setStatus("Could not save OpenAI API key: " + errorMessage(err), "error");
       }
     });
     $("addRefs").addEventListener("click", onAddRefs);
@@ -3124,7 +3125,7 @@ async function init(): Promise<void> {
     renderBudget();
     setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
   } catch (err: any) {
-    setStatus("Init error: " + (err?.message || String(err)), "error");
+    setStatus("Init error: " + errorMessage(err), "error");
   }
 }
 

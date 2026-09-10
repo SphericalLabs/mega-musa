@@ -18,6 +18,7 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { errorMessage } from "./errors";
 import {
   applyAlphaMask,
   coverResampleRGBA,
@@ -44,6 +45,18 @@ import { deleteMegaMusaTemporaryFile } from "./temp-files";
 const { app, action, constants, core, imaging } = require("photoshop");
 const { storage } = require("uxp");
 const SRGB_PROFILE = "sRGB IEC61966-2.1";
+
+// Photoshop can resolve a batch successfully while individual commands fail.
+async function batchPlay(commands: any[], options: any): Promise<any[]> {
+  try {
+    const results = await action.batchPlay(commands, options);
+    const failure = results.find((result: any) => result?._obj === "error");
+    if (failure) throw new Error(errorMessage(failure));
+    return results;
+  } catch (error) {
+    throw new Error(errorMessage(error));
+  }
+}
 
 function runModal<T>(
   commandName: string,
@@ -127,7 +140,7 @@ function boundsFrom(value: any): Bounds | null {
 
 async function exactArtboardBounds(docId: number, artboard: any): Promise<Bounds | null> {
   try {
-    const result = await action.batchPlay(
+    const result = await batchPlay(
       [
         {
           _obj: "get",
@@ -189,7 +202,7 @@ export async function getActiveArtboard(doc: any, anchorLayerId?: number | null)
 
 // Called only inside a modal operation with the intended document active.
 async function replaceRectSelection(b: Bounds): Promise<void> {
-  const result = await action.batchPlay(
+  const result = await batchPlay(
     [
       {
         _obj: "set",
@@ -206,9 +219,6 @@ async function replaceRectSelection(b: Bounds): Promise<void> {
     ],
     {}
   );
-  if (result?.[0]?._obj === "error") {
-    throw new Error(result[0].message || "Photoshop could not restore the rectangular selection.");
-  }
 }
 
 // Replace the current selection with an exact rectangle (document pixels).
@@ -256,7 +266,7 @@ export async function getSelectionBounds(docId?: number): Promise<Bounds | null>
   const documentTarget = Number.isFinite(docId)
     ? { _ref: "document", _id: docId }
     : { _ref: "document", _enum: "ordinal", _value: "targetEnum" };
-  const result = await action.batchPlay(
+  const result = await batchPlay(
     [
       {
         _obj: "get",
@@ -593,7 +603,7 @@ function preciseBoundsFrom(value: any): Bounds | null {
 }
 
 async function selectLayerById(layerId: number): Promise<void> {
-  const result = await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "select",
@@ -604,15 +614,13 @@ async function selectLayerById(layerId: number): Promise<void> {
     ],
     {}
   );
-  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
-  if (actionError) throw new Error(actionError.message || "Photoshop could not select the layer.");
   if (!app.activeDocument?.activeLayers?.some((layer: any) => Number(layer.id) === Number(layerId))) {
     throw new Error("Photoshop did not activate the requested layer.");
   }
 }
 
 async function renameActiveLayer(name: string): Promise<void> {
-  await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "set",
@@ -664,7 +672,7 @@ export async function bringResultToDocumentFront(layer: any): Promise<void> {
 }
 
 async function makeSelectionMask(): Promise<void> {
-  await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "make",
@@ -681,7 +689,7 @@ async function makeSelectionMask(): Promise<void> {
 }
 
 async function loadLayerTransparencyAsSelection(layerId: number): Promise<void> {
-  const result = await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "set",
@@ -697,8 +705,6 @@ async function loadLayerTransparencyAsSelection(layerId: number): Promise<void> 
     ],
     { propagateErrorToDefaultHandler: false }
   );
-  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
-  if (actionError) throw new Error(actionError.message || "Photoshop could not restore the selection.");
 }
 
 // Placement can change Photoshop's live marquee while switching documents or
@@ -717,12 +723,10 @@ async function makeLayerMaskFromSnapshot(
 
   let maskSource: any | null = null;
   try {
-    const makeResult = await action.batchPlay(
+    await batchPlay(
       [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
       { propagateErrorToDefaultHandler: false }
     );
-    const makeError = makeResult?.[0]?._obj === "error" ? makeResult[0] : null;
-    if (makeError) throw new Error(makeError.message || "Photoshop could not prepare the selection mask.");
     maskSource = app.activeDocument?.activeLayers?.[0] || null;
     if (!maskSource) throw new Error("Photoshop did not expose the temporary selection layer.");
 
@@ -777,7 +781,7 @@ async function makeLayerMaskFromSnapshot(
 
 async function restoreSelectionFromMask(): Promise<void> {
   try {
-    await action.batchPlay(
+    await batchPlay(
       [
         {
           _obj: "set",
@@ -795,7 +799,7 @@ async function restoreSelectionFromMask(): Promise<void> {
 }
 
 async function deleteResultLayer(layerId: number): Promise<void> {
-  await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "delete",
@@ -891,7 +895,7 @@ async function createFileSmartObject(
     });
     if (!scratch) throw new Error("Photoshop could not create the Smart Object source document.");
 
-    const placeSourceResult = await action.batchPlay(
+    await batchPlay(
       [
         {
           _obj: "placeEvent",
@@ -903,10 +907,6 @@ async function createFileSmartObject(
       ],
       {}
     );
-    const placeSourceError = placeSourceResult?.[0]?._obj === "error" ? placeSourceResult[0] : null;
-    if (placeSourceError) {
-      throw new Error(placeSourceError.message || "Photoshop could not embed the Smart Object image file.");
-    }
     const embeddedSource = scratch.activeLayers?.[0];
     if (!embeddedSource) throw new Error("Photoshop did not create the embedded Smart Object.");
     await renameActiveLayer(sourceMarker);
@@ -915,7 +915,7 @@ async function createFileSmartObject(
     // Image Size changes the Smart Object's outer transform but preserves its
     // original full-resolution pixels inside the embedded source.
     if (width !== targetWidth || height !== targetHeight) {
-      const resizeResult = await action.batchPlay(
+      await batchPlay(
         [
           {
             _obj: "imageSize",
@@ -928,10 +928,6 @@ async function createFileSmartObject(
         ],
         { propagateErrorToDefaultHandler: false }
       );
-      const resizeError = resizeResult?.[0]?._obj === "error" ? resizeResult[0] : null;
-      if (resizeError) {
-        throw new Error(resizeError.message || "Photoshop could not size the Smart Object source.");
-      }
     }
 
     const sizedSource = scratch.activeLayers?.[0] || embeddedSource;
@@ -1002,7 +998,7 @@ async function smartObjectBounds(layer: any): Promise<Bounds | null> {
   // smartObjectMore.transform describes the four transformed source corners and
   // remains accurate when the source has transparent pixels at an outside edge.
   try {
-    const result = await action.batchPlay(
+    const result = await batchPlay(
       [
         {
           _obj: "get",
@@ -1043,7 +1039,7 @@ async function smartObjectBounds(layer: any): Promise<Bounds | null> {
 }
 
 async function moveActiveLayer(offsetX: number, offsetY: number): Promise<void> {
-  const result = await action.batchPlay(
+  await batchPlay(
     [
       {
         _obj: "move",
@@ -1058,8 +1054,6 @@ async function moveActiveLayer(offsetX: number, offsetY: number): Promise<void> 
     ],
     { propagateErrorToDefaultHandler: false }
   );
-  const actionError = result?.[0]?._obj === "error" ? result[0] : null;
-  if (actionError) throw new Error(actionError.message || "Photoshop could not position the Smart Object.");
 }
 
 // The scratch document already sized the Smart Object to the raster placement
@@ -1125,7 +1119,7 @@ async function placeRasterFallback(
     }
   }
 
-  await action.batchPlay(
+  await batchPlay(
     [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
     {}
   );
@@ -1374,7 +1368,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         trace.push(`activate: ${e?.message || e}`);
       }
       try {
-        await action.batchPlay(
+        await batchPlay(
           [
             {
               _obj: "paste",
@@ -1403,7 +1397,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         },
       ]) {
         try {
-          await action.batchPlay([cmd], {});
+          await batchPlay([cmd], {});
         } catch (e: any) {
           trace.push(`${cmd._obj}: ${e?.message || e}`);
         }
@@ -1416,7 +1410,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         const longest = Math.max(originalWidth, originalHeight);
         if (longest > PASTE_MAX_EDGE) {
           const k = PASTE_MAX_EDGE / longest;
-          await action.batchPlay(
+          await batchPlay(
             [
               {
                 _obj: "imageSize",
@@ -1526,7 +1520,7 @@ async function scaleViaPhotoshopInModal(
     const targetH = Math.max(dstH, Math.ceil(srcH * scale));
     if (targetW !== srcW || targetH !== srcH) {
       const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
-      await action.batchPlay(
+      await batchPlay(
         [
           {
             _obj: "imageSize",

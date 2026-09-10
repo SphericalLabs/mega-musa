@@ -18,6 +18,8 @@
  * along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { requestJson, checkGeminiOutput } from "./errors";
+
 import { bytesToBase64, base64ToBytes } from "./image-codec";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -146,13 +148,8 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
   };
   if (opts.signal) requestInit.signal = opts.signal;
 
-  const res = await fetch(`${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, requestInit);
-
-  const json: any = await res.json().catch(() => null);
-  if (!res.ok) {
-    const msg = json?.error?.message || `HTTP ${res.status} ${res.statusText}`;
-    throw new Error(msg);
-  }
+  const json = await requestJson("Gemini", `${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, requestInit);
+  checkGeminiOutput(json);
 
   const candidates: any[] = json?.candidates || [];
   for (const cand of candidates) {
