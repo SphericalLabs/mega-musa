@@ -63,7 +63,7 @@ function usageFromApi(value: any): ImageUsage | undefined {
   const quality = value.quality;
   const usage: ImageUsage = {
     quality:
-      quality === "low" || quality === "medium" || quality === "high" || quality === "auto"
+      quality === "low" || quality === "medium" || quality === "high" || quality === "xhigh" || quality === "max" || quality === "auto"
         ? quality
         : undefined,
     inputTokens: finiteNumber(value.input_tokens ?? value.inputTokens),

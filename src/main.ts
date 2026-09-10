@@ -20,6 +20,7 @@
 
 import "./polyfills"; // must be first: defines TextEncoder/TextDecoder for fast-png
 import { errorMessage } from "./errors";
+import { formatMoney, formatMoneyRange } from "./currency";
 import {
   getActiveDoc,
   getActiveArtboard,
@@ -62,8 +63,8 @@ import {
   DEFAULT_OPENAI_DESCRIPTION_MODEL,
   DescriptionModelSpec,
   DescriptionUsage,
-  descriptionUsageCHF,
-  estimatedDescriptionCHF,
+  descriptionUsageUSD,
+  estimatedDescriptionUSD,
 } from "./describe";
 import { formatDescriptions } from "./description-format";
 import { pickReferenceImages, referenceImageFromBase64, REF_FORMATS, RefImage } from "./references";
@@ -73,9 +74,8 @@ import {
   modelSpec,
   resolutionLabel,
   resolutionMenuLabel,
-  estimatedCHF,
-  actualUsageCHF,
-  formatCHF,
+  estimatedTotalUSD,
+  actualUsageUSD,
   nearestImageSize,
   nearestRatioLabel,
   outputFrame,
@@ -2064,13 +2064,13 @@ async function onDescribe(): Promise<void> {
   const recordDescriptionCharge = (usage?: DescriptionUsage) => {
     // A late response after Cancel must not add the same request a second time.
     if (budgetCharge !== null) return;
-    const usageCharge = usage ? descriptionUsageCHF(model, usage) : null;
+    const usageCharge = usage ? descriptionUsageUSD(model, usage) : null;
     usedEstimate = usageCharge === null;
     budgetCharge = usageCharge ?? estimatedCharge;
     renderBudget(addDescriptionToBudget(budgetCharge, inputImageCount, job.cancelRequested, usedEstimate));
   };
   const descriptionChargeText = () => budgetCharge === null ? "" :
-    ` ${usedEstimate ? "Estimate" : "Usage cost"}: ca. CHF ${formatCHF(budgetCharge)} added to the budget.`;
+    ` ${usedEstimate ? "Estimate" : "Usage cost"}: ca. ${formatMoney(budgetCharge)} added to the budget.`;
   descriptionJob = job;
   setDescriptionBusy(true);
   setStatus("Preparing inputs for description…");
@@ -2083,7 +2083,7 @@ async function onDescribe(): Promise<void> {
 
     setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
     inputImageCount = inputs.length;
-    estimatedCharge = estimatedDescriptionCHF(model, inputImageCount);
+    estimatedCharge = estimatedDescriptionUSD(model, inputImageCount);
     requestSent = true;
     const request = describeImages({
       apiKey,
@@ -2582,7 +2582,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
         `Generating ${sizeLabel} @ ${resolution === "auto" ? "default" : resolution}${qualitySuffix} with ${model} — ${modeLabel}…`
       );
       const controller = newAbortController();
-      job.sentCharge = estimatedCHF(spec, resolution, frame.openaiSize, quality);
+      job.sentCharge = estimatedTotalUSD(spec, resolution, frame.openaiSize, quality);
       job.requestSent = true;
       const request = isOpenAIModel(model)
         ? generateOpenAIImage({ ...baseReq, size: frame.openaiSize as string, quality, signal: controller.signal })
@@ -2607,15 +2607,15 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
     // Charged the moment the image comes back, not once it lands on the canvas —
     // a failure in the scaling or placing below still costs money. GPT Image 2
     // can replace the preflight estimate with its completed-event usage.
-    const actualCost = result.usage ? actualUsageCHF(spec, result.usage) : null;
+    const actualCost = result.usage ? actualUsageUSD(spec, result.usage) : null;
     const budgetCharge = actualCost ?? job.sentCharge;
     renderBudget(addToBudget(budgetCharge));
     const resolvedQuality = isOpenAIModel(model) ? result.usage?.quality || quality : undefined;
     const usageDetails: string[] = [];
     if (resolvedQuality) usageDetails.push(`${imageQualityLabel(resolvedQuality)} quality`);
-    if (actualCost !== null) usageDetails.push(`actual ca. CHF ${formatCHF(actualCost)}`);
+    if (actualCost !== null) usageDetails.push(`actual ca. ${formatMoney(actualCost)}`);
     else if (isOpenAIModel(model) && job.sentCharge !== null) {
-      usageDetails.push(`estimate ca. CHF ${formatCHF(job.sentCharge)}`);
+      usageDetails.push(`estimate ca. ${formatMoney(job.sentCharge)}`);
     }
     if (usageDetails.length) {
       setGenerationNote(job, [notes.join(" "), usageDetails.join("; ")].filter(Boolean).join(" "));
@@ -2705,7 +2705,7 @@ async function runGenerationJob(job: GenerationJob): Promise<void> {
         setStatus(
           job.sentCharge === null
             ? "Canceled — the request was already sent, so it counts as billed. This tier has no published price, so no amount was added."
-            : `Canceled — the request was already sent, so it counts as billed: ca. CHF ${formatCHF(job.sentCharge)} added to the budget.`
+            : `Canceled — the request was already sent, so it counts as billed: ca. ${formatMoney(job.sentCharge)} added to the budget.`
         );
       } else {
         setStatus("Canceled before anything was sent — nothing was charged.");
@@ -2794,7 +2794,7 @@ function buildMenu(pickerId: string, options: { value: string; label: string }[]
 function buildModelMenu(): void {
   // Keep the capability table intact while exposing only the requested picker entries.
   const visibleModels = MODELS.filter((model) =>
-    ["gemini-3-pro-image", "gemini-3.1-flash-image", "openai:gpt-image-2"].includes(model.id)
+    ["gemini-3-pro-image", "gemini-3.1-flash-image", "openai:gpt-image-2.5-sunburst", "openai:gpt-image-2.5-flare", "openai:gpt-image-2"].includes(model.id)
   );
   buildMenu(
     "model",
@@ -2817,7 +2817,9 @@ function refreshDescriptionModelSelection(): void {
   const selected = storedSpec && descriptionApiKey(storedSpec) ? stored : preferredDescriptionModel();
   buildMenu(
     "describeModel",
-    DESCRIPTION_MODELS.map((model) => ({ value: model.id, label: model.label })),
+    DESCRIPTION_MODELS.map((model) => ({
+      value: model.id, label: `${model.label} (ca. ${formatMoneyRange(...model.estimateRangeUSD)})`,
+    })),
     selected
   );
 }
@@ -2830,10 +2832,17 @@ function buildQualityMenu(modelId: string, selected: string): ImageQuality {
     setValueSafe($("quality"), "auto");
     return "auto";
   }
-  const quality = normalizeImageQuality(selected);
+  const spec = modelSpec(modelId);
+  const options = IMAGE_QUALITY_OPTIONS.filter((option) =>
+    option.value === "auto" || (spec.outputQualityFactors
+      ? spec.outputQualityFactors[option.value] !== undefined
+      : option.value !== "xhigh" && option.value !== "max")
+  );
+  const requested = normalizeImageQuality(selected);
+  const quality = options.some((option) => option.value === requested) ? requested : "high";
   buildMenu(
     "quality",
-    IMAGE_QUALITY_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+    options.map((option) => ({ value: option.value, label: option.label })),
     quality
   );
   saveSetting("quality", quality);
@@ -3017,6 +3026,7 @@ async function restoreSettings(): Promise<void> {
   // Canvas input and Smart Objects default on. Lossy document-size reduction is
   // opt-in; an existing saved preference still wins over either default.
   setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
+  refreshResolutionLabels();
   setCheckedSafe($("placeAsSmartObject"), loadSetting("placeAsSmartObject", "1") !== "0");
   setCheckedSafe($("reduceDocumentSize"), loadSetting("reduceDocumentSize", "0") !== "0");
 }

@@ -72,17 +72,19 @@ export interface RefImage {
   base64: string;
 }
 
-export type ImageQuality = "auto" | "low" | "medium" | "high";
+export type ImageQuality = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export const IMAGE_QUALITY_OPTIONS: ReadonlyArray<{ value: ImageQuality; label: string }> = [
   { value: "auto", label: "Auto" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
+  { value: "xhigh", label: "XHigh" },
+  { value: "max", label: "Max" },
 ];
 
 export function normalizeImageQuality(value: string): ImageQuality {
-  return value === "low" || value === "medium" || value === "high" ? value : "auto";
+  return IMAGE_QUALITY_OPTIONS.find((option) => option.value === value)?.value || "auto";
 }
 
 export function imageQualityLabel(value: ImageQuality): string {

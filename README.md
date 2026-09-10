@@ -13,10 +13,12 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 - Each generated layer stores its complete prompt, generation settings and storage mode in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Reference images are embedded in the document for reuse.
 - **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
 - Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste. References are normalized to sRGB before they are sent.
-- Choose Nano Banana Pro, Nano Banana 2 or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
+- Choose Nano Banana Pro, Nano Banana 2, OpenAI Sunburst, OpenAI Flare or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
 - Queue multiple generations while continuing to edit the controls. Each click freezes its prompt, model, quality, references, Photoshop pixels, selection and destination. Plain Generate clicks allow up to four active jobs, while one brace-expanded prompt can add up to 10. Two provider requests run concurrently; additional jobs wait.
 - Cancel one queued generation from its row or cancel every waiting and running generation with **Cancel All**. A request that has already reached the provider counts as billed and is added to the spend counter.
-- Track image generation and Describe costs in one local CHF total, with separate counts for generated and described images.
+- Sunburst and Flare support Low, Medium, High, XHigh, Max and Auto quality. GPT Image 2 supports up to High. Resolution defaults to 2K and quality to Low; saved preferences take priority.
+- Generation estimates include one flat USD 0.01 overhead for the prompt, all references and canvas input combined, regardless of image count. This is a rough allowance; API-reported token usage replaces the estimate when available.
+- Track image generation and Describe costs in one local USD total displayed in CHF, with separate counts for generated and described images.
 
 ## Requirements
 
@@ -99,6 +101,8 @@ PSD is the safest archival master for Photoshop-specific behavior. Photoshop can
 **Describe Images** adds its cost to the same budget as image generation. The **images described** counter counts each input image: one Photoshop selection plus nine references adds 10, even though they share one API request. No Describe request count is shown. The cost for the whole request is added once, without multiplying it by the image count. Returned usage accounts for input, output, reasoning and cached tokens, including OpenAI cache writes. The calculator uses [OpenAI pricing](https://developers.openai.com/api/docs/pricing) and [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), checked August 28, 2026, with the panel's existing USD-to-CHF reference rate. It assumes paid API usage; free tiers, credits, taxes and account-specific discounts are not detected.
 
 If usage is missing, the budget uses the midpoint of the model's displayed price range per input image and marks those images as estimated. Canceling after sending a request also adds that estimate once; its input images count as described and are marked canceled and estimated. A late response does not add cost or images again or replace the estimate. Canceling during preparation adds nothing. Responses with usable billing information still count if their description text cannot be parsed; transport errors and rejected requests without usage add neither cost nor described images.
+
+All pricing, input allowances and stored budget amounts use USD. CHF conversion happens only for display. On the first update, existing CHF spend is divided by the historical 0.8103 reference rate and saved once as USD, preserving its displayed CHF value, counters and start date. The original CHF storage key remains as a backup; resets and reloads do not repeat the conversion.
 
 The total always shows two decimal places; stored amounts are not rounded. Counts and costs survive a panel reload. **Undo** restores the prompt without refunding usage. **Reset** clears spend, generation counts and description counts together. When upgrading from the old Describe request counter, the counters for described images start at zero because historical input counts were not saved. Existing CHF spend, generation counts and the budget's start date are preserved. This is a local estimate, not the provider's invoice.
 

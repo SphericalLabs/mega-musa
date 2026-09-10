@@ -20,7 +20,6 @@
 
 import { requestJson, apiError, checkOpenAIOutput, checkGeminiOutput } from "./errors";
 
-import { USD_CHF } from "./models";
 
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const GEMINI_MODELS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -37,76 +36,86 @@ export interface DescriptionModelSpec {
   model: string;
   effort: OpenAIReasoningEffort | GeminiThinkingLevel;
   // Midpoint of the single-image menu estimate, used when usage is unavailable.
-  estimatedCHF: number;
+  estimatedUSD: number;
+  estimateRangeUSD: [number, number];
 }
 
 export const DEFAULT_OPENAI_DESCRIPTION_MODEL = "openai:gpt-5.6-luna:high";
 export const DEFAULT_GEMINI_DESCRIPTION_MODEL = "gemini:gemini-3.7-flash:high";
 
+// Existing rough ranges converted to USD at the former 0.8103 reference rate.
 export const DESCRIPTION_MODELS: ReadonlyArray<DescriptionModelSpec> = [
   {
     id: "openai:gpt-5.6-luna:none",
-    label: "OpenAI Luna — Reasoning: None (ca. CHF 0.001–0.002)",
+    label: "OpenAI Luna — Reasoning: None",
+    estimateRangeUSD: [0.001234110823151919, 0.002468221646303838],
     provider: "openai",
     model: "gpt-5.6-luna",
     effort: "none",
-    estimatedCHF: 0.0015,
+    estimatedUSD: 0.0018511662347278786,
   },
   {
     id: DEFAULT_OPENAI_DESCRIPTION_MODEL,
-    label: "OpenAI Luna — Reasoning: High (ca. CHF 0.002–0.01)",
+    label: "OpenAI Luna — Reasoning: High",
+    estimateRangeUSD: [0.002468221646303838, 0.012341108231519191],
     provider: "openai",
     model: "gpt-5.6-luna",
     effort: "high",
-    estimatedCHF: 0.006,
+    estimatedUSD: 0.0074046649389115145,
   },
   {
     id: "openai:gpt-5.6-sol:none",
-    label: "OpenAI Sol — Reasoning: None (ca. CHF 0.01–0.03)",
+    label: "OpenAI Sol — Reasoning: None",
+    estimateRangeUSD: [0.012341108231519191, 0.03702332469455757],
     provider: "openai",
     model: "gpt-5.6-sol",
     effort: "none",
-    estimatedCHF: 0.02,
+    estimatedUSD: 0.024682216463038382,
   },
   {
     id: "openai:gpt-5.6-sol:high",
-    label: "OpenAI Sol — Reasoning: High (ca. CHF 0.03–0.15)",
+    label: "OpenAI Sol — Reasoning: High",
+    estimateRangeUSD: [0.03702332469455757, 0.18511662347278784],
     provider: "openai",
     model: "gpt-5.6-sol",
     effort: "high",
-    estimatedCHF: 0.09,
+    estimatedUSD: 0.11106997408367271,
   },
   {
     id: "gemini:gemini-3.5-flash-lite:minimal",
-    label: "Gemini Flash-Lite — Thinking: Minimal (ca. CHF 0.001–0.002)",
+    label: "Gemini Flash-Lite — Thinking: Minimal",
+    estimateRangeUSD: [0.001234110823151919, 0.002468221646303838],
     provider: "gemini",
     model: "gemini-3.5-flash-lite",
     effort: "minimal",
-    estimatedCHF: 0.0015,
+    estimatedUSD: 0.0018511662347278786,
   },
   {
     id: "gemini:gemini-3.5-flash-lite:high",
-    label: "Gemini Flash-Lite — Thinking: High (ca. CHF 0.003–0.02)",
+    label: "Gemini Flash-Lite — Thinking: High",
+    estimateRangeUSD: [0.0037023324694557573, 0.024682216463038382],
     provider: "gemini",
     model: "gemini-3.5-flash-lite",
     effort: "high",
-    estimatedCHF: 0.0115,
+    estimatedUSD: 0.014192274466247068,
   },
   {
     id: "gemini:gemini-3.7-flash:low",
-    label: "Gemini 3.7 Flash — Thinking: Low (ca. CHF 0.002–0.008)",
+    label: "Gemini 3.7 Flash — Thinking: Low",
+    estimateRangeUSD: [0.002468221646303838, 0.009872886585215353],
     provider: "gemini",
     model: "gemini-3.7-flash",
     effort: "low",
-    estimatedCHF: 0.005,
+    estimatedUSD: 0.0061705541157595955,
   },
   {
     id: DEFAULT_GEMINI_DESCRIPTION_MODEL,
-    label: "Gemini 3.7 Flash — Thinking: High (ca. CHF 0.005–0.03)",
+    label: "Gemini 3.7 Flash — Thinking: High",
+    estimateRangeUSD: [0.0061705541157595955, 0.03702332469455757],
     provider: "gemini",
     model: "gemini-3.7-flash",
     effort: "high",
-    estimatedCHF: 0.0175,
+    estimatedUSD: 0.021596939405158586,
   },
 ];
 
@@ -137,11 +146,11 @@ const DESCRIPTION_TOKEN_RATES: Record<string, { input: number; output: number }>
   "gemini-3.7-flash": { input: 0.75, output: 3.75 },
 };
 
-export function estimatedDescriptionCHF(model: DescriptionModelSpec, imageCount: number): number {
-  return model.estimatedCHF * Math.max(1, imageCount);
+export function estimatedDescriptionUSD(model: DescriptionModelSpec, imageCount: number): number {
+  return model.estimatedUSD * Math.max(1, imageCount);
 }
 
-export function descriptionUsageCHF(
+export function descriptionUsageUSD(
   model: DescriptionModelSpec,
   usage: DescriptionUsage,
   at = new Date()
@@ -159,7 +168,7 @@ export function descriptionUsageCHF(
   const tierMultiplier = tier === "fast" || tier === "priority" ? 2 : tier === "flex" ? 0.5 : 1;
   // Gemini's published Flash promotion ends after December 2026.
   const promotionMultiplier = model.model === "gemini-3.7-flash" && at.getTime() >= Date.UTC(2027, 0, 1) ? 2 : 1;
-  return ((input * rates.input + outputTokens * rates.output) / 1000000) * USD_CHF * tierMultiplier * promotionMultiplier;
+  return ((input * rates.input + outputTokens * rates.output) / 1000000) * tierMultiplier * promotionMultiplier;
 }
 
 export interface DescriptionResult {

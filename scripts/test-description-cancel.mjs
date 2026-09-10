@@ -16,7 +16,7 @@ const bundle = await build({
   stdin: {
     contents: `${await readFile("src/main.ts", "utf8")}
       export { onDescribe, onUndoDescription, updateDescriptionControls, onReferenceResizeMessage, DESCRIPTION_MODELS };
-      export { loadBudget, resetBudget, addToBudget, addDescriptionToBudget, budgetText, descriptionUsageCHF, estimatedDescriptionCHF };
+      export { loadBudget, resetBudget, addToBudget, addDescriptionToBudget, budgetText, descriptionUsageUSD, estimatedDescriptionUSD };
       export function setTestReferences(images) { refs = images; dropWebviewReady = true; }
     `,
     resolveDir: resolve("src"),
@@ -151,7 +151,7 @@ for (const provider of ["openai", "gemini"]) {
       assert.match(test.elements.status.textContent, /Description canceled.*Estimate:.*added to the budget/);
       assert.equal(test.elements.status.className, "");
       const canceledBudget = test.loadBudget();
-      assert.equal(canceledBudget.chf, test.model.estimatedCHF);
+      assert.equal(canceledBudget.usd, test.model.estimatedUSD);
       assert.equal(canceledBudget.imagesAnalyzed, 1);
       assert.equal(canceledBudget.analysisCancelled, 1);
       assert.equal(canceledBudget.analysisEstimates, 1);
@@ -178,8 +178,8 @@ for (const provider of ["openai", "gemini"]) {
       assert.equal(test.elements.status.className, "ok");
       const usageCost = (provider === "openai"
         ? (1675 * 0.2 + 800 * 1.2)
-        : (1550 * 0.3 + 800 * 2.5)) / 1000000 * 0.8103;
-      assert.ok(Math.abs(test.loadBudget().chf - canceledBudget.chf - usageCost) < 1e-12);
+        : (1550 * 0.3 + 800 * 2.5)) / 1000000;
+      assert.ok(Math.abs(test.loadBudget().usd - canceledBudget.usd - usageCost) < 1e-12);
       assert.equal(test.loadBudget().imagesAnalyzed, 2);
       assert.equal(test.loadBudget().analysisEstimates, 1);
       assert.match(test.elements.budgetCounts.textContent, /0 images, 2 images described \(1 canceled, 1 estimated\)/);
@@ -220,7 +220,7 @@ for (const provider of ["openai", "gemini"]) {
   assert.equal(test.requests.length, 0);
   assert.equal(test.elements.status.textContent, canceledStatus);
   assert.equal(test.loadBudget().imagesAnalyzed, 0);
-  assert.equal(test.loadBudget().chf, 0);
+  assert.equal(test.loadBudget().usd, 0);
 }
 
 // A pending Photoshop selection read must also stop before preparing more inputs.
@@ -265,7 +265,7 @@ for (const lateSelection of ["selection", "error"]) {
   assert.match(test.elements.status.textContent, /Description error:.*Could not receive a response/);
   assert.equal(test.elements.status.className, "error");
   assert.equal(test.loadBudget().imagesAnalyzed, 0);
-  assert.equal(test.loadBudget().chf, 0);
+  assert.equal(test.loadBudget().usd, 0);
 }
 
 // Published rates, cache read/write prices and output reasoning are applied once.
@@ -279,20 +279,20 @@ for (const lateSelection of ["selection", "error"]) {
     const usage = { inputTokens: 2000, cachedInputTokens: 500,
       cacheWriteInputTokens: model.provider === "openai" ? 500 : 0, outputTokens: 800, reasoningTokens: 300 };
     const [input, output] = rates[model.model];
-    const cost = ((model.provider === "openai" ? 1675 : 1550) * input + 800 * output) / 1000000 * 0.8103;
-    assert.ok(Math.abs(test.descriptionUsageCHF(model, usage, new Date("2026-08-28")) - cost) < 1e-12);
-    assert.equal(test.estimatedDescriptionCHF(model, 3), model.estimatedCHF * 3);
+    const cost = ((model.provider === "openai" ? 1675 : 1550) * input + 800 * output) / 1000000;
+    assert.ok(Math.abs(test.descriptionUsageUSD(model, usage, new Date("2026-08-28")) - cost) < 1e-12);
+    assert.equal(test.estimatedDescriptionUSD(model, 3), model.estimatedUSD * 3);
     for (const malformed of [{}, { inputTokens: 20 }, { inputTokens: null, outputTokens: 10 },
       { inputTokens: -1, outputTokens: 10 }, { inputTokens: 20, outputTokens: Infinity },
       { inputTokens: 20, outputTokens: 10, cachedInputTokens: 21 }]) {
-      assert.equal(test.descriptionUsageCHF(model, malformed), null);
+      assert.equal(test.descriptionUsageUSD(model, malformed), null);
     }
     if (model.provider === "openai") {
-      assert.equal(test.descriptionUsageCHF(model, { ...usage, serviceTier: "fast" }), cost * 2);
-      assert.equal(test.descriptionUsageCHF(model, { ...usage, serviceTier: "flex" }), cost * 0.5);
+      assert.equal(test.descriptionUsageUSD(model, { ...usage, serviceTier: "fast" }), cost * 2);
+      assert.equal(test.descriptionUsageUSD(model, { ...usage, serviceTier: "flex" }), cost * 0.5);
     }
     if (model.model === "gemini-3.7-flash") {
-      assert.equal(test.descriptionUsageCHF(model, usage, new Date("2027-01-01")), cost * 2);
+      assert.equal(test.descriptionUsageUSD(model, usage, new Date("2027-01-01")), cost * 2);
     }
   }
 }
@@ -305,6 +305,11 @@ for (const lateSelection of ["selection", "error"]) {
     "nbp.budgetDescriptions": "3", "nbp.budgetDescriptionCancelled": "1", "nbp.budgetDescriptionEstimates": "2" }));
   const test = panel("openai", AbortController, {}, settings);
   const initial = test.loadBudget();
+  assert.ok(Math.abs(initial.usd - 1.25 / 0.8103) < 1e-12);
+  assert.match(test.budgetText(initial).total, /CHF 1\.25$/);
+  assert.equal(settings.get("nbp.budgetCHF"), "1.25", "retain the old CHF total");
+  assert.equal(Number(settings.get("nbp.budgetUSD")), initial.usd);
+  assert.equal(test.loadBudget().usd, initial.usd, "migration must run only once");
   assert.equal(initial.imagesAnalyzed, 0);
   assert.equal(initial.analysisCancelled, 0);
   assert.equal(initial.analysisEstimates, 0);
@@ -314,7 +319,7 @@ for (const lateSelection of ["selection", "error"]) {
   test.addToBudget(0.2);
   test.addDescriptionToBudget(0.0015, 2, true, true);
   const saved = test.loadBudget();
-  assert.ok(Math.abs(saved.chf - 1.45275) < 1e-12);
+  assert.ok(Math.abs(saved.usd - (1.25 / 0.8103 + 0.20275)) < 1e-12);
   assert.equal(saved.images, 5);
   assert.equal(saved.unpriced, 1);
   assert.equal(saved.cancelled, 2);
@@ -324,16 +329,16 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(saved.since, "2026-08-01T12:00:00.000Z");
   const reloaded = panel("openai", AbortController, {}, settings);
   assert.equal(JSON.stringify(reloaded.loadBudget()), JSON.stringify(saved));
-  assert.match(reloaded.budgetText(saved).total, /CHF 1\.45$/);
+  assert.match(reloaded.budgetText(saved).total, /CHF 1\.41$/);
   for (const imagesAnalyzed of [0, 3]) {
     for (const [chf, formatted] of [[0, "0.00"], [0.004, "0.00"], [14.638, "14.64"]]) {
-      const budget = { ...saved, imagesAnalyzed, chf };
+      const budget = { ...saved, imagesAnalyzed, usd: chf / 0.8103 };
       assert.ok(reloaded.budgetText(budget).total.endsWith(`CHF ${formatted}`));
-      assert.equal(budget.chf, chf, "display rounding must preserve the stored amount");
+      assert.equal(budget.usd, chf / 0.8103, "display rounding must preserve the stored amount");
     }
   }
   const reset = reloaded.resetBudget();
-  for (const key of ["chf", "images", "unpriced", "cancelled", "imagesAnalyzed", "analysisCancelled", "analysisEstimates"]) {
+  for (const key of ["usd", "images", "unpriced", "cancelled", "imagesAnalyzed", "analysisCancelled", "analysisEstimates"]) {
     assert.equal(reset[key], 0, `${key} resets with the budget`);
   }
   assert.equal(JSON.stringify(reloaded.loadBudget()), JSON.stringify(reset));
@@ -380,11 +385,11 @@ for (const provider of ["openai", "gemini"]) {
     assert.equal(test.elements.budgetCounts.textContent, canceled
       ? "(0 images, 10 images described (10 canceled, 10 estimated))"
       : "(0 images, 10 images described)");
-    const usageCost = test.descriptionUsageCHF(test.model, {
+    const usageCost = test.descriptionUsageUSD(test.model, {
       inputTokens: 2000, cachedInputTokens: 500,
       cacheWriteInputTokens: provider === "openai" ? 500 : 0, outputTokens: 800,
     });
-    assert.equal(saved.chf, canceled ? test.model.estimatedCHF * 10 : usageCost,
+    assert.equal(saved.usd, canceled ? test.model.estimatedUSD * 10 : usageCost,
       "add the whole request cost once, not once per image");
     if (canceled) {
       test.finishRequest(0, descriptions);
@@ -407,7 +412,7 @@ for (const provider of ["openai", "gemini"]) {
     await flush();
     test.finishRequest(0, ["First image.", "Second image."], usage);
     await finishesPromptly(run);
-    assert.equal(test.loadBudget().chf, test.model.estimatedCHF * 2);
+    assert.equal(test.loadBudget().usd, test.model.estimatedUSD * 2);
     assert.equal(test.loadBudget().imagesAnalyzed, 2);
     assert.equal(test.loadBudget().analysisEstimates, 2);
     assert.match(test.elements.status.textContent, /Estimate:.*added to the budget/);
@@ -426,7 +431,7 @@ for (const provider of ["openai", "gemini"]) {
   assert.equal(test.elements.prompt.value, "Original prompt");
   assert.equal(test.loadBudget().imagesAnalyzed, 1);
   assert.equal(test.loadBudget().analysisEstimates, 0);
-  assert.ok(test.loadBudget().chf > 0);
+  assert.ok(test.loadBudget().usd > 0);
 }
 
 // Rejected HTTP requests cost nothing here; explicit zero usage is not missing.
@@ -438,7 +443,7 @@ for (const provider of ["openai", "gemini"]) {
   test.requests[0].resolve({ ok: false, status: 401, json: async () => ({ error: { message: "Invalid key" } }) });
   await finishesPromptly(rejected);
   assert.equal(test.loadBudget().imagesAnalyzed, 0);
-  assert.equal(test.loadBudget().chf, 0);
+  assert.equal(test.loadBudget().usd, 0);
   const successful = test.onDescribe();
   test.finishResize();
   await flush();
@@ -447,7 +452,7 @@ for (const provider of ["openai", "gemini"]) {
     : { promptTokenCount: 0, candidatesTokenCount: 0, thoughtsTokenCount: 0 });
   await finishesPromptly(successful);
   assert.equal(test.loadBudget().imagesAnalyzed, 1);
-  assert.equal(test.loadBudget().chf, 0);
+  assert.equal(test.loadBudget().usd, 0);
   assert.equal(test.loadBudget().analysisEstimates, 0);
   assert.equal(test.elements.budgetCounts.textContent, "(0 images, 1 image described)");
 }
@@ -463,8 +468,29 @@ for (const provider of ["openai", "gemini"]) {
   test.resetBudget();
   test.finishRequest(0, "Stale description.");
   await flush();
-  assert.equal(test.loadBudget().chf, 0);
+  assert.equal(test.loadBudget().usd, 0);
   assert.equal(test.loadBudget().imagesAnalyzed, 0);
 }
 
 console.log("description tests passed (cancellation, usage pricing, image counts, estimates, shared budget, persistence, reset and Undo)");
+
+// Existing USD (including zero) wins over legacy CHF. All counters survive migration.
+for (const usd of [undefined, "0", "2.5"]) {
+  const settings = new Map(Object.entries({
+    "nbp.budgetCHF": "8.103", "nbp.budgetSince": "2026-08-01T12:00:00.000Z",
+    "nbp.budgetImages": "7", "nbp.budgetImagesAnalyzed": "9",
+    "nbp.budgetAnalysisCancelled": "2", "nbp.budgetAnalysisEstimates": "3",
+  }));
+  if (usd !== undefined) settings.set("nbp.budgetUSD", usd);
+  const test = panel("openai", AbortController, {}, settings);
+  const budget = test.loadBudget();
+  assert.ok(Math.abs(budget.usd - (usd === undefined ? 10 : Number(usd))) < 1e-12);
+  assert.equal(budget.images, 7);
+  assert.equal(budget.imagesAnalyzed, 9);
+  assert.equal(budget.analysisCancelled, 2);
+  assert.equal(budget.analysisEstimates, 3);
+  test.resetBudget();
+  assert.equal(panel("openai", AbortController, {}, settings).loadBudget().usd, 0);
+  assert.equal(settings.get("nbp.budgetCHF"), "8.103");
+}
+console.log("USD migration tests passed (one-time conversion, existing zero, counters and reset).");

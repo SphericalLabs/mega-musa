@@ -19,16 +19,20 @@
  */
 
 import { loadSetting, saveSetting } from "./storage";
+import { formatMoney } from "./currency";
+
+// Frozen historical rate: never use a future display rate to migrate old totals.
+const LEGACY_USD_CHF = 0.8103;
 
 // A running record of what this panel has cost, kept in localStorage next to the
 // other panel settings. When GPT Image 2 returns usage, the caller supplies the
-// token-based amount; otherwise it supplies the output-only estimate shown in the
+// token-based amount; otherwise it supplies the output plus input allowance estimate shown in the
 // resolution menu. Models without compatible published token rates still use
-// that estimate. Description requests share the CHF total but count their input
+// that estimate. Description requests share the USD total but count their input
 // images, including estimates when cancellation prevents reading usage.
 
 export interface Budget {
-  chf: number;
+  usd: number;
   images: number; // images it could price
   unpriced: number; // images generated at a tier with no published price
   cancelled: number; // runs stopped after the request went out — billed, no image
@@ -44,7 +48,7 @@ function num(name: string): number {
 }
 
 function save(b: Budget): void {
-  saveSetting("budgetCHF", String(b.chf));
+  saveSetting("budgetUSD", String(b.usd));
   saveSetting("budgetImages", String(b.images));
   saveSetting("budgetUnpriced", String(b.unpriced));
   saveSetting("budgetCancelled", String(b.cancelled));
@@ -58,8 +62,12 @@ export function loadBudget(): Budget {
   const since = loadSetting("budgetSince", "");
   // No stored start date means this is the first run — start the clock now.
   if (!since) return resetBudget();
+  // A stored zero is already migrated. Keep the old key as a historical backup.
+  if (loadSetting("budgetUSD", "") === "") {
+    saveSetting("budgetUSD", String(num("budgetCHF") / LEGACY_USD_CHF));
+  }
   return {
-    chf: num("budgetCHF"),
+    usd: num("budgetUSD"),
     images: num("budgetImages"),
     unpriced: num("budgetUnpriced"),
     cancelled: num("budgetCancelled"),
@@ -74,7 +82,7 @@ export function loadBudget(): Budget {
 
 export function resetBudget(): Budget {
   const fresh: Budget = {
-    chf: 0,
+    usd: 0,
     images: 0,
     unpriced: 0,
     cancelled: 0,
@@ -87,7 +95,7 @@ export function resetBudget(): Budget {
   return fresh;
 }
 
-// `chf` is null when a model/tier has no usable price estimate. Those runs are
+// `usd` is null when a model/tier has no usable price estimate. Those runs are
 // counted separately rather than added as zero, so the total never implies an
 // unpriced image was free.
 //
@@ -95,19 +103,19 @@ export function resetBudget(): Budget {
 // the provider: no image landed, but it is billed all the same, so the money goes
 // into the same total. The three counters are disjoint — every run lands in
 // exactly one of them — so they can be read as a breakdown of what was paid for.
-export function addToBudget(chf: number | null, cancelled = false): Budget {
+export function addToBudget(usd: number | null, cancelled = false): Budget {
   const b = loadBudget();
-  if (chf !== null) b.chf += chf;
+  if (usd !== null) b.usd += usd;
   if (cancelled) b.cancelled += 1;
-  else if (chf === null) b.unpriced += 1;
+  else if (usd === null) b.unpriced += 1;
   else b.images += 1;
   save(b);
   return b;
 }
 
-export function addDescriptionToBudget(chf: number, imageCount: number, cancelled = false, estimated = false): Budget {
+export function addDescriptionToBudget(usd: number, imageCount: number, cancelled = false, estimated = false): Budget {
   const b = loadBudget();
-  b.chf += chf;
+  b.usd += usd;
   b.imagesAnalyzed += imageCount;
   if (cancelled) b.analysisCancelled += imageCount;
   if (estimated) b.analysisEstimates += imageCount;
@@ -151,7 +159,7 @@ export function budgetText(b: Budget): { total: string; counts: string } {
   if (b.cancelled) counts.push(`${b.cancelled} image requests canceled but billed`);
   return {
     // Round only the display; small description charges retain full precision.
-    total: `Budget spent since ${formatDate(b.since)}: ca. CHF ${b.chf.toFixed(2)}`,
+    total: `Budget spent since ${formatDate(b.since)}: ca. ${formatMoney(b.usd, 2)}`,
     counts: `(${counts.join(", ")})`,
   };
 }
