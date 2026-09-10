@@ -624,7 +624,10 @@ function documentBitsPerChannel(value: any): number | null {
   const numeric = Number(value);
   if (numeric === 1 || numeric === 8 || numeric === 16 || numeric === 32) return numeric;
 
-  // UXP exposes enum values such as "eight", "sixteen" and "thirtyTwo".
+  // UXP exposes "bitDepth8", "bitDepth16" and "bitDepth32".
+  const depth = /^bitDepth(1|8|16|32)$/i.exec(String(value ?? ""));
+  if (depth) return Number(depth[1]);
+
   // Normalize defensively in case a host includes the enum name in the string.
   const token = String(value ?? "").replace(/[\s_.-]/g, "").toUpperCase();
   if (token.includes("THIRTYTWO")) return 32;
