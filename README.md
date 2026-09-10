@@ -111,4 +111,17 @@ Some non-identifying metadata is retained under ZDR either way.
 
 ## License
 
-[GNU GPLv3](LICENSE)
+Mega Musa is licensed under [GNU GPL version 3 only](LICENSE) with an
+additional [Photoshop/UXP linking exception](LICENSE-EXCEPTION) under section 7.
+
+SPDX: `GPL-3.0-only WITH GPL-3.0-linking-exception`
+
+The exception permits linking or combining the plugin with Adobe Photoshop
+and its UXP runtime and distributing the resulting work. The plugin remains
+subject to GPLv3, including its corresponding-source requirements when you
+distribute it. Adobe's components remain subject to Adobe's own license terms;
+the exception does not grant rights to redistribute Adobe software.
+Third-party dependencies retain their own licenses.
+
+Plugin builds include both `LICENSE` and `LICENSE-EXCEPTION`. When distributing
+a packaged build, also provide the corresponding source as required by GPLv3.

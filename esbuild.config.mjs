@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2026 Sphericals
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception
+ * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  *
  * This file is part of Mega Musa.
  *
@@ -27,6 +28,8 @@ const watch = process.argv.includes("--watch");
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist", { recursive: true });
 cpSync("public", "dist", { recursive: true });
+cpSync("LICENSE", "dist/LICENSE");
+cpSync("LICENSE-EXCEPTION", "dist/LICENSE-EXCEPTION");
 
 const options = {
   entryPoints: ["src/main.ts"],
@@ -38,6 +41,9 @@ const options = {
   // Provided by the UXP runtime at load time — must not be bundled.
   external: ["photoshop", "uxp"],
   legalComments: "none",
+  banner: {
+    js: "/*! Mega Musa — Copyright (C) 2026 Sphericals. SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception. See LICENSE and LICENSE-EXCEPTION. */",
+  },
   logLevel: "info",
 };
 
