@@ -110,6 +110,10 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
                aria-label="Resize prompt field">
             <span class="prompt-resize-grip" aria-hidden="true">&#8801;</span>
           </div>
+          <div id="promptHistoryActions" class="row">
+            <sp-action-button id="redoPrompt" quiet size="s" disabled aria-label="Redo prompt change">Redo</sp-action-button>
+            <sp-action-button id="undoPrompt" quiet size="s" disabled aria-label="Undo prompt change">Undo</sp-action-button>
+          </div>
           <div class="muted" style="margin-top:6px;">Press ⌘+Enter (Ctrl+Enter on Windows) to generate.</div>
         </div>
         <div class="row">
@@ -159,7 +163,6 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
           </sp-picker>
           <div id="describeActions" class="row">
             <sp-button id="describe" class="grow" variant="primary" size="s" disabled>Describe</sp-button>
-            <sp-button id="undoDescription" variant="primary" size="s" disabled>Undo</sp-button>
           </div>
         </div>
         <div class="muted">Describe turns the included Photoshop selection and any reference images into a ready-to-edit prompt using the model above. It replaces the current prompt.</div>

@@ -51,6 +51,12 @@ Run `npm test` for the automated suites and `npm run typecheck` for strict TypeS
 3. Enter a prompt. Add references if needed.
 4. Choose the model and settings, then click **Generate**.
 
+### Prompt undo and redo
+
+The small **Undo** and **Redo** buttons below the prompt step through typing, paste, cut, Describe results and prompts loaded with Recall. Each button appears when its action is available. Continuous typing or deletion is grouped until a pause of more than 750 ms, a cursor move or another editing action; complete replacements are separate steps. Editing after Undo starts a new branch and clears Redo.
+
+While the prompt has focus, use **Cmd+Z** on macOS or **Ctrl+Z** on Windows to undo, and **Cmd+Shift+Z** or **Ctrl+Shift+Z** to redo. **Ctrl+Y** also redoes on Windows. The panel owns this text history; undoing prompt text does not alter Photoshop layers, recalled settings, queued generations or usage charges. Describe locks typing, Undo/Redo and **Load Settings** until it finishes or is canceled. History lasts for the panel session, including document switches and hiding/showing the panel, and resets on plugin reload. It retains up to 200 steps with a text-memory budget; a very large prompt still keeps its most recent undo. Cursor and scroll positions are restored where the UXP control exposes them.
+
 ### Prompt expansion
 
 Brace groups add multiple concrete prompts to the existing generation queue. Alternatives expand recursively and combine as a Cartesian product: `a {red, blue} {balloon, car}` produces four prompts.

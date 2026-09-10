@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
+import { panelDocument } from "./test-support.mjs";
 
 // Test real panel handlers with controlled host, WebView and provider responses.
 const bundle = await build({
@@ -15,6 +16,7 @@ const bundle = await build({
     contents: `
       import "./polyfills";
       export { createDescriptionController } from "./panel/description";
+      export { createPromptController } from "./panel/prompt";
       export { createGenerationController } from "./generation/controller";
       export { ReferenceCollection } from "./references/collection";
       export { ReferenceImageProcessor } from "./references/processor";
@@ -52,13 +54,9 @@ async function finishesPromptly(promise) {
 }
 
 function panel(provider = "openai", Controller = AbortController, photoshop = {}, settings = new Map()) {
-  const elements = Object.fromEntries(
-    ["describe", "describeModel", "undoDescription", "prompt", "generate", "includeSelection",
-      "openaiApiKey", "geminiApiKey", "status", "dropWebview", "budgetTotal", "budgetCounts"].map((id) => [id, {
-      value: "", textContent: "", disabled: false, checked: false, attributes: {},
-      setAttribute(name, value) { this.attributes[name] = value; },
-      dispatchEvent() {},
-    }])
+  const { elements, document } = panelDocument(
+    ["describe", "describeModel", "undoPrompt", "redoPrompt", "promptHistoryActions", "prompt", "generate", "includeSelection",
+      "openaiApiKey", "geminiApiKey", "status", "dropWebview", "budgetTotal", "budgetCounts"]
   );
   elements.prompt.value = "Original prompt";
   elements.openaiApiKey.value = elements.geminiApiKey.value = "test-key";
@@ -75,7 +73,7 @@ function panel(provider = "openai", Controller = AbortController, photoshop = {}
       if (name === "uxp") return { storage: {} };
       throw new Error(`Unexpected module: ${name}`);
     },
-    document: { readyState: "loading", getElementById: (id) => elements[id], addEventListener() {} },
+    document,
     localStorage: {
       getItem: (key) => settings.get(key) ?? null,
       setItem: (key, value) => settings.set(key, value),
@@ -88,12 +86,14 @@ function panel(provider = "openai", Controller = AbortController, photoshop = {}
   const queue = new exports.GenerationQueue();
   const processor = new exports.ReferenceImageProcessor(elements.dropWebview.postMessage);
   processor.setReady(true);
-  const description = exports.createDescriptionController({ references, processor, queue,
+  const prompt = exports.createPromptController();
+  prompt.init();
+  const description = exports.createDescriptionController({ references, processor, queue, prompt,
     onBusyChange: () => generation.updateGenerateControl() });
   const generation = exports.createGenerationController({ references, processor, queue,
     workflow: { runGenerationJob() {}, retryGenerationPlacement() {} },
     descriptionBusy: () => description.busy });
-  const api = { ...exports, ...description,
+  const api = { ...exports, ...description, prompt,
     setTestReferences: (images) => references.replace(images),
     onReferenceResizeMessage: (message) => processor.handleMessage(message),
   };
@@ -129,16 +129,16 @@ function panel(provider = "openai", Controller = AbortController, photoshop = {}
 
 function expectBusy({ elements }) {
   assert.equal(elements.describe.textContent, "Cancel");
-  assert.equal(elements.describe.attributes.variant, "warning");
+  assert.equal(elements.describe.getAttribute("variant"), "warning");
   assert.equal(elements.describe.disabled, false);
-  for (const id of ["prompt", "describeModel", "undoDescription", "generate"]) {
+  for (const id of ["prompt", "describeModel", "undoPrompt", "redoPrompt", "generate"]) {
     assert.equal(elements[id].disabled, true, `${id} stays disabled during a description`);
   }
 }
 
 function expectIdle({ elements }) {
   assert.equal(elements.describe.textContent, "Describe");
-  assert.equal(elements.describe.attributes.variant, "primary");
+  assert.equal(elements.describe.getAttribute("variant"), "primary");
   for (const id of ["prompt", "describeModel", "generate"]) {
     assert.equal(elements[id].disabled, false, `${id} is restored after a description`);
   }
@@ -162,7 +162,7 @@ for (const provider of ["openai", "gemini"]) {
       expectIdle(test);
       assert.equal(test.elements.describe.disabled, false);
       assert.equal(test.elements.prompt.value, "Original prompt");
-      assert.equal(test.elements.undoDescription.disabled, true);
+      assert.equal(test.elements.undoPrompt.disabled, true);
       assert.match(test.elements.status.textContent, /Description canceled.*Estimate:.*added to the budget/);
       assert.equal(test.elements.status.className, "");
       const canceledBudget = test.loadBudget();
@@ -189,7 +189,7 @@ for (const provider of ["openai", "gemini"]) {
       await finishesPromptly(second);
       expectIdle(test);
       assert.equal(test.elements.prompt.value, "COMPOSITION: Current description.");
-      assert.equal(test.elements.undoDescription.disabled, false);
+      assert.equal(test.elements.undoPrompt.disabled, false);
       assert.equal(test.elements.status.className, "ok");
       const usageCost = (provider === "openai"
         ? (1675 * 0.2 + 800 * 1.2)
@@ -207,11 +207,47 @@ for (const provider of ["openai", "gemini"]) {
       await finishesPromptly(third);
       test.finishResize();
       await flush();
-      test.onUndoDescription();
+      test.prompt.undo();
       assert.equal(test.elements.prompt.value, "Original prompt");
       assert.deepEqual(test.loadBudget(), completedBudget, "Undo and canceling preparation never undo or add a charge");
     }
   }
+}
+
+// Repeated successful Describe results and manual edits all remain undoable.
+{
+  const test = panel();
+  const first = test.onDescribe();
+  test.finishResize();
+  await flush();
+  test.finishRequest(0, "COMPOSITION: First description.");
+  await finishesPromptly(first);
+  const described = test.elements.prompt.value;
+  const edited = described + " Manual edit.";
+  test.elements.prompt.value = edited;
+  test.elements.prompt.selectionStart = test.elements.prompt.selectionEnd = edited.length;
+  test.elements.prompt.dispatchEvent(new Event("input"));
+  const second = test.onDescribe();
+  expectBusy(test);
+  test.prompt.undo();
+  assert.equal(test.elements.prompt.value, edited, "history is locked while Describe is running");
+  test.finishResize();
+  await flush();
+  test.finishRequest(1, "COMPOSITION: Second description.");
+  await finishesPromptly(second);
+  const secondDescription = test.elements.prompt.value;
+  const charged = test.loadBudget();
+  for (const expected of [edited, described, "Original prompt"]) {
+    test.prompt.undo();
+    assert.equal(test.elements.prompt.value, expected);
+  }
+  for (const expected of [described, edited, secondDescription]) {
+    test.prompt.redo();
+    assert.equal(test.elements.prompt.value, expected);
+  }
+  assert.deepEqual(test.loadBudget(), charged, "text history neither repeats requests nor reverses charges");
+  assert.equal(test.requests.length, 2);
+  test.prompt.dispose();
 }
 
 // Cancel during preparation: no paid request, no next reference and no late status.
@@ -275,7 +311,7 @@ for (const lateSelection of ["selection", "error"]) {
   await finishesPromptly(run);
   expectIdle(test);
   assert.equal(test.elements.prompt.value, "Original prompt");
-  assert.equal(test.elements.undoDescription.disabled, true);
+  assert.equal(test.elements.undoPrompt.disabled, true);
   assert.match(test.elements.status.textContent, /Description error:.*Could not receive a response/);
   assert.equal(test.elements.status.className, "error");
   assert.equal(test.loadBudget().imagesAnalyzed, 0);

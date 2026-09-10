@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { runInNewContext } from "node:vm";
-import { panelDocument } from "./test-support.mjs";
+import { loadModule, panelDocument, flush } from "./test-support.mjs";
+import { readFileSync } from "node:fs";
 
 const bundle = await build({
   entryPoints: { index: "src/main.ts", "drop-target": "src/webview/drop-target.ts" },
@@ -54,4 +55,48 @@ function visit(path, stack = []) {
   visited.add(path);
 }
 for (const path of Object.keys(bundle.metafile.inputs)) visit(path);
+
+// Initialize the real composition root against the current HTML. This catches
+// stale action IDs and verifies that prompt history and Generate coexist.
+{
+  const ids = [...readFileSync("public/index.html", "utf8").matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+  const { document, elements } = panelDocument(ids);
+  const timers = new Map();
+  let entrypoints;
+  const { createPanel } = await loadModule("src/panel/app.ts", {
+    globals: {
+      document,
+      window: document,
+      setTimeout(callback) { const id = {}; timers.set(id, callback); return id; },
+      clearTimeout(id) { timers.delete(id); },
+      setInterval() { return 1; }, clearInterval() {},
+    },
+    modules: {
+      uxp: {
+        entrypoints: { setup(value) { entrypoints = value; } },
+        storage: { localFileSystem: { getTemporaryFolder: async () => ({ getEntries: async () => [] }) } },
+      },
+      photoshop: { app: {}, action: { addNotificationListener: async () => {} } },
+    },
+  });
+  const panel = createPanel();
+  await panel.init();
+  await flush();
+  assert.match(elements.status.textContent, /^Ready\./);
+  elements.prompt.value = "A typed prompt";
+  elements.prompt.selectionStart = elements.prompt.selectionEnd = 14;
+  elements.prompt.dispatchEvent(new Event("input"));
+  assert.equal(elements.undoPrompt.style.display, "block");
+  entrypoints.panels.nbpEditorPanel.show();
+  elements.undoPrompt.dispatchEvent(new Event("click"));
+  assert.equal(elements.prompt.value, "", "showing the panel does not reset prompt history");
+  elements.redoPrompt.dispatchEvent(new Event("click"));
+  assert.equal(elements.prompt.value, "A typed prompt");
+  const enter = new Event("keydown", { bubbles: true, cancelable: true });
+  Object.assign(enter, { key: "Enter", metaKey: true });
+  elements.prompt.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, true, "Generate keeps its own prompt shortcut");
+  assert.match(elements.status.textContent, /API key/, "Generate handler still runs and validates the missing test key");
+  panel.dispose();
+}
 console.log("Bundles: UXP polyfill ordering, WebView startup and runtime module boundaries passed.");

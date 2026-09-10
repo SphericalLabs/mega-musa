@@ -9,6 +9,8 @@ The plugin uses feature modules with a few objects that own state. There is no a
 | Location | Responsibility |
 | --- | --- |
 | `src/panel/` | Spectrum controls, settings, description, recall, reference UI, notices and application wiring |
+| `src/prompt-history.ts` | Bounded prompt snapshots, edit grouping, undo and redo without host dependencies |
+| `src/panel/prompt.ts` | Prompt writes, native event handling, cursor restoration, history buttons and the Describe lock |
 | `src/generation/controller.ts` | UI adapter that validates a submission and captures its inputs |
 | `src/generation/queue.ts` | Queue state, pending submissions, FIFO provider slots and cancellation |
 | `src/generation/prepare.ts` | Capture Photoshop pixels and selection, calculate the frame and prepare request references |
@@ -32,6 +34,7 @@ Existing root entry modules such as `photoshop-bridge.ts`, `image-codec.ts` and 
 - `ReferenceCollection` owns the current reference list and its capacity. A submission receives a separate array snapshot.
 - `ReferenceImageProcessor` owns pending resize requests, timers and thumbnail deduplication. Disconnecting rejects pending requests and clears their timers.
 - Description, recall and drop controllers keep their transient state inside their factory closures. The panel composition root connects them through explicit dependencies and callbacks.
+- `PromptHistory` owns the panel session's text timeline. All programmatic prompt changes go through the injected prompt controller's `replace(text, source)` method. Describe owns the prompt lock and may apply its result while locked; Recall and undo/redo cannot change the prompt until the lock is released. A no-op does not create a step or discard redo. Undo/redo advances only after a verified text write. No native undo buffer, synthetic input event, DOM setter override or Photoshop history operation is needed to record a replacement.
 - Provider, model, archive schema and image codec modules do not load panel or Photoshop code at runtime. The bundle test checks these boundaries and rejects runtime dependency cycles.
 - Photoshop host objects and Spectrum elements still use explicit `any` at parts of the host boundary. The project has no complete SDK type definitions. Domain state, placement options and outgoing WebView messages are typed; implicit `any` and unused variables are compiler errors.
 
@@ -66,6 +69,8 @@ The test runner discovers `scripts/test-*.mjs`, excluding the shared support mod
 The build emits `dist/index.js` and `dist/drop-target.js`, with their HTML, CSS and assets. `public/drop-target.js` is only a placeholder; edit `src/webview/drop-target.ts`. An alternate output directory is supported through `node esbuild.config.mjs --outdir=/absolute/path`. Builds overwrite outputs without deleting existing files. As before, watch mode watches the source bundles; rerun the build after static HTML or CSS changes.
 
 Automated host doubles cannot verify Photoshop's actual layer transforms, mask linkage, history behavior or UXP styling. Reload `dist/manifest.json` and check a rectangular selection, a feathered selection, a full document and an artboard. Also check drop/paste, Describe with cancellation, queued jobs and recall from an existing document. Provider generation smoke tests incur the usual API cost.
+
+For prompt history, check on macOS and Windows: typing → paste → Describe → manual editing → Recall, then undo and redo the complete sequence using both buttons and shortcuts. Check native/context-menu Undo where available, IME composition, selected-text replacement, scrolling, editing after Undo and the empty-history boundary. Verify that Photoshop's document history stays untouched while the prompt handles a shortcut, that Describe locks typing/history/Load Settings through cancellation and that Cmd/Ctrl+Enter still generates. Automated tests cover these state transitions and simulated event sequences; host testing is needed for UXP's actual event delivery and native caret behavior.
 
 ## Keeping future changes lean
 

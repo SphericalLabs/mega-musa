@@ -30,18 +30,23 @@ import { describeImages } from "../providers/descriptions";
 import { type RefImage as RequestReference } from "../providers/types";
 import { ReferenceCollection } from "../references/collection";
 import { ReferenceImageProcessor } from "../references/processor";
-import { $, isChecked, setValueSafe } from "./controls";
+import { $, isChecked } from "./controls";
+import { type PromptController } from "./prompt";
 import { descriptionApiKey } from "./settings";
 import { renderBudget, setStatus } from "./status";
 
-export interface DescriptionDependencies { references: ReferenceCollection; processor: Pick<ReferenceImageProcessor, "resize">; queue: Pick<GenerationQueue, "hasActive">; onBusyChange?: () => void; }
+export interface DescriptionDependencies {
+  references: ReferenceCollection;
+  processor: Pick<ReferenceImageProcessor, "resize">;
+  queue: Pick<GenerationQueue, "hasActive">;
+  prompt: Pick<PromptController, "replace" | "setLocked">;
+  onBusyChange?: () => void;
+}
 
-export function createDescriptionController({ references, processor, queue, onBusyChange = () => { } }: DescriptionDependencies) {
+export function createDescriptionController({ references, processor, queue, prompt, onBusyChange = () => { } }: DescriptionDependencies) {
   let describing = false;
 
   let descriptionJob: CancellableJob | null = null;
-
-  let promptBeforeDescription: string | null = null;
 
   let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -67,14 +72,11 @@ export function createDescriptionController({ references, processor, queue, onBu
     }
     const describeModel = $("describeModel");
     if (describeModel) describeModel.disabled = busy;
-    const undo = $("undoDescription");
-    if (undo) undo.disabled = busy || promptBeforeDescription === null;
   }
 
   function setDescriptionBusy(on: boolean): void {
     describing = on;
-    const prompt = $("prompt");
-    if (prompt) prompt.disabled = on;
+    prompt.setLocked(on);
     onBusyChange();
     updateDescriptionControls();
   }
@@ -231,13 +233,8 @@ export function createDescriptionController({ references, processor, queue, onBu
       });
       const result = await awaitCancellable(job, request, controller);
       throwIfCancelled(job);
-      const prompt = $("prompt");
-      promptBeforeDescription = String(prompt?.value || "");
-      setValueSafe(prompt, formatDescriptions(inputs, result.descriptions));
-      try {
-        prompt?.dispatchEvent(new Event("input"));
-      } catch {
-        /* Prompt resizing is cosmetic. */
+      if (!prompt.replace(formatDescriptions(inputs, result.descriptions), "Describe")) {
+        throw new Error("The description could not be applied to the prompt.");
       }
       updateDescriptionControls();
       setStatus(
@@ -264,18 +261,5 @@ export function createDescriptionController({ references, processor, queue, onBu
     }
   }
 
-  function onUndoDescription(): void {
-    if (promptBeforeDescription === null || queue.hasActive || describing) return;
-    const prompt = $("prompt");
-    setValueSafe(prompt, promptBeforeDescription);
-    promptBeforeDescription = null;
-    try {
-      prompt?.dispatchEvent(new Event("input"));
-    } catch {
-      /* Prompt resizing is cosmetic. */
-    }
-    updateDescriptionControls();
-    setStatus("Previous prompt restored.", "ok");
-  }
-  return { onDescribe, onUndoDescription, updateDescriptionControls, scheduleDescriptionInputRefresh, get busy() { return describing; }, dispose() { if (descriptionInputRefreshTimer !== null) clearTimeout(descriptionInputRefreshTimer); descriptionInputRefreshSequence += 1; } };
+  return { onDescribe, updateDescriptionControls, scheduleDescriptionInputRefresh, get busy() { return describing; }, dispose() { if (descriptionInputRefreshTimer !== null) clearTimeout(descriptionInputRefreshTimer); descriptionInputRefreshSequence += 1; } };
 }

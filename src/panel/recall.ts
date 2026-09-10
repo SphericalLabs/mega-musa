@@ -19,13 +19,15 @@ import { restoreArchivedSelection } from "../photoshop/selection";
 import { ReferenceCollection } from "../references/collection";
 import { restoreReferenceAssets } from "../references/restore";
 import { saveSetting } from "../storage";
-import { $, hasOption, setCheckedSafe, setPickerSafe, setValueSafe } from "./controls";
+import { $, hasOption, setCheckedSafe, setPickerSafe } from "./controls";
+import { type PromptController } from "./prompt";
 import { type SettingsController } from "./settings";
 import { setStatus } from "./status";
-export function createRecallController({ queue, references, settings, onReferencesChanged, onSelectionChange }: {
+export function createRecallController({ queue, references, settings, prompt, onReferencesChanged, onSelectionChange }: {
   queue: GenerationQueue;
   references: ReferenceCollection;
   settings: SettingsController;
+  prompt: Pick<PromptController, "replace" | "locked">;
   onReferencesChanged: () => void;
   onSelectionChange: () => void;
 }) {
@@ -261,16 +263,10 @@ export function createRecallController({ queue, references, settings, onReferenc
   }
 
   async function onLoadRecallSettings(): Promise<void> {
-    if (!selectedRecall) return;
+    if (!selectedRecall || prompt.locked) return;
     const selected = selectedRecall;
     const generation = selected.generation;
-    const promptField = $("prompt");
-    setValueSafe(promptField, generation.prompt);
-    try {
-      promptField?.dispatchEvent(new Event("input"));
-    } catch {
-      /* Prompt resizing is cosmetic. */
-    }
+    if (!prompt.replace(generation.prompt, "Recall")) return;
     setCheckedSafe($("includeSelection"), generation.includeSelection);
     saveSetting("includeSelection", generation.includeSelection ? "1" : "0");
     onSelectionChange();

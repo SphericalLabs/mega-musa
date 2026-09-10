@@ -16,6 +16,7 @@ import { $ } from "./controls";
 import { createDescriptionController } from "./description";
 import { confirmDocumentWarnings } from "./document-warnings";
 import { createDropController } from "./drop";
+import { createPromptController } from "./prompt";
 import { renderGenerationQueue } from "./queue-view";
 import { createRecallController } from "./recall";
 import { createReferencePanel } from "./references";
@@ -30,6 +31,7 @@ const { action } = require("photoshop");
 // The composition root is the only place that connects independent feature controllers.
 export function createPanel() {
   const queue = new GenerationQueue();
+  const prompt = createPromptController();
   const references = new ReferenceCollection();
   const processor = new ReferenceImageProcessor((message) => {
     const webview = $("dropWebview");
@@ -38,14 +40,15 @@ export function createPanel() {
   });
   const settings = createSettingsController(refreshSelection);
   const description = createDescriptionController({
-    references, processor, queue,
+    references, processor, queue, prompt,
     onBusyChange: () => {
+      $("loadRecallSettings").disabled = description.busy;
       generation.updateGenerateControl();
       refreshActivity();
     }
   });
   const recall = createRecallController({
-    queue, references, settings,
+    queue, references, settings, prompt,
     onReferencesChanged: () => referencePanel.renderThumbs(), onSelectionChange: refreshSelection
   });
   const workflow = createGenerationWorkflow({
@@ -97,6 +100,7 @@ export function createPanel() {
       await clearMegaMusaTemporaryFiles();
       setupCollapsibleSections();
       setupPromptResize();
+      prompt.init();
       for (const key of [
         { label: "Gemini", field: "geminiApiKey", button: "saveGeminiKey", save: saveApiKey },
         { label: "OpenAI", field: "openaiApiKey", button: "saveOpenAIKey", save: saveOpenAIApiKey },
@@ -119,7 +123,6 @@ export function createPanel() {
         generate: generation.onGenerateClick,
         cancelAllGenerations: () => queue.cancelAll(),
         describe: description.onDescribe,
-        undoDescription: description.onUndoDescription,
         copyRecallPrompt: recall.onCopyRecallPrompt,
         loadRecallSettings: recall.onLoadRecallSettings,
         restoreRecallSelection: recall.onRestoreRecallSelection,
@@ -137,7 +140,7 @@ export function createPanel() {
       onPhotoshopChange();
       $("prompt").addEventListener("keydown", (event: KeyboardEvent) => {
         if (event.key !== "Enter" && event.key !== "Return") return;
-        if (event.isComposing || !(event.metaKey || event.ctrlKey)) return;
+        if (event.isComposing || prompt.isComposing || !(event.metaKey || event.ctrlKey)) return;
         event.preventDefault();
         void generation.onGenerate();
       });
@@ -162,6 +165,7 @@ export function createPanel() {
 
   function dispose(): void {
     unsubscribeQueue();
+    prompt.dispose();
     description.dispose();
     recall.dispose();
     drop.dispose();

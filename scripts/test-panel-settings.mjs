@@ -7,6 +7,7 @@ const { elements, document } = panelDocument([
   "displayCurrency", "currencyNote", "geminiApiKey", "openaiApiKey", "describeModel", "model", "quality", "qualityField",
   "selRatio", "resolution", "includeSelection", "placeAsSmartObject", "reduceDocumentSize", "prompt", "status",
   "recallSection", "recallLayerName", "recallDetails", "recallSource", "restoreRecallSelection", "recallSelectionNote",
+  "undoPrompt", "redoPrompt", "promptHistoryActions",
 ]);
 const values = new Map();
 const storage = memoryStorage(values);
@@ -21,7 +22,7 @@ const archive = {
 };
 const timers = new Map();
 let selectionChanges = 0, referenceChanges = 0;
-const api = await loadModule(["src/panel/settings.ts", "src/panel/recall.ts", "src/references/collection.ts"], {
+const api = await loadModule(["src/panel/settings.ts", "src/panel/recall.ts", "src/panel/prompt.ts", "src/references/collection.ts"], {
   globals: {
     document, localStorage: storage, Event,
     setTimeout(callback) { const id = {}; timers.set(id, callback); return id; },
@@ -61,8 +62,10 @@ assert.equal(elements.reduceDocumentSize.checked, true);
 assert.ok(selectionChanges > 0);
 const references = new api.ReferenceCollection();
 references.add({ name: "old reference" });
+const prompt = api.createPromptController();
+prompt.init();
 const recall = api.createRecallController({
-  queue: { hasActive: false }, references, settings,
+  queue: { hasActive: false }, references, settings, prompt,
   onSelectionChange, onReferencesChanged() { referenceChanges++; }
 });
 recall.scheduleGenerationRecallRefresh();
@@ -70,6 +73,12 @@ for (const callback of timers.values()) callback();
 timers.clear();
 await flush();
 assert.equal(elements.recallSection.style.display, "block");
+prompt.setLocked(true);
+await recall.onLoadRecallSettings();
+assert.equal(elements.prompt.value, "");
+assert.equal(references.length, 1, "Recall cannot change the prompt or settings while Describe owns the prompt");
+assert.equal(prompt.canUndo, false);
+prompt.setLocked(false);
 await recall.onLoadRecallSettings();
 assert.equal(elements.prompt.value, "Saved prompt");
 assert.equal(elements.model.value, archive.model);
@@ -81,5 +90,14 @@ assert.equal(elements.placeAsSmartObject.checked, false, "recall must leave glob
 assert.equal(elements.reduceDocumentSize.checked, true);
 assert.equal(values.get("nbp.placeAsSmartObject"), "0");
 assert.equal(values.get("nbp.reduceDocumentSize"), "1");
+prompt.undo();
+assert.equal(elements.prompt.value, "");
+assert.equal(elements.selRatio.value, "5:4", "prompt undo does not undo recalled settings");
+prompt.redo();
+assert.equal(elements.prompt.value, "Saved prompt");
+await recall.onLoadRecallSettings();
+prompt.undo();
+assert.equal(elements.prompt.value, "", "recalling identical text must not add a duplicate history entry");
 recall.dispose();
+prompt.dispose();
 console.log("Panel settings: defaults, persistence and recall without changing global storage preferences passed.");
