@@ -1764,6 +1764,18 @@ function onDropWebviewMessage(event: any): void {
   const message = event.data;
   if (!message || message.channel !== DROP_CHANNEL || typeof message.type !== "string") return;
 
+  // Continue panel scrolling while the cursor is over the separate drop WebView.
+  // Its wheel events arrive through the message bridge instead of bubbling here.
+  if (message.type === "scroll") {
+    const scroll = $("scroll");
+    if (scroll && typeof message.deltaY === "number" && Number.isFinite(message.deltaY)) {
+      // Wheel deltas can be pixels, lines or pages; use the panel's page height.
+      const scale = message.deltaMode === 1 ? 16 : message.deltaMode === 2 ? scroll.clientHeight : 1;
+      scroll.scrollTop += message.deltaY * scale;
+    }
+    return;
+  }
+
   if (message.type === "ready") {
     dropWebviewReady = true;
     syncDropCapacity();

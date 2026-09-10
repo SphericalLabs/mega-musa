@@ -39,6 +39,15 @@
     window.uxpHost.postMessage({ channel: CHANNEL, ...message });
   }
 
+  // Workaround: the drop WebView traps wheel events, so panel scrolling stops
+  // when the drop area moves under the cursor. Events cannot bubble to UXP;
+  // forward their deltas through the bridge so the host can keep scrolling.
+  window.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || !event.deltaY) return;
+    event.preventDefault();
+    send({ type: "scroll", deltaY: event.deltaY, deltaMode: event.deltaMode });
+  }, { passive: false });
+
   function updateLabel() {
     const full = remaining <= 0;
     dropZone.classList.toggle("full", full);
