@@ -53,23 +53,20 @@ export function createPlacementWorkflow(context: GenerationContext, place: typeo
       );
     }
 
+    const maskSuffix = placement.clip === "mask" ? " with an editable linked mask" : "";
     const doneMessage = pending.isRegion
-      ? placement.clip === "alpha"
-        ? "Done — raster fallback clipped to the selection captured at the start with baked transparency."
-        : placement.clip === "mask"
-          ? placement.smartObject
-            ? "Done — result embedded as a Smart Object with an editable linked mask."
-            : "Done — raster fallback clipped to your selection with an editable mask."
-          : placement.smartObject
-            ? "Done — result embedded as a Smart Object; the fully opaque selection needed no mask."
-            : "Done — result added as a raster layer; the fully opaque selection needed no mask."
+      ? placement.clip === "mask"
+        ? placement.smartObject
+          ? "Done — result embedded as a Smart Object with an editable linked mask."
+          : "Done — complete scaled image added as a pixel layer with an editable linked mask."
+        : `Done — result ${placement.smartObject ? "embedded as a Smart Object" : "added as a pixel layer"}; the image fits the opaque selection without a mask.`
       : pending.activeArtboard
         ? placement.smartObject
           ? `Done — result framed to active artboard “${pending.activeArtboard.name}” and embedded at the top of the document as a Smart Object.`
-          : `Done — result framed to active artboard “${pending.activeArtboard.name}” and added at the top of the document as a raster layer.`
+          : `Done — result framed to active artboard “${pending.activeArtboard.name}” and added as a pixel layer${maskSuffix}.`
         : placement.smartObject
           ? "Done — full-image result embedded as a Smart Object."
-          : "Done — full-image result added as a raster layer.";
+          : `Done — full-image result added as a pixel layer${maskSuffix}.`;
     const archiveMessages: string[] = [];
     if (job.placeAsSmartObject && !placement.smartObject) {
       archiveMessages.push("Smart Object placement failed; the paid result was preserved as a raster layer.");

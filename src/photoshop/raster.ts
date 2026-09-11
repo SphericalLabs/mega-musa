@@ -3,11 +3,11 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { applyAlphaMask } from "../images/pixels";
-import { coverResampleRGBA } from "../images/resample";
+import { resampleRGBA } from "../images/resample";
 import { SRGB_PROFILE } from "./document-state";
+import { coverBounds } from "./geometry";
 import { bringResultToDocumentFront, renameActiveLayer } from "./layers";
-import { makeLayerMaskFromSnapshot } from "./masks";
+import { applyPlacementMask } from "./masks";
 import { activateDocumentById, app, batchPlay, imaging } from "./runtime";
 import { scaleViaPhotoshopInModal } from "./scaling";
 import { type Bounds, type PlacementClip, type SelectionSnapshot } from "./types";
@@ -21,8 +21,11 @@ export async function placeRasterFallback(
   layerName: string,
   selection: SelectionSnapshot | null
 ): Promise<{ layer: any; clip: PlacementClip }> {
-  const width = bounds.right - bounds.left;
-  const height = bounds.bottom - bounds.top;
+  // Keep the complete scaled image, including pixels beyond the selection/canvas.
+  // Only the editable mask limits which part of that image is visible.
+  const fitted = coverBounds(sourceWidth, sourceHeight, bounds);
+  const width = fitted.right - fitted.left;
+  const height = fitted.bottom - fitted.top;
   let rgba: Uint8Array;
   if (sourceWidth === width && sourceHeight === height) {
     rgba = sourceRgba.slice();
@@ -31,7 +34,7 @@ export async function placeRasterFallback(
       rgba = await scaleViaPhotoshopInModal(sourceRgba, sourceWidth, sourceHeight, width, height);
     } catch (e: any) {
       console.log("[Mega Musa] Photoshop raster fallback scaling failed; using JS resample:", e?.message || e);
-      rgba = coverResampleRGBA(sourceRgba, sourceWidth, sourceHeight, width, height);
+      rgba = resampleRGBA(sourceRgba, sourceWidth, sourceHeight, width, height);
     }
   }
 
@@ -44,32 +47,6 @@ export async function placeRasterFallback(
   const layer = app.activeDocument.activeLayers[0];
   await renameActiveLayer(layerName);
   await bringResultToDocumentFront(layer);
-
-  let clip: PlacementClip = "none";
-  let masked = false;
-  if (selection) {
-    try {
-      await makeLayerMaskFromSnapshot(docId, layer.id, selection);
-      masked = true;
-      clip = "mask";
-    } catch (e: any) {
-      console.log("[Mega Musa] could not rebuild the editable selection mask; using layer alpha:", e?.message || e);
-    }
-  }
-
-  if (selection && !masked) {
-    if (
-      selection.bounds.left !== bounds.left ||
-      selection.bounds.top !== bounds.top ||
-      selection.bounds.right !== bounds.right ||
-      selection.bounds.bottom !== bounds.bottom ||
-      selection.data.length !== width * height
-    ) {
-      throw new Error("The captured selection does not match the result region.");
-    }
-    applyAlphaMask(rgba, selection.data);
-    clip = "alpha";
-  }
 
   const imageData = await imaging.createImageDataFromBuffer(rgba, {
     width,
@@ -84,11 +61,13 @@ export async function placeRasterFallback(
     await imaging.putPixels({
       documentID: docId,
       layerID: layer.id,
-      targetBounds: bounds,
+      targetBounds: fitted,
       imageData,
     });
   } finally {
     imageData.dispose();
   }
+  // Mask errors propagate so history rolls back and Retry Placement keeps the source.
+  const clip = await applyPlacementMask(docId, layer.id, fitted, bounds, selection);
   return { layer, clip };
 }

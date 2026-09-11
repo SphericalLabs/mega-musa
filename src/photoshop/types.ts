@@ -38,7 +38,7 @@ export interface SelectionSnapshot {
   data: Uint8Array;
 }
 
-export type PlacementClip = "none" | "mask" | "alpha";
+export type PlacementClip = "none" | "mask";
 
 export interface PlacementResult {
   clip: PlacementClip;

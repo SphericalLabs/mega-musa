@@ -71,7 +71,7 @@ export async function prepareGeneration(job: GenerationJob, context: GenerationC
   } else if (exactOutputSize) {
     notes.push(`Output request: ${outputFrameNote}.`);
   }
-  notes.push("The result fills the original rectangle without stretching; excess image edges are cropped.");
+  notes.push("The result fills the original rectangle without stretching; excess image edges are hidden by an editable mask.");
   if (!includeSelection) {
     notes.push(
       generationRefs.length

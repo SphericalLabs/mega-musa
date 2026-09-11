@@ -3,10 +3,33 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
+import { selectionNeedsMask } from "./geometry";
 import { selectLayerById } from "./layers";
 import { batchPlay } from "./runtime";
 import { clearSelection, replaceRectSelection, replaceSelectionSnapshot } from "./selection";
-import { type Bounds, type SelectionSnapshot } from "./types";
+import { type Bounds, type PlacementClip, type SelectionSnapshot } from "./types";
+
+// Both layer types use the complete image frame, including off-canvas pixels.
+// A white canvas-sized mask can still hide overflow, so never judge its necessity
+// from the visible canvas or a thumbnail alone.
+export async function applyPlacementMask(
+  docId: number,
+  layerId: number,
+  imageBounds: Bounds,
+  destination: Bounds,
+  selection: SelectionSnapshot | null
+): Promise<PlacementClip> {
+  if (selection && selectionNeedsMask(selection)) {
+    await makeLayerMaskFromSnapshot(docId, layerId, selection);
+    return "mask";
+  }
+  if (imageBounds.left !== destination.left || imageBounds.top !== destination.top ||
+    imageBounds.right !== destination.right || imageBounds.bottom !== destination.bottom) {
+    await makeLayerMaskFromBounds(layerId, destination);
+    return "mask";
+  }
+  return "none";
+}
 
 export async function makeSelectionMask(): Promise<void> {
   await batchPlay(

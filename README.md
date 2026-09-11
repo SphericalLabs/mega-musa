@@ -35,11 +35,11 @@ To build from source, see [DEVELOPER.md](DEVELOPER.md#build-and-load).
 
 Select enough surrounding image for the model to blend the edit. Feather the selection for a soft edge. Hide a previous result before generating again if you do not want it included in the input.
 
-Generation preserves your entire selection, full canvas or active artboard. Canvas input includes surrounding context to match a supported aspect ratio, with transparent padding outside the target. Results scale proportionally to fill the original rectangle and crop excess edges. **Fit Selection** explicitly changes the selection to the ratio in the menu. **Fit to Nearest Aspect Ratio** uses the closest supported ratio.
+Generation preserves your entire selection, full canvas or active artboard. Canvas input includes surrounding context to match a supported aspect ratio, with transparent padding outside the target. Results scale proportionally to fill the original rectangle and hide excess edges with an editable mask. **Fit Selection** explicitly changes the selection to the ratio in the menu. **Fit to Nearest Aspect Ratio** uses the closest supported ratio.
 
 Results appear above all groups and artboards in the original document. **Place as Smart Object** is on by default and preserves the full output resolution for later resizing. Clear it for raster layers. If Smart Object placement fails, the plugin keeps the result as a raster layer.
 
-Nonrectangular and feathered selections use an editable layer mask. Smart Objects also use a rectangular mask when their aspect ratio requires cropping. The mask is linked to the image, so both move and scale together. Unlink the mask to move the image inside a fixed boundary. Placement preserves the current Photoshop selection, including changes you make while a generation is running. To paint on a Smart Object, open its contents or rasterize it first.
+Pixel layers retain the complete scaled image. Both pixel layers and Smart Objects use an editable mask for nonrectangular or feathered selections and when the image extends beyond the destination, including outside the canvas. An opaque rectangle needs no mask only when the complete image fits it exactly. Masks preserve captured selection coverage and are linked to the image, so both move and scale together. Unlink the mask to move the image inside a fixed boundary. If mask creation fails, placement pauses for Retry Placement without cropping pixels or baking the mask into transparency. Placement preserves the current Photoshop selection, including changes you make while a generation is running. To paint on a Smart Object, open its contents or rasterize it first.
 
 ### Queue and prompt expansion
 

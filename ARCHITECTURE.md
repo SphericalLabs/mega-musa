@@ -30,6 +30,8 @@ When a result arrives, the workflow records its charge before decoding or placin
 
 Temporary documents are verified against the IDs open before creation. Cleanup closes only a verified temporary ID through a targeted action; it does not use the DOM's select-then-close helper. Scaling and embedding verify the active document before operating, and raster fallback rechecks the original destination before adding a layer.
 
+Raster placement writes the complete proportionally scaled image at the same centered bounds as Smart Object placement. Both use `applyPlacementMask` to create an editable linked mask for captured selection coverage or image overflow, including off-canvas pixels. A mask is omitted only when the entire image fits an opaque rectangle exactly. Neither native scaling nor JavaScript fallback crops the image to that rectangle, and mask failure propagates to placement recovery instead of altering the source alpha.
+
 ## State and module boundaries
 
 `ReferenceCollection` owns the panel's current reference list and gives each submission a separate array snapshot. Image conversion has its own lifecycle in `ReferenceImageProcessor`, which tracks pending conversions and timers and must reject unfinished work and clear timers when it disconnects.

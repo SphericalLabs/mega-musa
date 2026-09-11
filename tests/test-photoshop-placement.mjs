@@ -179,7 +179,8 @@ async function harness({ liveSelection = rectangle(target), failSmartObject = fa
 }
 
 // A 3:2 result must cover a square selection without distorting it. Both paths
-// show the middle four source columns, and the live selection never travels.
+// show the middle four source columns through a mask, keeping both outer columns.
+// The live selection never travels.
 for (const smart of [true, false]) {
   const h = await harness({ nested: true });
   const result = await h.api.placeResult({ ...h.request, placeAsSmartObject: smart });
@@ -193,8 +194,10 @@ for (const smart of [true, false]) {
     assert.deepEqual(plain(layer.mask.bounds), target);
     assert.equal(layer.source.width, 6, "the embedded source remains full resolution");
   } else {
-    assert.deepEqual(plain(layer.bounds), target);
-    assert.deepEqual([layer.source.data[0], layer.source.data[4], layer.source.data[8], layer.source.data[12]], [30, 60, 90, 120]);
+    assert.deepEqual(plain(layer.bounds), { left: 11, top: 20, right: 17, bottom: 24 });
+    assert.deepEqual(plain(layer.mask.bounds), target);
+    assert.equal(result.clip, "mask");
+    assert.deepEqual([...layer.source.data], [...h.request.rgba], "disabling the mask must reveal the complete source image");
   }
   assert.ok(h.moves.every(move => !move.hadSelection));
   assert.equal(h.app.documents.length, 1);
@@ -210,36 +213,35 @@ const live = rectangle({ left: 50, top: 60, right: 54, bottom: 64 });
 live.data[0] = 32; live.data[5] = 128;
 const captured = rectangle(target);
 captured.data[0] = 0; captured.data[1] = 128;
-for (const mode of ["smart", "raster", "fallback", "alpha"]) {
-  const h = await harness({ liveSelection: live, failSmartObject: mode === "fallback", failMask: mode === "alpha" });
+for (const mode of ["smart", "raster", "fallback"]) {
+  const h = await harness({ liveSelection: live, failSmartObject: mode === "fallback" });
   const rgba = h.api.resampleRGBA(h.request.rgba, 6, 4, 12, 8);
-  const result = await h.api.placeResult({ ...h.request, rgba, width: 12, height: 8, selection: captured, placeAsSmartObject: mode !== "raster" && mode !== "alpha" });
+  const result = await h.api.placeResult({ ...h.request, rgba, width: 12, height: 8, selection: captured, placeAsSmartObject: mode !== "raster" });
   assert.deepEqual(plain(h.doc.selection.bounds), live.bounds);
   assert.deepEqual([...h.doc.selection.data], [...live.data]);
   assert.ok(h.moves.every(move => !move.hadSelection));
   const layer = h.doc.layers[0];
-  if (mode === "alpha") {
-    assert.equal(result.clip, "alpha");
-    assert.equal(layer.source.data[3], 0);
-    assert.equal(layer.source.data[7], 128);
-  } else {
-    assert.deepEqual(plain(layer.mask.bounds), target);
-    assert.deepEqual([...layer.mask.data], [...captured.data]);
+  assert.deepEqual(plain(layer.mask.bounds), target);
+  assert.deepEqual([...layer.mask.data], [...captured.data]);
+  assert.deepEqual(plain(layer.bounds), { left: 11, top: 20, right: 17, bottom: 24 });
+  if (mode !== "smart") {
+    assert.equal(result.smartObject, false);
+    assert.deepEqual([...layer.source.data], [...h.api.resampleRGBA(rgba, 12, 8, 6, 4)]);
   }
-  if (mode === "smart") assert.deepEqual(plain(layer.bounds), { left: 11, top: 20, right: 17, bottom: 24 });
-  else assert.equal(result.smartObject, false);
 }
 
 // Same-ratio opaque placement requires no mask, but fractional translation must
 // still be corrected. Deselecting while a job runs stays deselected afterward.
-{
-  const h = await harness({ liveSelection: null, initialLeft: target.left + 0.75 });
+for (const smart of [true, false]) {
+  const h = await harness({ liveSelection: null, initialLeft: target.left + 0.75, failMask: true });
   const rgba = new Uint8Array(4 * 4 * 4).fill(255);
-  const result = await h.api.placeResult({ ...h.request, rgba, width: 4, height: 4 });
+  const result = await h.api.placeResult({ ...h.request, rgba, width: 4, height: 4, placeAsSmartObject: smart });
   assert.deepEqual(plain(h.doc.layers[0].bounds), target);
   assert.equal(result.clip, "none");
+  assert.equal(h.doc.layers[0].mask, undefined);
+  assert.ok(!h.commands.some(command => command._obj === "make" && command.new?._class === "channel"));
   assert.equal(h.doc.selection, null);
-  assert.equal(h.moves[0].dx, -0.75);
+  if (smart) assert.equal(h.moves[0].dx, -0.75);
 }
 
 // Placement errors still restore selection coverage and close the history scope.
@@ -289,7 +291,8 @@ for (const blocked of [{ blockedReads: 2 }, { blockedMaskReads: 2 }]) {
 // Both scaling and Smart Object cleanup must leave the original document open.
 for (const smart of [false, true]) {
   const h = await harness({ failLegacyCloseSelection: true, failScratchActivation: !smart });
-  await h.api.placeResult({ ...h.request, placeAsSmartObject: smart }).catch(() => {});
+  const rgba = h.api.resampleRGBA(h.request.rgba, 6, 4, 12, 8);
+  await h.api.placeResult({ ...h.request, rgba, width: 12, height: 8, placeAsSmartObject: smart }).catch(() => {});
   assert.ok(h.app.documents.includes(h.doc), "scratch cleanup must never close the original document");
   assert.ok(h.closedDocuments.length > 0 && h.closedDocuments.every(id => id !== h.doc.id));
   assert.equal(h.app.documents.length, 1);
@@ -306,4 +309,70 @@ for (const smart of [false, true]) {
   assert.equal(h.doc.layers.length, 2);
   assert.equal(h.app.documents.length, 1);
 }
-console.log("Photoshop placement: geometry, selection restoration, busy menus and temporary-document safety passed.");
+// Very wide/tall selections and full-canvas placement retain all scaled rows/columns,
+// even outside the canvas. Native and JS scaling must both preserve source transparency.
+for (const failScratchActivation of [false, true]) {
+  for (const bounds of [
+    { left: 0, top: 0, right: 12, bottom: 1 },
+    { left: 0, top: 0, right: 1, bottom: 8 },
+    { left: 0, top: 0, right: 6, bottom: 4 },
+  ]) {
+    const h = await harness({ failScratchActivation, liveSelection: null });
+    h.doc.width = bounds.right;
+    h.doc.height = bounds.bottom;
+    const rgba = h.request.rgba.slice();
+    rgba[3] = 32; rgba[7] = 128;
+    const result = await h.api.placeResult({ ...h.request, bounds, rgba, selection: null, placeAsSmartObject: false });
+    const layer = h.doc.layers[0];
+    const sameSize = bounds.right === 6;
+    const width = sameSize ? 6 : 12, height = sameSize ? 4 : 8;
+    assert.deepEqual(plain(layer.bounds), {
+      left: bounds.right === 1 ? -5 : 0,
+      top: bounds.bottom === 1 ? -3 : 0,
+      right: bounds.right === 1 ? 7 : width,
+      bottom: bounds.bottom === 1 ? 5 : height,
+    });
+    assert.equal(layer.source.width, width);
+    assert.equal(layer.source.height, height);
+    assert.deepEqual([...layer.source.data], [...h.api.resampleRGBA(rgba, 6, 4, width, height)]);
+    if (sameSize) {
+      assert.equal(layer.mask, undefined);
+      assert.equal(result.clip, "none");
+    } else {
+      assert.deepEqual(plain(layer.mask.bounds), bounds);
+      assert.equal(result.clip, "mask");
+    }
+    assert.equal(h.doc.selection, null);
+  }
+}
+// Mask failure must abort and roll back instead of baking coverage into image alpha.
+for (const selection of [null, captured]) {
+  const h = await harness({ failMask: true, liveSelection: live });
+  const originalPixels = h.request.rgba.slice();
+  await assert.rejects(h.api.placeResult({ ...h.request, selection, placeAsSmartObject: false }), /Simulated mask failure/);
+  assert.equal(h.doc.layers.length, 1);
+  assert.deepEqual(h.commits, [false]);
+  assert.deepEqual([...h.request.rgba], [...originalPixels]);
+  assert.deepEqual(plain(h.doc.selection), plain(live));
+}
+// A canvas-sized white mask still matters when it hides a single off-canvas column.
+// Conversely, holes/feathering require a mask even when image dimensions fit exactly.
+for (const smart of [true, false]) {
+  const canvas = { left: 0, top: 0, right: 6, bottom: 4 };
+  for (const coverage of [255, 128, 0]) {
+    const h = await harness({ liveSelection: null });
+    h.doc.width = 6; h.doc.height = 4;
+    const selection = rectangle(canvas);
+    selection.data[0] = coverage;
+    const width = coverage === 255 ? 7 : 6;
+    const rgba = h.api.resampleRGBA(h.request.rgba, 6, 4, width, 4);
+    const result = await h.api.placeResult({ ...h.request, bounds: canvas, selection, rgba, width, placeAsSmartObject: smart });
+    const layer = h.doc.layers[0];
+    assert.equal(result.clip, "mask");
+    assert.deepEqual(plain(layer.bounds), { ...canvas, right: width });
+    assert.deepEqual(plain(layer.mask.bounds), canvas);
+    assert.deepEqual([...layer.mask.data], [...selection.data]);
+    assert.equal(h.commands.find(command => command.new?._class === "channel").using._value, "revealSelection");
+  }
+}
+console.log("Photoshop placement: complete raster pixels, editable masks, geometry, busy menus and temporary-document safety passed.");

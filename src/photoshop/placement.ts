@@ -7,10 +7,10 @@ import { type EmbeddedResultStorage, type GenerationArchive } from "../archive/t
 import { DEFAULT_HOST_MODAL_TIMEOUT_SECONDS, HostModalPreflightBusyError, isHostModalBusyError, type HostModalLease } from "../host-modal";
 import { type RefImage } from "../references";
 import { archiveReferenceAssetsInActiveDocument } from "../references/archive";
-import { coverBounds, selectionNeedsMask } from "./geometry";
+import { coverBounds } from "./geometry";
 import { withHistory } from "./history";
 import { bringResultToDocumentFront, deleteResultLayer, descendantLayers, selectLayerById } from "./layers";
-import { makeLayerMaskFromBounds, makeLayerMaskFromSnapshot } from "./masks";
+import { applyPlacementMask } from "./masks";
 import { writeLayerGenerationArchive } from "./metadata";
 import { placeRasterFallback } from "./raster";
 import { app, isPhotoshopCommandUnavailable, runModal, withActiveDocument } from "./runtime";
@@ -45,8 +45,6 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
     reduceDocumentSize, archive, references, anchorLayerId } = request;
   const { lease, timeoutSeconds = DEFAULT_HOST_MODAL_TIMEOUT_SECONDS } = context;
   const historyName = "Mega Musa: place result";
-  // Opaque rectangular coverage needs no separate layer mask.
-  const clippingSelection = selectionNeedsMask(selection) ? selection : null;
   return await runModal(
     "place result",
     async (executionContext) => withActiveDocument(docId, async () => {
@@ -93,14 +91,7 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
             await bringResultToDocumentFront(incompleteSmartObject);
             await positionSmartObjectAtBounds(incompleteSmartObject, fitted);
 
-            if (clippingSelection) {
-              await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, clippingSelection);
-              clip = "mask";
-            } else if (fitted.left !== bounds.left || fitted.top !== bounds.top ||
-              fitted.right !== bounds.right || fitted.bottom !== bounds.bottom) {
-              await makeLayerMaskFromBounds(incompleteSmartObject.id, bounds);
-              clip = "mask";
-            }
+            clip = await applyPlacementMask(docId, incompleteSmartObject.id, fitted, bounds, selection);
             resultLayer = incompleteSmartObject;
           } catch (error: any) {
             smartObject = false;
@@ -131,7 +122,7 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
             width,
             height,
             layerName,
-            clippingSelection
+            selection
           );
           resultLayer = fallback.layer;
           clip = fallback.clip;

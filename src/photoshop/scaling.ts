@@ -4,13 +4,12 @@
  */
 
 import { type HostModalLease } from "../host-modal";
-import { coverDimensions } from "../images/resample";
 import { SRGB_PROFILE } from "./document-state";
 import { readRegionInModal } from "./pixels";
 import { activateDocumentById, app, batchPlay, closeScratchDocument, createScratchDocument, imaging, runModal } from "./runtime";
 
-// Cover-fit through Photoshop's Image Size and read a centered crop. Propagate failures
-// so the caller can use the JavaScript fallback.
+// Resize the complete image to the proportional dimensions computed by the caller.
+// Propagate failures so raster placement can use the JavaScript resize fallback.
 export async function scaleViaPhotoshopInModal(
   rgba: Uint8Array,
   srcW: number,
@@ -51,15 +50,14 @@ export async function scaleViaPhotoshopInModal(
     }
 
     const scale = Math.max(dstW / srcW, dstH / srcH);
-    const { width: targetW, height: targetH } = coverDimensions(srcW, srcH, dstW, dstH);
-    if (targetW !== srcW || targetH !== srcH) {
+    if (dstW !== srcW || dstH !== srcH) {
       const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
       await batchPlay(
         [
           {
             _obj: "imageSize",
-            width: { _unit: "pixelsUnit", _value: targetW },
-            height: { _unit: "pixelsUnit", _value: targetH },
+            width: { _unit: "pixelsUnit", _value: dstW },
+            height: { _unit: "pixelsUnit", _value: dstH },
             constrainProportions: true,
             interpolation: { _enum: "interpolationType", _value: method },
             _options: { dialogOptions: "dontDisplay" },
@@ -71,21 +69,19 @@ export async function scaleViaPhotoshopInModal(
 
     const resizedW = Math.round(scratch.width);
     const resizedH = Math.round(scratch.height);
-    if (resizedW < dstW || resizedH < dstH) {
-      throw new Error("Photoshop's constrained resize did not cover the destination.");
+    if (resizedW !== dstW || resizedH !== dstH) {
+      throw new Error("Photoshop's constrained resize did not match the requested full-image dimensions.");
     }
-    const left = Math.floor((resizedW - dstW) / 2);
-    const top = Math.floor((resizedH - dstH) / 2);
 
     const { image: { data: raw, width: outputW, height: outputH, components: comps } } = await readRegionInModal(
-      scratch.id, { left, top, right: left + dstW, bottom: top + dstH }, false
+      scratch.id, { left: 0, top: 0, right: dstW, bottom: dstH }, false
     );
     if (outputW !== dstW || outputH !== dstH) {
-      throw new Error("Photoshop returned the wrong cover-fit dimensions.");
+      throw new Error("Photoshop returned the wrong full-image dimensions.");
     }
 
     if (comps === 4) return new Uint8Array(raw);
-    // Use opaque alpha when absent; selection coverage is applied during placement.
+    // Use opaque alpha when absent. Selection coverage belongs only in the layer mask.
     const px = dstW * dstH;
     const rgbaOut = new Uint8Array(px * 4);
     for (let i = 0; i < px; i++) {
