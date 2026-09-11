@@ -1,152 +1,89 @@
-# Mega Musa — Photoshop UXP plugin for Generative AI
+# Mega Musa — AI images in Photoshop
 
-*Musa × paradisiaca*
+Generate images and edit selections with Google Gemini (Nano Banana) and OpenAI GPT Image models.
 
-A Photoshop panel for AI image generation and localized editing with Google Gemini image models (Nano Banana) and OpenAI GPT Image models.
-
-![Mega Musa key visual: an open banana reveals Photoshop's transparency checkerboard](public/assets/github-banner-open-peel.jpg)
+![An open banana reveals Photoshop's transparency checkerboard](public/assets/github-banner-open-peel.jpg)
 
 ## Features
 
-- Edit a selection, the full document or the active artboard. Results are placed as embedded, image-backed Smart Objects by default, sized nondestructively to the same bounds as raster placement at the top of the document root, above every group and artboard, and named after the prompt with the model, resolution and quality in brackets. This avoids PSB-backed Smart Object sources. Clear **Place as Smart Object** to place a raster layer instead. Nonrectangular and feathered selections keep their shape through a linked, editable layer mask; fully opaque rectangular selections need no mask. If Smart Object placement fails, Mega Musa preserves the paid result as a raster layer and reports the fallback.
-- **Reduce document size (JPEG 90, lossy)** is off by default. When enabled, opaque new Smart Object sources and opaque new reference assets use JPEG 90. Assets with transparency use lossless, explicitly tagged sRGB PNG. With the option off, every generated Smart Object source uses lossless sRGB PNG and references retain their original bytes.
-- Each generated layer stores its complete prompt, generation settings and storage mode in namespaced Photoshop layer metadata. Selecting the layer shows the archive in Mega Musa, where the prompt can be copied or the controls restored. Reference images are embedded in the document for reuse.
-- **Include Photoshop selection** controls whether canvas pixels are sent to the model. When off, generation uses only the prompt and optional references; a selection still controls placement and masking.
-- Add up to 10 PNG, JPEG or WebP references by file picker, drag and drop or clipboard paste. References are normalized to sRGB before they are sent.
-- Choose Nano Banana Pro, Nano Banana 2, OpenAI Sunburst, OpenAI Flare or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
-- Queue multiple generations while continuing to edit the controls. Each click freezes its prompt, model, quality, references, Photoshop pixels, selection and destination. Plain Generate clicks allow up to four active jobs, while one brace-expanded prompt can add up to 10. Two provider requests run concurrently; additional jobs wait.
-- Cancel one queued generation from its row or cancel every waiting and running generation with **Cancel All**. A request that has already reached the provider counts as billed and is added to the spend counter.
-- Resolution, quality, ratio and any additional model options are remembered separately for each model. Switching models restores that model's preferences.
-- Sunburst and Flare support Low, Medium, High, XHigh, Max and Auto quality. GPT Image 2 supports up to High. Resolution defaults to 2K and quality to Low; saved preferences take priority.
-- Generation estimates include one flat USD 0.01 overhead for the prompt, all references and canvas input combined, regardless of image count. This is a rough allowance; API-reported token usage replaces the estimate when available.
-- Track image generation and Describe costs in one local USD total displayed in your selected currency, with separate counts for generated and described images.
+- **Generate and edit:** work on a selection, the full document or the active artboard. Place results as Smart Objects or raster layers, with editable selection masks.
+- **Choose a model:** Nano Banana Pro, Nano Banana 2, OpenAI Sunburst, OpenAI Flare or OpenAI GPT Image 2. Resolution and quality settings are saved per model.
+- **Use image references:** add up to 10 PNG, JPEG or WebP images by file picker, drag and drop or paste. **Describe Images** turns input images into a prompt.
+- **Generate variations:** queue jobs or expand one prompt into a batch of up to 10 images. Cancel jobs individually or with **Cancel All**.
+- **Reuse results:** recall prompts, settings and embedded references from generated layers. Track estimated API spending in your preferred currency.
 
-## Requirements
+## Install
 
-- Adobe Photoshop 27.4 or later (required)
-- Node.js 18+ and npm
-- UXP Developer Tool
-- A Gemini API key and/or OpenAI API key
+1. Install the [Adobe Creative Cloud desktop app](https://www.adobe.com/creativecloud/desktop-app.html) and sign in.
+2. Use Creative Cloud to install Photoshop 27.4 or later.
+3. Download the `.ccx` file under **Assets** from the [latest release](https://github.com/SphericalLabs/mega-musa/releases/latest).
+4. Double-click the `.ccx` file. Follow the Creative Cloud prompts to install the plugin.
+5. Open Photoshop. Open Mega Musa from the **Plugins** menu.
 
-Keys are stored in UXP secure storage. Requests go directly to the selected provider. No project server receives your keys or images. See [Data retention](#data-retention) for what the provider keeps.
-
-## Build and load
-
-Install Photoshop 27.4 or later before loading Mega Musa. The plugin manifest enforces this minimum version; older Photoshop versions cannot load this build.
-
-```bash
-npm install
-npm run build
-```
-
-In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After changes, run `npm run watch` and click **Reload**. Run `npm run typecheck` for a TypeScript check.
-
-## Development
-
-Automated tests live in [`tests/`](tests/). Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps. The [developer extension guide](DEVELOPER.md) explains how to add providers, model-specific settings, currencies and exchange-rate sources.
+To build from source, see [DEVELOPER.md](DEVELOPER.md#build-and-load).
 
 ## Use
 
-1. Save the API key for the selected provider.
-2. Open a Photoshop document. Select a region or leave no selection to use the full image or active artboard.
-3. Enter a prompt. Add references if needed.
-4. Choose the model and settings, then click **Generate**.
+1. Under **API Keys / Currency**, enter and save the Gemini or OpenAI API key for your selected model.
+2. Open a document. Select an area to edit, or clear the selection to use the full document or active artboard.
+3. Enter a prompt. Add references if needed. To create a prompt from input images, open **Describe Images** and click **Describe**. This replaces the current prompt.
+4. Choose the model, resolution and quality. Click **Generate**, or press **Cmd+Enter** on macOS or **Ctrl+Enter** on Windows.
 
-### Prompt undo and redo
+### Selection and placement
 
-The small **Undo** and **Redo** buttons below the prompt step through typing, paste, cut, Describe results and prompts loaded with Recall. Each button appears when its action is available. Continuous typing or deletion is grouped until a pause of more than 750 ms, a cursor move or another editing action; complete replacements are separate steps. Editing after Undo starts a new branch and clears Redo.
+**Include Photoshop selection** sends the visible canvas pixels to the model. Clear it to generate from the prompt and references only. Your selection still controls placement and masking.
 
-While the prompt has focus, use **Cmd+Z** on macOS or **Ctrl+Z** on Windows to undo, and **Cmd+Shift+Z** or **Ctrl+Shift+Z** to redo. **Ctrl+Y** also redoes on Windows. The panel owns this text history; undoing prompt text does not alter Photoshop layers, recalled settings, queued generations or usage charges. Describe locks typing, Undo/Redo and **Load Settings** until it finishes or is canceled. History lasts for the panel session, including document switches and hiding/showing the panel, and resets on plugin reload. It retains up to 200 steps with a text-memory budget; a very large prompt still keeps its most recent undo. Cursor and scroll positions are restored where the UXP control exposes them.
+Select enough surrounding image for the model to blend the edit. Feather the selection for a soft edge. Hide a previous result before generating again if you do not want it included in the input.
 
-### Prompt expansion
+Generation fits the output to a supported aspect ratio without changing your selection. **Fit Selection** changes the selection to the ratio in the menu. **Fit to Nearest Aspect Ratio** uses the closest supported ratio.
 
-Brace groups add multiple concrete prompts to the existing generation queue. Alternatives expand recursively and combine as a Cartesian product: `a {red, blue} {balloon, car}` produces four prompts.
+Results appear above all groups and artboards in the original document. **Place as Smart Object** is on by default and preserves the full output resolution for later resizing. Clear it for raster layers. If Smart Object placement fails, the plugin keeps the result as a raster layer.
 
-A final positive integer repeats every concrete result before it. `{a photo of a {banana, strawberry}, 3}` queues three banana prompts followed by three strawberry prompts. A click can expand to at most 10 images; a larger or malformed expression reports an error and queues nothing.
+Nonrectangular and feathered selections use an editable layer mask. The mask is linked to the image, so both move and scale together. Unlink the mask to move the image inside a fixed boundary. To paint on a Smart Object, open its contents or rasterize it first.
 
-Use `\{`, `\}`, `\,` and `\\` for literal braces, commas and backslashes. Commas outside brace groups are already literal. Queue rows and generated layer archives store the concrete expanded prompt, while the prompt field keeps the original template.
+### Queue and prompt expansion
 
-To reuse a generation later, select its result layer in Photoshop's Layers panel. **Recall Generations** appears in Mega Musa without changing the current controls. **Copy Prompt** copies the complete prompt. **Load Settings** explicitly restores the prompt, model, supported controls and embedded reference images. It intentionally does not change **Place as Smart Object** or **Reduce document size**: both are global preferences, persist across panel reloads and are frozen separately for each queued submission. **Place as Smart Object** defaults on; lossy size reduction defaults off.
+Each job keeps the prompt, settings, references, canvas pixels and destination captured when you click **Generate**. You can edit the controls while jobs run. Standard clicks allow up to four active jobs; two provider requests run at a time.
 
-Mega Musa stores each unique reference once as an embedded Smart Object in a locked, eye-off `Mega Musa Reference Archive` group, deduplicated by a SHA-256 hash of its source bytes. With reduced storage enabled, a new opaque reference is stored as JPEG 90 and a new transparent reference as lossless sRGB PNG. If recompressing an existing JPEG would not save space, its original bytes are kept. Existing archived assets always win over creating a recompressed duplicate. Opening an older document, loading its settings or reusing a restored reference never migrates or recompresses its archive. Result layers point to those assets in their per-layer metadata. If an asset was removed or changed, the remaining settings still load and the panel reports the missing reference. Older Stage 1 records remain readable but contain reference names only.
+Brace groups create variations:
 
-**Restore Rectangle** separately replaces the current selection with its saved bounding rectangle. New generations store the original selection bounds separately from the generation crop, along with the original canvas dimensions and artboard geometry. If no selection was drawn, recall restores the generation frame instead. Changed canvas dimensions, a different or changed artboard or a rectangle that does not fit entirely inside the target block restoration and leave the current selection untouched; prompt and settings recall still works. Coordinates are never automatically scaled, shifted or clipped. This restores neither a lasso's shape nor feathering or original source pixels, and it does not track moved content or detect edits that leave the geometry unchanged. Inspect the selection before generating. Older records without geometry keep their existing recall actions but cannot restore a rectangle.
+| Prompt | Result |
+| --- | --- |
+| `a {red, blue} {balloon, car}` | Four prompts: one for each combination |
+| `{a photo of a {banana, strawberry}, 3}` | Three banana prompts and three strawberry prompts |
 
-**Generate** stays blue and adds a new row to the generation queue. It is disabled at four active jobs, except that a single brace-expanded submission can add up to 10 jobs. Each row shows its frozen prompt, model, quality, reference count and current state, with its own **Cancel** button. Completed and canceled rows disappear; failed rows remain inline until dismissed and do not block other jobs with a dialog. Canceling before the request is sent costs nothing. Canceling after it has gone out frees that queue slot but not the bill — the provider generates the image regardless, so the estimate is added to the budget and counted as canceled. Once an image is back, that row finishes placing it because the money is already spent. Every arriving result is placed at the top of the original document root, above every group and artboard.
+One batch can contain up to 10 images. Invalid expressions or larger batches queue nothing. Use `\{`, `\}`, `\,` and `\\` for literal characters inside a group.
 
-Existing selections are framed to the nearest supported output ratio without changing their original shape. Nothing is added around them — the crop is the selection itself, so select as much surrounding image as the model should see to blend into, and feather the selection for a soft edge. When **Include Photoshop selection** is on, the source is Photoshop's visible composite; hide or delete a previous result before rerunning an edit if it should not be included.
+Canceling a job before its request is sent costs nothing. Requests already sent can still be billed. Once a result arrives, the plugin finishes placing it. Failed jobs show an error in their queue row.
 
-Initial result sizing is nondestructive: the full provider resolution remains stored in the Smart Object while its outer bounds match raster placement. With reduced storage on, opaque pixels are JPEG-compressed once before embedding; PNG storage remains pixel-lossless. The selection mask is separate from source transparency and is attached only after sizing and placement, so its original size and position are preserved. Masks are linked by default so later Move and Free Transform operations affect the image and mask together; unlink the mask first to reframe the image inside a fixed selection boundary. Enlarging beyond the native provider dimensions cannot create new detail. Paint, erase, clone and similar pixel edits require opening the Smart Object contents or rasterizing the result first.
+### Recall a generation
 
-For a raster result layer, Mega Musa cannot assign JPEG compression to that individual layer. PSD compression and TIFF image/layer compression are chosen by Photoshop when the whole document is saved. The reduced-storage preference still applies to newly embedded reference archive assets in that raster workflow.
+Select a generated layer to open **Recall Generations**. **Copy Prompt** copies its prompt. **Load Settings** restores its prompt, model settings and available references. Global placement and file-size preferences stay as set.
 
-Mega Musa uses 8-bit sRGB for model inputs and outputs. A 16-bit document shows a precision warning. Partial placements in CMYK, Lab, Grayscale and non-sRGB documents show a color-conversion warning, which is skipped when the result fully and opaquely covers the complete document or active artboard. Either warning can be accepted once per exact mode/profile/depth state during the panel session. A 32-bit/HDR document, Quick Mask mode or a Bitmap, Indexed Color, Duotone or Multichannel document blocks generation before anything is sent and explains how to switch to a supported state.
+**Restore Rectangle** restores the saved selection bounds, or the generation frame if there was no selection. It does not restore the selection shape, feathering or source pixels. Changed document or artboard geometry can block restoration. Check the rectangle before generating.
 
-### Document structure and reducing file size
+### Document structure and file size
 
-A generated document is structured like this:
+Result layers store their prompt and settings. References are reused from the hidden, locked **Mega Musa Reference Archive** group. **Reduce document size (JPEG 90, lossy)** is off by default. Enable it to compress new opaque Smart Object sources and references; transparent assets use lossless PNG. Existing references stay unchanged. Keep the archive group to preserve reference recall.
 
-```text
-Photoshop document
-├── Generated result layer
-│   ├── Embedded JPEG 90 or lossless sRGB PNG source (Smart Object mode)
-│   ├── Editable Photoshop layer mask, when selection clipping is needed
-│   └── Prompt, settings, geometry and reference pointers in layer metadata
-└── Mega Musa Reference Archive (hidden and locked)
-    └── One embedded asset per unique reference source
-```
+### Color and document limits
 
-With **Place as Smart Object** off, the result contains raster pixels instead of a separate embedded source. A layer mask is separate from source transparency: TIFF's **Save Transparency** option does not control Photoshop layer masks. The small metadata record stores Recall information, not another copy of the generated pixels. Existing reference assets are reused by source hash and are not recompressed when an older document is opened or recalled.
+Model inputs and outputs use 8-bit sRGB. The plugin warns about precision loss in 16-bit documents and color conversion where needed. Generation is blocked in 32-bit/HDR documents, Quick Mask mode and Bitmap, Indexed Color, Duotone or Multichannel modes. Follow the panel message to use a supported document state.
 
-Use these settings according to the required tradeoff:
+### Spending and currency
 
-1. **Smallest file while keeping editable Smart Objects:** leave **Place as Smart Object** and **Reduce document size (JPEG 90, lossy)** on. Opaque new sources and references use JPEG 90; anything with alpha uses lossless sRGB PNG.
-2. **Absolute smallest working document:** turn **Place as Smart Object** off and leave **Reduce document size** on. The generated result becomes a raster layer, so its embedded full-resolution source is no longer available. New reference archive assets are still compressed. A flattened delivery copy can be smaller again, but loses layers, masks, Recall and reusable references.
-3. **PSD/PSB:** keep file compression enabled. Set **Maximize PSD and PSB File Compatibility** to **Ask** or **Never** only when older Photoshop versions, previews and other applications do not need the extra flattened composite. Adobe notes that omitting this composite can significantly reduce layered file size. See [Adobe's Photoshop performance guidance](https://helpx.adobe.com/ca/photoshop/kb/optimize-photoshop-cc-performance.html).
-4. **Layered TIFF:** for lossless storage, choose **ZIP** for both Image Compression and Layer Compression and leave **Save Image Pyramid** off. JPEG Image Compression can make the composite lossy where Photoshop offers it, but it does not JPEG-compress individual layers or embedded Smart Object/reference sources. Use **Save Transparency** only when another application needs the composite alpha channel. Leave **BigTIFF** off unless the document requires it; it raises the size limit rather than improving compression. See [Adobe's TIFF option reference](https://helpx.adobe.com/photoshop/using/saving-files-graphics-formats.html).
+The local spending total includes generation and Describe. It is an estimate of API charges. Choose **Display currency** under **API Keys / Currency**. Rates refresh in the background; offline use keeps cached rates or shows USD. **Reset** clears spending and image counts.
 
-PSD is the safest archival master for Photoshop-specific behavior. Photoshop can preserve layer data in TIFF, but other applications may ignore it; verify Mega Musa Recall on a representative layered TIFF before switching an archive workflow from PSD.
+## Privacy
 
-### Display currency
+API keys use UXP secure storage. Prompts and images go directly to the selected provider. The project has no server that receives them. Currency lookups send only currency codes to Frankfurter.
 
-Choose **Display currency** under **API Keys**: EUR, CHF, USD, JPY, KRW, CNY, GBP, CAD, AUD, INR or BRL. The default is USD; a saved currency preference takes priority. Price menus and the budget update immediately when a rate is available.
+Provider retention depends on your API account and its settings. See [Gemini data retention](https://ai.google.dev/gemini-api/docs/zdr) and [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data).
 
-On startup, non-USD selections fetch [ECB reference rates through Frankfurter](https://frankfurter.dev/providers/ecb/) in the background unless a successful lookup is already cached for the current UTC day. Switching away from USD also triggers a lookup when needed. USD requires no lookup. Valid rates are cached individually. Once all quotes are available for the day, switching currencies does not require separate requests. A missing quote can retry without discarding other cached rates. The [ECB publishes rates around 16:00 CET on working days](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html); weekends and holidays use the latest published rates. The rate note shows the source and publication date. These are display estimates; payment providers may use different rates and add fees.
+## Development and license
 
-Offline connections, service errors and a five-second timeout fail silently. The plugin keeps the last successful rates, or displays amounts explicitly in USD if no rate is available. A failed lookup can retry on the next startup. Only currency codes are sent to Frankfurter; API keys, prompts, images and spending amounts are not included. Stored USD spending is never changed by exchange-rate updates; historical totals are displayed using the latest cached rate.
+See [DEVELOPER.md](DEVELOPER.md) for builds, checks and extensions. See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and behavior that changes must preserve.
 
-### Describe budget
-
-**Describe Images** adds its cost to the same budget as image generation. The **images described** counter counts each input image: one Photoshop selection plus nine references adds 10, even though they share one API request. No Describe request count is shown. The cost for the whole request is added once, without multiplying it by the image count. Returned usage accounts for input, output, reasoning and cached tokens, including OpenAI cache writes. The calculator uses [OpenAI pricing](https://developers.openai.com/api/docs/pricing) and [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), checked August 28, 2026, with conversion to the selected display currency. It assumes paid API usage; free tiers, credits, taxes and account-specific discounts are not detected.
-
-If usage is missing, the budget uses the midpoint of the model's displayed price range per input image and marks those images as estimated. Canceling after sending a request also adds that estimate once; its input images count as described and are marked canceled and estimated. A late response does not add cost or images again or replace the estimate. Canceling during preparation adds nothing. Responses with usable billing information still count if their description text cannot be parsed; transport errors and rejected requests without usage add neither cost nor described images.
-
-All pricing, input allowances and stored budget amounts use USD. Currency conversion happens only for display. On the first update, existing CHF spend is divided by the historical 0.8103 reference rate and saved once as USD, preserving its value at that historical rate, counters and start date. The original CHF storage key remains as a backup; resets and reloads do not repeat the conversion.
-
-The total always shows two decimal places; stored amounts are not rounded. Counts and costs survive a panel reload. **Undo** restores the prompt without refunding usage. **Reset** clears spend, generation counts and description counts together. When upgrading from the old Describe request counter, the counters for described images start at zero because historical input counts were not saved. Existing CHF spend, generation counts and the budget's start date are preserved. This is a local estimate, not the provider's invoice.
-
-## Data retention
-
-What a provider keeps is set on your API account, not by this plugin. Every endpoint and model used here is eligible for zero data retention (ZDR).
-
-- **Gemini:** on the free tier Google may use your prompts and images to improve its products. Use a project with billing enabled, and [request ZDR](https://ai.google.dev/gemini-api/docs/zdr) for that project if you need it.
-- **OpenAI:** inputs are never used for training, and abuse-monitoring logs are kept for 30 days. Ask OpenAI sales about [ZDR](https://developers.openai.com/api/docs/guides/your-data).
-
-Some non-identifying metadata is retained under ZDR either way.
-
-## License
-
-Mega Musa is licensed under [GNU GPL version 3 only](LICENSE) with an
-additional [Photoshop/UXP linking exception](LICENSE-EXCEPTION) under section 7.
+Licensed under [GPL version 3 only](LICENSE) with a [Photoshop/UXP linking exception](LICENSE-EXCEPTION).
 
 SPDX: `GPL-3.0-only WITH GPL-3.0-linking-exception`
-
-The exception permits linking or combining the plugin with Adobe Photoshop
-and its UXP runtime and distributing the resulting work. The plugin remains
-subject to GPLv3, including its corresponding-source requirements when you
-distribute it. Adobe's components remain subject to Adobe's own license terms;
-the exception does not grant rights to redistribute Adobe software.
-Third-party dependencies retain their own licenses.
-
-Plugin builds include both `LICENSE` and `LICENSE-EXCEPTION`. When distributing
-a packaged build, also provide the corresponding source as required by GPLv3.

@@ -1,88 +1,55 @@
-# Source architecture
+# Mega Musa architecture
 
-The plugin uses feature modules with a few objects that own state. There is no application framework, dependency container or class hierarchy.
-
-`src/main.ts` installs the required text codec polyfills before importing the panel, then starts the application. `src/panel/app.ts` creates the controllers and connects their callbacks.
+Mega Musa separates panel controls, generation workflows and Photoshop operations into modules with explicit responsibilities. Startup begins in [src/main.ts](src/main.ts), which installs the text codec polyfills before loading the panel; [src/panel/app.ts](src/panel/app.ts) then creates the controllers and connects their dependencies.
 
 ## Module map
 
 | Location | Responsibility |
 | --- | --- |
-| `src/panel/` | Spectrum controls, settings, description, recall, reference UI, notices and application wiring |
-| `src/prompt-history.ts` | Bounded prompt snapshots, edit grouping, undo and redo without host dependencies |
-| `src/panel/prompt.ts` | Prompt writes, native event handling, cursor restoration, history buttons and the Describe lock |
-| `src/generation/controller.ts` | UI adapter that validates a submission and captures its inputs |
-| `src/generation/queue.ts` | Queue state, pending submissions, FIFO provider slots and cancellation |
-| `src/generation/prepare.ts` | Capture Photoshop pixels and selection, calculate the frame and prepare request references |
-| `src/generation/workflow.ts` | Coordinate preparation, provider requests, cancellation and billing |
-| `src/generation/result.ts` | Decode returned images and construct the archive and pending placement |
-| `src/generation/placement.ts` | Place results, retain paid pixels after a modal timeout and retry placement |
-| `src/photoshop/` | Document access, checked action descriptors, selection, pixels, masks, metadata and placement |
-| `src/references/` | Reference collection, WebView image processing, archive preparation, deduplication and restoration |
-| `src/providers/` | Bundled provider registry, provider-owned catalogs, credentials metadata and request/response adapters |
-| `src/models/` | Catalog access, capability/settings contracts, normalization, geometry, labels and pricing helpers |
-| `src/model-preferences.ts` | Versioned settings per model with legacy preference migration |
-| `src/exchange-rates/` | Rate-source registry and USD-normalized source adapters |
-| `src/archive/` | Persisted metadata types and validation, including older records |
-| `src/images/` | Encoding, decoding, color tags, channel conversion and resampling |
-| `src/webview/` | Browser entry, canvas conversion and the shared message/chunk protocol |
+| `src/panel/` | Controls, settings, prompts, Describe, recall and UI state |
+| `src/generation/` | Submission capture, queue, preparation, requests, billing and result placement |
+| `src/photoshop/` | Host actions, documents, pixels, selections, masks, metadata and Smart Objects |
+| `src/providers/` | Registry, credentials, provider catalogs and API adapters |
+| `src/models/`, `src/model-preferences.ts` | Capabilities, settings validation, geometry, prices and saved model preferences |
+| `src/references/`, `src/archive/` | Reference processing, embedded assets, recall records and schema validation |
+| `src/images/`, `src/webview/` | Image conversion, browser processing and transfer protocol |
+| `src/budget.ts`, `src/currency.ts`, `src/exchange-rates/` | USD spending, display conversion and rate sources |
 | `public/` | HTML, CSS, manifest and static assets |
 
-Provider-specific implementations live under `src/providers/gemini/` and `src/providers/openai/`, including HTTP adapters, response validation and provider-only sizing/pricing helpers. Shared provider contracts, routing and reusable description helpers remain at `src/providers/`.
+Gemini and OpenAI keep their catalogs and adapters in their own folders under `src/providers/`, alongside the shared registry and contracts. Root files such as `photoshop-bridge.ts`, `image-codec.ts` and `models.ts` provide compatibility exports for existing consumers, while internal imports should point directly to the module that owns the implementation.
 
-Existing root entry modules such as `photoshop-bridge.ts`, `image-codec.ts` and `models.ts` re-export the new implementations. Internal imports point directly to the owning module. The placement API now takes a `PlacementRequest` object and a separate optional `PlacementContext` instead of 14 positional arguments.
+## Generation flow
 
-## State ownership and boundaries
+The generation controller captures a submission and adds it to the queue, where the workflow prepares image inputs, waits for a provider slot and sends the request. Each job keeps its own prompt, settings, references, Photoshop pixels, selection and destination, so later edits to the panel controls do not change work already submitted.
 
-- `GenerationQueue` owns jobs, pending submission IDs, provider slot waiters and queue notifications. `GenerationInput` separates the captured, readonly fields from mutable execution state.
-- `ReferenceCollection` owns the current reference list and its capacity. A submission receives a separate array snapshot.
-- `ReferenceImageProcessor` owns pending resize requests, timers and thumbnail deduplication. Disconnecting rejects pending requests and clears their timers.
-- Description, recall and drop controllers keep their transient state inside their factory closures. The panel composition root connects them through explicit dependencies and callbacks.
-- `PromptHistory` owns the panel session's text timeline. All programmatic prompt changes go through the injected prompt controller's `replace(text, source)` method. Describe owns the prompt lock and may apply its result while locked; Recall and undo/redo cannot change the prompt until the lock is released. A no-op does not create a step or discard redo. Undo/redo advances only after a verified text write. No native undo buffer, synthetic input event, DOM setter override or Photoshop history operation is needed to record a replacement.
-- The settings controller owns custom option controls. Provider credential controls expose only the selected provider's values. Model preferences are separate from global placement/display preferences.
-- Provider, model, archive schema and image codec modules do not load panel or Photoshop code at runtime. The bundle test checks these boundaries and rejects runtime dependency cycles.
-- Photoshop host objects and Spectrum elements still use explicit `any` at parts of the host boundary. The project has no complete SDK type definitions. Domain state, placement options and outgoing WebView messages are typed; implicit `any` and unused variables are compiler errors.
+`GenerationQueue` owns jobs, pending submissions, provider slots and cancellation, with a limit of four active jobs for standard submissions and up to 10 images in one expanded prompt. Provider requests use two slots in first-in, first-out order, while a separate host gate coordinates Photoshop modal work.
 
-## Behavior that must remain stable
+Adapters mark dispatch immediately before the first potentially billable request, allowing the workflow to distinguish cancellation before and after that point. Canceling before dispatch adds no charge; after dispatch, the workflow records the captured estimate once unless the provider has confirmed a charge. Late responses must leave the panel and spending totals untouched once cancellation has been handled.
 
-1. Plain submissions stop at four active jobs. One brace-expanded submission can contain up to 10 images. Provider requests use two slots with FIFO ordering; Photoshop modal work uses its separate host gate.
-2. A queued job retains its submitted prompt, model, reference list, placement preferences and original document ID. Later panel edits cannot replace those captured fields.
-3. Canceling before dispatch adds no budget charge. Canceling after dispatch records the frozen estimate once unless a provider has already reported a confirmed charge. Adapters mark dispatch immediately before the first potentially billable network request. Late responses cannot overwrite the panel or charge again. Successful responses are counted before image decoding or placement.
-4. A host modal timeout during placement retains the returned pixels. Retry uses the same pixels and destination without another provider request. Other placement failures retain the existing raster fallback and error behavior.
-5. Archive envelope version 1, metadata namespaces and legacy credential keys remain compatible. New archives optionally include a provider ID and a versioned model-settings record. Recall supports older records and leaves global Smart Object and reduced-storage preferences alone. Restored references are not recompressed and existing originals take priority over compressed duplicates.
-6. The panel and WebView share message names, chunk limits and transfer assembly. Both receivers check their message source. Missing or invalid chunks cannot be accepted as complete images.
+When a result arrives, the workflow records its charge before decoding or placing the image, so a local failure does not lose the billing record. If placement encounters a modal timeout, the plugin retains the paid image and retries with the same pixels and destination without another provider request. Smart Object placement also keeps a raster fallback so a failed conversion can still preserve the result.
 
-## Separate correctness fixes
+## State and module boundaries
 
-These changes were made after the structural extraction and have focused regression coverage:
+`ReferenceCollection` owns the panel's current reference list and gives each submission a separate array snapshot. Image conversion has its own lifecycle in `ReferenceImageProcessor`, which tracks pending conversions and timers and must reject unfinished work and clear timers when it disconnects.
 
-- Metadata writes use the shared checked `batchPlay` helper. An error descriptor can no longer be reported as a successful archive write.
-- Grayscale-plus-alpha images expand correctly to RGBA, retaining their alpha channel.
-- Pixel reads copy the host buffer and dispose Photoshop image data in `finally`, including when `getData()` rejects.
-- Placement resumes suspended history in `finally`. A cleanup failure does not replace the original placement error.
+Panel controllers own temporary UI state, while model preferences remain separate from global placement and display preferences. Requests receive only the selected provider's credentials, keeping account configuration scoped to the operation that needs it.
 
-## Validation and development
+Provider, model, archive schema and image codec modules must remain independent of panel and Photoshop code at runtime. Keep domain state typed and contain host-specific types at the host boundary so shared logic can be tested without loading Photoshop.
 
-```sh
-npm run typecheck
-npm test
-npm run build
-```
+The panel and WebView use a shared protocol for message names, chunk limits and transfer assembly. Both receivers validate the message source and reject incomplete or invalid transfers before accepting them as images.
 
-The test runner discovers `tests/test-*.mjs`, excluding the shared support module. Tests bundle in memory and use controlled host and provider responses. They do not send paid provider requests. Coverage includes provider payloads, queue ordering, cancellation and billing, paid placement retry, settings recall, archive reuse, Smart Object cleanup, image formats, WebView transfers and entry-point initialization without native text codecs.
+## Documents and compatibility
 
-The build emits `dist/index.js` and `dist/drop-target.js`, with their HTML, CSS and assets. `public/drop-target.js` is only a placeholder; edit `src/webview/drop-target.ts`. An alternate output directory is supported through `node esbuild.config.mjs --outdir=/absolute/path`. Builds overwrite outputs without deleting existing files. As before, watch mode watches the source bundles; rerun the build after static HTML or CSS changes.
+Generated layers store recall metadata in the existing Photoshop namespaces, using a version-1 archive envelope that must remain readable as fields are added. Older records may lack provider IDs, versioned settings or selection geometry, so changes need to preserve those records along with legacy credential keys and their migrations.
 
-Automated host doubles cannot verify Photoshop's actual layer transforms, mask linkage, history behavior or UXP styling. Reload `dist/manifest.json` and check a rectangular selection, a feathered selection, a full document and an artboard. Also check drop/paste, Describe with cancellation, queued jobs and recall from an existing document. Provider generation smoke tests incur the usual API cost.
+References are stored once per source hash in a hidden, locked archive group, allowing later generations to reuse existing assets. Recall must reuse these references without recompressing them and leave the global Smart Object and reduced-storage preferences as the user has set them.
 
-For prompt history, check on macOS and Windows: typing → paste → Describe → manual editing → Recall, then undo and redo the complete sequence using both buttons and shortcuts. Check native/context-menu Undo where available, IME composition, selected-text replacement, scrolling, editing after Undo and the empty-history boundary. Verify that Photoshop's document history stays untouched while the prompt handles a shortcut, that Describe locks typing/history/Load Settings through cancellation and that Cmd/Ctrl+Enter still generates. Automated tests cover these state transitions and simulated event sequences; host testing is needed for UXP's actual event delivery and native caret behavior.
+Saved rectangles can be restored only when the document and artboard geometry remains compatible with the stored coordinates. If that check fails, restoration must leave the current selection untouched.
 
-## Keeping future changes lean
+## Host resource handling
 
-- Add providers through `src/providers/registry.ts`. Put capabilities and prices in provider-owned model catalogs and keep HTTP details in the adapter. See [the developer extension guide](DEVELOPER.md) for complete examples.
-- Quality choices, model visibility and framing are explicit capabilities. Pricing metadata must not select behavior. New model options use a small primitive-value schema plus optional validation and migration hooks.
-- Exchange rates are cached per source and currency; malformed or missing quotes cannot discard valid unrelated quotes. USD budget storage is independent of conversion.
-- Add an abstraction when it removes repeated behavior or owns a real lifecycle. Small stateless functions remain functions; a shared base class for every provider or controller would add indirection without solving a current problem.
-- Keep tests aimed at outcomes and public module APIs. Avoid checking source text or injecting private exports into the application entry point.
-- Preserve small differences in host action descriptors when their behavior differs. Deduplicate the common host boundary and resource handling, not every superficially similar command.
-- Retire compatibility re-export files only when their consumers no longer need them and file removal has been agreed. They contain no duplicate implementations.
+Use checked `batchPlay` calls so Photoshop error descriptors become failures that the workflow can handle. Pixel reads must copy the buffer before disposing the host image data, and cleanup belongs in `finally` so image data is released and suspended history is resumed even after an error. If cleanup also fails, preserve the original failure so its cause remains visible.
+
+## Development
+
+The [developer guide](DEVELOPER.md) covers build steps, extension contracts and validation for changes to these modules. Keep tests focused on observable outcomes and module APIs, and introduce shared abstractions when they remove repeated behavior or own a clear lifecycle.
