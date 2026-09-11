@@ -14,7 +14,7 @@ const plugins = [{ name: "example-provider", setup(build) {
     resolveDir: dirname(path), loader: "ts",
     contents: `import { createProviderRegistry } from "./registry-core";
       import { openai } from "./openai"; import { gemini } from "./gemini";
-      import { exampleProvider } from ${JSON.stringify(resolve("scripts/fixtures/example-provider.ts"))};
+      import { exampleProvider } from ${JSON.stringify(resolve("tests/fixtures/example-provider.ts"))};
       export const providerRegistry = createProviderRegistry([gemini, openai, exampleProvider]);`,
   }));
 } }];
@@ -26,7 +26,7 @@ const api = await loadModule([
   "src/providers/registry.ts", "src/providers/registry-core.ts", "src/providers/images.ts", "src/providers/descriptions.ts",
   "src/models/catalog.ts", "src/models/settings.ts", "src/models/pricing.ts", "src/model-preferences.ts",
   "src/panel/settings.ts", "src/panel/provider-settings.ts", "src/generation/queue.ts", "src/generation/workflow.ts",
-  "src/archive/schema.ts", "src/providers/failure.ts", "scripts/fixtures/example-provider.ts",
+  "src/archive/schema.ts", "src/providers/failure.ts", "tests/fixtures/example-provider.ts",
 ], { plugins, globals: { document, localStorage: memoryStorage(values), Event }, modules: { uxp: { storage: { secureStorage: {
   getItem: async key => { if (!secrets.has(key)) throw new Error("missing"); return new TextEncoder().encode(secrets.get(key)); },
   setItem: async (key, value) => secrets.set(key, value), removeItem: async key => secrets.delete(key),

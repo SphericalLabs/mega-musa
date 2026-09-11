@@ -5,11 +5,11 @@ import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const tests = readdirSync("scripts")
+const tests = readdirSync("tests")
   .filter((name) => name.startsWith("test-") && name.endsWith(".mjs") && name !== "test-support.mjs")
   .sort();
 for (const test of tests) {
-  const result = spawnSync(process.execPath, [join("scripts", test)], { stdio: "inherit" });
+  const result = spawnSync(process.execPath, [join("tests", test)], { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }

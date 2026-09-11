@@ -69,7 +69,7 @@ npm test
 npm run build
 ```
 
-The test runner discovers `scripts/test-*.mjs`, excluding the shared support module. Tests bundle in memory and use controlled host and provider responses. They do not send paid provider requests. Coverage includes provider payloads, queue ordering, cancellation and billing, paid placement retry, settings recall, archive reuse, Smart Object cleanup, image formats, WebView transfers and entry-point initialization without native text codecs.
+The test runner discovers `tests/test-*.mjs`, excluding the shared support module. Tests bundle in memory and use controlled host and provider responses. They do not send paid provider requests. Coverage includes provider payloads, queue ordering, cancellation and billing, paid placement retry, settings recall, archive reuse, Smart Object cleanup, image formats, WebView transfers and entry-point initialization without native text codecs.
 
 The build emits `dist/index.js` and `dist/drop-target.js`, with their HTML, CSS and assets. `public/drop-target.js` is only a placeholder; edit `src/webview/drop-target.ts`. An alternate output directory is supported through `node esbuild.config.mjs --outdir=/absolute/path`. Builds overwrite outputs without deleting existing files. As before, watch mode watches the source bundles; rerun the build after static HTML or CSS changes.
 

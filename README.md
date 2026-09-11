@@ -43,7 +43,7 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 
 ## Development
 
-Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps. The [developer extension guide](DEVELOPER.md) explains how to add providers, model-specific settings, currencies and exchange-rate sources.
+Automated tests live in [`tests/`](tests/). Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps. The [developer extension guide](DEVELOPER.md) explains how to add providers, model-specific settings, currencies and exchange-rate sources.
 
 ## Use
 

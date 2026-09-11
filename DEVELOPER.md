@@ -2,7 +2,7 @@
 
 Providers are TypeScript modules bundled with the Photoshop plugin. Adding a provider requires its module, one registry entry and any new network domains in the UXP manifest. Rebuild and reload the plugin after registration. There is no runtime download or installation of provider code.
 
-Start with the tested [example provider](scripts/fixtures/example-provider.ts). Its registration is exercised by [the extension test](scripts/test-provider-extension.mjs), including custom controls, two credentials, pricing, a frozen queued request and archive recall. The example returns a local test image and makes no network requests. It is excluded from the application build.
+Start with the tested [example provider](tests/fixtures/example-provider.ts). Its registration is exercised by [the extension test](tests/test-provider-extension.mjs), including custom controls, two credentials, pricing, a frozen queued request and archive recall. The example returns a local test image and makes no network requests. It is excluded from the application build.
 
 ## Add a provider
 
@@ -128,7 +128,7 @@ Description presets declare their API model, optional effort/options, estimate a
 
 1. Verify that the selected exchange-rate source publishes the currency. The default source is Frankfurter restricted to ECB rates; not every currency is necessarily covered.
 2. Add `{ value: "CODE", label: "CODE — Currency name" }` to `CURRENCIES` in `src/currency.ts`, using the real three-letter currency code. No separate picker or request URL change is needed.
-3. Update the response fixtures in `scripts/test-currency.mjs` and add a check for the new currency. Keep an offline test using an older cache that lacks the new quote.
+3. Update the response fixtures in `tests/test-currency.mjs` and add a check for the new currency. Keep an offline test using an older cache that lacks the new quote.
 4. Run the checks and update the supported-currency list in `README.md`.
 
 Rates are units of the quote currency per **one USD**. A USD 2 amount with a rate of 0.9 is displayed as 1.8 units of that currency. Formatting intentionally retains fractional units for small API charges, even for currencies commonly displayed without cents.
