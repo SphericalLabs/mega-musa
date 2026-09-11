@@ -24,7 +24,7 @@ export function apiError(provider: string, value: any, status?: number): Error {
   const details = Array.isArray(value?.details) ? value.details : [];
   const reason = details.find((detail: any) => typeof detail?.reason === "string")?.reason;
   const code = reason || value?.status || value?.code || value?.type;
-  const label = typeof code === "string" && code ? code
+  const label = typeof code === "string" && code ? code.toUpperCase()
     : status ? `HTTP ${status}` : typeof code === "number" ? `HTTP ${code}` : "";
   const key = String(code || "").toLowerCase();
   let help = "The request failed.";

@@ -24,7 +24,7 @@ try {
   ];
   for (const call of calls) {
     globalThis.fetch = async () => reply({ error: { code: "credit_balance_exhausted", message: "No credit" } }, 429);
-    await assert.rejects(call, /credits.*\(credit_balance_exhausted\)$/);
+    await assert.rejects(call, /credits.*\(CREDIT_BALANCE_EXHAUSTED\)$/);
     const abort = new Error("aborted"); abort.name = "AbortError";
     globalThis.fetch = async () => { throw abort; };
     await assert.rejects(call, error => error === abort);
