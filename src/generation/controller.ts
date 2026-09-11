@@ -14,18 +14,16 @@ import { providerCredentials, missingCredential } from "../panel/provider-settin
 import { $, isChecked } from "../panel/controls";
 import { showDocumentBlocker } from "../panel/document-warnings";
 import { setNote, setStatus } from "../panel/status";
-import { getActiveArtboard } from "../photoshop/artboards";
 import { documentBlocker, type DocumentState, getDocumentState } from "../photoshop/document-state";
 import { getActiveDoc } from "../photoshop/runtime";
-import { getSelectionBounds } from "../photoshop/selection";
-import { type ActiveArtboard, type Bounds } from "../photoshop/types";
 import { expandPromptTemplate } from "../prompt-expansion";
 import { type RefImage } from "../references";
 import { ReferenceCollection } from "../references/collection";
 import { prepareReferenceArchiveImages } from "../references/preparation";
 import { ReferenceImageProcessor } from "../references/processor";
 import { GenerationQueue } from "./queue";
-import { type GenerationJob } from "./types";
+import { captureGenerationCanvas } from "./snapshot";
+import { type GenerationCanvasInput, type GenerationJob } from "./types";
 import { type GenerationWorkflow } from "./workflow";
 export function createGenerationController({ queue, references, processor, workflow, descriptionBusy, captureSettings }: {
   queue: GenerationQueue;
@@ -128,19 +126,17 @@ export function createGenerationController({ queue, references, processor, workf
     const anchorLayerId = Number.isFinite(anchorId) ? anchorId : null;
     const jobIds = queue.reserve(expandedPrompts.length);
     updateGenerateControl();
-    let activeArtboard: ActiveArtboard | null;
-    let rawSelection: Bounds | null;
+    let canvas: GenerationCanvasInput;
     try {
-      [activeArtboard, rawSelection] = await Promise.all([
-        getActiveArtboard(doc, anchorLayerId),
-        getSelectionBounds(Number(doc.id)),
-      ]);
+      setStatus("Freezing Photoshop selection and canvas pixels…");
+      canvas = await captureGenerationCanvas(Number(doc.id), anchorLayerId, model, resolution, includeSelection);
     } catch (err: any) {
       queue.abandon(jobIds);
       setStatus("Error: " + errorMessage(err), "error");
       return;
     }
     const jobs: GenerationJob[] = expandedPrompts.map((prompt, index) => ({
+      ...canvas,
       id: jobIds[index],
       prompt,
       model,
@@ -155,13 +151,6 @@ export function createGenerationController({ queue, references, processor, workf
       reduceDocumentSize,
       references: generationRefs,
       archiveReferences,
-      docId: Number(doc.id),
-      docWidth: Number(doc.width),
-      docHeight: Number(doc.height),
-      anchorLayerId,
-      activeArtboard,
-      rawSelection,
-      documentState,
       state: "preparing",
       status: "Freezing Photoshop input…",
       cancelRequested: false,

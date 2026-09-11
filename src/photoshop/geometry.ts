@@ -4,6 +4,7 @@
  */
 
 import { type Bounds, type SelectionSnapshot } from "./types";
+import { coverDimensions } from "../images/resample";
 
 export function boundVal(u: any): number {
   return typeof u === "number" ? u : u?._value ?? 0;
@@ -31,7 +32,7 @@ export function preciseBoundsFrom(value: any): Bounds | null {
   return bounds.right - bounds.left > 0 && bounds.bottom - bounds.top > 0 ? bounds : null;
 }
 
-export function selectionNeedsMask(selection: SelectionSnapshot | null): selection is SelectionSnapshot {
+export function selectionNeedsMask(selection: SelectionSnapshot | null): boolean {
   if (!selection) return false;
   const width = selection.bounds.right - selection.bounds.left;
   const height = selection.bounds.bottom - selection.bounds.top;
@@ -50,9 +51,35 @@ export function intersectBounds(a: Bounds, b: Bounds): Bounds | null {
     right: Math.min(a.right, b.right),
     bottom: Math.min(a.bottom, b.bottom),
   };
-  return intersection.right - intersection.left > 1 && intersection.bottom - intersection.top > 1
+  return intersection.right > intersection.left && intersection.bottom > intersection.top
     ? intersection
     : null;
+}
+
+// Expand equally on both sides so the original region keeps its center and coverage.
+// This frame may extend beyond the canvas; input reads pad those margins transparently.
+export function expandRegionToRatio(bounds: Bounds, ratio: number): Bounds {
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  const padX = Math.max(0, Math.ceil((height * ratio - width) / 2));
+  const padY = Math.max(0, Math.ceil((width / ratio - height) / 2));
+  return {
+    left: bounds.left - padX,
+    top: bounds.top - padY,
+    right: bounds.right + padX,
+    bottom: bounds.bottom + padY,
+  };
+}
+
+// Shared by Smart Object and raster placement. Integer outer dimensions match
+// Photoshop Image Size; odd overflow puts the extra pixel on the right/bottom.
+export function coverBounds(width: number, height: number, target: Bounds): Bounds {
+  const targetWidth = target.right - target.left;
+  const targetHeight = target.bottom - target.top;
+  const { width: scaledWidth, height: scaledHeight } = coverDimensions(width, height, targetWidth, targetHeight);
+  const left = target.left - Math.floor((scaledWidth - targetWidth) / 2);
+  const top = target.top - Math.floor((scaledHeight - targetHeight) / 2);
+  return { left, top, right: left + scaledWidth, bottom: top + scaledHeight };
 }
 
 // Prefer expansion to preserve selection coverage; shrink and reposition to fit the

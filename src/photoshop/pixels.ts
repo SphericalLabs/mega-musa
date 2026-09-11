@@ -4,7 +4,9 @@
  */
 
 import { type HostModalLease } from "../host-modal";
-import { boundsFrom } from "./geometry";
+import { toRGBA } from "../images/pixels";
+import { resampleRGBA } from "../images/resample";
+import { boundsFrom, intersectBounds } from "./geometry";
 import { copyPixels } from "./pixel-data";
 import { runModal } from "./runtime";
 import { readSelectionMask } from "./selection";
@@ -18,45 +20,61 @@ export async function readRegion(
   maxEdge?: number,
   lease?: HostModalLease
 ): Promise<RegionRead> {
+  return runModal("read region", () => readRegionInModal(docId, bounds, withMask, maxEdge), lease);
+}
+
+// Retain the entire requested coordinate frame even when Photoshop trims empty
+// margins or reads a smaller cache level. clipBounds excludes other artboards.
+export async function readRegionInModal(
+  docId: number,
+  bounds: Bounds,
+  withMask: boolean,
+  maxEdge?: number,
+  clipBounds?: Bounds
+): Promise<RegionRead> {
   const cropW = bounds.right - bounds.left;
   const cropH = bounds.bottom - bounds.top;
   const longest = Math.max(cropW, cropH);
-  // Masked reads stay full-size so pixel and coverage coordinates align.
-  const targetSize =
-    !withMask && maxEdge && longest > maxEdge
-      ? cropW >= cropH
-        ? { width: maxEdge }
-        : { height: maxEdge }
-      : undefined;
-  return await runModal(
-    "read region",
-    async () => {
-      const { data, components, width: imageW, height: imageH } = await copyPixels({
-        documentID: docId, sourceBounds: bounds, targetSize,
-      });
-
-      let debug = `crop ${cropW}x${cropH}`;
-      if (imageW !== cropW || imageH !== cropH) debug += ` -> request ${imageW}x${imageH}`;
-      debug += ` c${components}`;
-      let mask: Uint8Array | undefined;
-
-      if (withMask) {
-        try {
-          mask = await readSelectionMask(docId, bounds);
-          let covered = 0;
-          for (let i = 0; i < mask.length; i++) if (mask[i] > 127) covered++;
-          const pct = Math.round((100 * covered) / mask.length);
-          debug += ` | selection cover ${pct}%`;
-        } catch (e: any) {
-          mask = undefined;
-          debug += ` | getSelection FAILED: ${e?.message || e}`;
-        }
+  const scale = !withMask && maxEdge ? Math.min(1, maxEdge / longest) : 1;
+  const width = Math.max(1, Math.round(cropW * scale));
+  const height = Math.max(1, Math.round(cropH * scale));
+  const data = new Uint8Array(width * height * 4);
+  const readBounds = clipBounds ? intersectBounds(bounds, clipBounds) : bounds;
+  if (readBounds) {
+    const read = await copyPixels({
+      documentID: docId, sourceBounds: readBounds,
+      targetSize: scale < 1 ? {
+        width: Math.max(1, Math.round((readBounds.right - readBounds.left) * scale)),
+        height: Math.max(1, Math.round((readBounds.bottom - readBounds.top) * scale)),
+      } : undefined,
+    });
+    const left = Math.round((read.sourceBounds.left - bounds.left) * width / cropW);
+    const top = Math.round((read.sourceBounds.top - bounds.top) * height / cropH);
+    const right = Math.round((read.sourceBounds.right - bounds.left) * width / cropW);
+    const bottom = Math.round((read.sourceBounds.bottom - bounds.top) * height / cropH);
+    const readW = right - left;
+    const readH = bottom - top;
+    if (read.width > 0 && read.height > 0 && readW > 0 && readH > 0) {
+      const pixels = resampleRGBA(toRGBA(read.data, read.width, read.height, read.components), read.width, read.height, readW, readH);
+      const startX = Math.max(0, left);
+      const endX = Math.min(width, right);
+      if (endX > startX) for (let y = Math.max(0, top); y < Math.min(height, bottom); y++) {
+        const start = ((y - top) * readW + startX - left) * 4;
+        data.set(pixels.subarray(start, start + (endX - startX) * 4), (y * width + startX) * 4);
       }
+    }
+  }
 
-      return { image: { data, width: imageW, height: imageH, components }, mask, debug };
-    },
-    lease
-  );
+  let debug = `crop ${cropW}x${cropH} -> request ${width}x${height} c4`;
+  let mask: Uint8Array | undefined;
+  if (withMask) {
+    try {
+      mask = await readSelectionMask(docId, bounds);
+    } catch (e: any) {
+      debug += ` | getSelection FAILED: ${e?.message || e}`;
+    }
+  }
+  return { image: { data, width, height, components: 4 }, mask, debug };
 }
 
 // Use layerID to isolate the preview and targetSize to cap the pixel read.

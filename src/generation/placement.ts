@@ -4,7 +4,7 @@
  */
 
 import { errorMessage } from "../errors";
-import { HostModalTimeoutError, PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS } from "../host-modal";
+import { PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS } from "../host-modal";
 import { placeResult } from "../photoshop/placement";
 import { type GenerationJob } from "./types";
 
@@ -12,9 +12,9 @@ import { type GenerationContext, setGenerationNote } from "./context";
 
 export function createPlacementWorkflow(context: GenerationContext, place: typeof placeResult = placeResult) {
   const { queue, setStatus, onRecallRefresh, onQueueRefresh } = context;
-  function preserveTimedOutPlacement(job: GenerationJob, error: any): boolean {
-    if (!(error instanceof HostModalTimeoutError) || !job.pendingPlacement) return false;
-    const message = `Paid result preserved. ${error.message}`;
+  function preserveFailedPlacement(job: GenerationJob, error: any): boolean {
+    if (!job.pendingPlacement) return false;
+    const message = `Paid result preserved. ${errorMessage(error)} Use Retry Placement to place it without generating again.`;
     queue.update(job, "placement-failed", message);
     setStatus(`Placement paused — ${message}`, "error");
     return true;
@@ -24,7 +24,7 @@ export function createPlacementWorkflow(context: GenerationContext, place: typeo
     const pending = job.pendingPlacement;
     if (!pending) throw new Error("The generated image is no longer available for placement.");
 
-    queue.update(job, "placing", "Waiting to place the paid result in Photoshop…");
+    queue.update(job, "placing", "Waiting to place the paid result. Close any open Photoshop tool menu or dialog…");
     const placement = await place({
       docId: job.docId,
       bounds: pending.region,
@@ -39,12 +39,14 @@ export function createPlacementWorkflow(context: GenerationContext, place: typeo
       references: await job.archiveReferences(),
       anchorLayerId: job.anchorLayerId,
     }, { timeoutSeconds: PAID_PLACEMENT_MODAL_TIMEOUT_SECONDS });
+    // Placement succeeded. A later panel-refresh error must not offer to place it twice.
+    job.pendingPlacement = null;
     onRecallRefresh();
 
     if (placement.smartObject) {
       const storage = placement.resultStorage?.mode === "jpeg-90" ? "JPEG 90" : "lossless sRGB PNG";
       pending.notes.push(
-        `The full-resolution ${pending.returnedSize} result is embedded as ${storage} and sized nondestructively to the raster placement bounds.`
+        `The full-resolution ${pending.returnedSize} result is embedded as ${storage}, scaled proportionally and clipped to the original rectangle.`
       );
       setGenerationNote(context, job,
         [pending.notes.join(" "), pending.usageDetails.join("; ")].filter(Boolean).join(" ")
@@ -92,7 +94,7 @@ export function createPlacementWorkflow(context: GenerationContext, place: typeo
       await completeGenerationPlacement(job);
     } catch (error: any) {
       const message = errorMessage(error);
-      if (!preserveTimedOutPlacement(job, error)) {
+      if (!preserveFailedPlacement(job, error)) {
         job.pendingPlacement = null;
         queue.update(job, "failed", "Error: " + message);
         setStatus("Error: " + message, "error");
@@ -102,5 +104,5 @@ export function createPlacementWorkflow(context: GenerationContext, place: typeo
     }
   }
 
-  return { completeGenerationPlacement, retryGenerationPlacement, preserveTimedOutPlacement };
+  return { completeGenerationPlacement, retryGenerationPlacement, preserveFailedPlacement };
 }

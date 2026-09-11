@@ -76,10 +76,14 @@ export async function runHostModalTask<T>(
 }
 
 export function isHostModalBusyError(error: any): boolean {
-  if (Number(error?.number) === 9) return true;
+  if (Number(error?.number ?? error?.result) === 9) return true;
   const message = String(error?.message || error || "");
   return /host is in a modal state|inside a modal scope|running a modal command/i.test(message);
 }
+
+// Only read-only placement preparation may raise this after a modal callback starts.
+// It is safe to release Photoshop and try again because no edits have begun.
+export class HostModalPreflightBusyError extends Error {}
 
 export class HostModalTimeoutError extends Error {
   readonly commandName: string;
@@ -126,8 +130,8 @@ export async function executeHostModal<T>(
         }
       );
     } catch (error: any) {
-      // Retry acquisition only; rerunning a started callback could duplicate edits.
-      if (targetStarted || !isHostModalBusyError(error)) throw error;
+      // Never replay started edits. A blocked read-only preflight is safe to retry.
+      if (!(error instanceof HostModalPreflightBusyError) && (targetStarted || !isHostModalBusyError(error))) throw error;
       const remainingMilliseconds = deadline - Date.now();
       if (remainingMilliseconds <= 0) {
         throw new HostModalTimeoutError(commandName, timeoutSeconds);

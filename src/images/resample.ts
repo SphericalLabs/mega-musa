@@ -3,7 +3,12 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-// Scale proportionally to cover the destination, then center-crop the overflow.
+export function coverDimensions(sw: number, sh: number, dw: number, dh: number): { width: number; height: number } {
+  const scale = Math.max(dw / sw, dh / sh);
+  return { width: Math.max(dw, Math.round(sw * scale)), height: Math.max(dh, Math.round(sh * scale)) };
+}
+
+// Use the same integer resize and centered crop as Photoshop Image Size.
 export function coverResampleRGBA(
   src: Uint8Array,
   sw: number,
@@ -12,13 +17,11 @@ export function coverResampleRGBA(
   dh: number
 ): Uint8Array {
   const out = new Uint8Array(dw * dh * 4);
-  const scale = Math.max(dw / sw, dh / sh);
-  const winW = dw / scale;
-  const winH = dh / scale;
-  const sx0 = (sw - winW) / 2;
-  const sy0 = (sh - winH) / 2;
-  const stepX = winW / dw;
-  const stepY = winH / dh;
+  const resized = coverDimensions(sw, sh, dw, dh);
+  const stepX = sw / resized.width;
+  const stepY = sh / resized.height;
+  const sx0 = Math.floor((resized.width - dw) / 2) * stepX;
+  const sy0 = Math.floor((resized.height - dh) / 2) * stepY;
   for (let y = 0; y < dh; y++) {
     let sy = sy0 + (y + 0.5) * stepY - 0.5;
     sy = Math.min(sh - 1, Math.max(0, sy));

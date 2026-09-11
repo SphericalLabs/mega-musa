@@ -17,6 +17,7 @@ const bundle = await build({
   });
   const {
     executeHostModal,
+    HostModalPreflightBusyError,
     HostModalTimeoutError,
     isHostModalBusyError,
     runHostModalTask,
@@ -54,6 +55,7 @@ const bundle = await build({
   assert.equal(events.at(-1), "after-error");
 
   assert.equal(isHostModalBusyError({ number: 9 }), true);
+  assert.equal(isHostModalBusyError({ result: 9 }), true);
   assert.equal(isHostModalBusyError(new Error("host is in a modal state")), true);
   assert.equal(isHostModalBusyError(new Error("unrelated")), false);
 
@@ -93,6 +95,24 @@ const bundle = await build({
     (error) => error === startedBusyError
   );
   assert.equal(startedAttempts, 1);
+
+  // Only the explicit read-only preparation error allows a started callback to retry.
+  let preflightAttempts = 0;
+  const recovered = await executeHostModal(
+    { executeAsModal: async target => target({}) },
+    async () => {
+      if (++preflightAttempts < 3) throw new HostModalPreflightBusyError("blocked read");
+      return "placed after menu closed";
+    },
+    "place result", 1
+  );
+  assert.equal(recovered, "placed after menu closed");
+  assert.equal(preflightAttempts, 3);
+  await assert.rejects(executeHostModal(
+    { executeAsModal: async target => target({}) },
+    async () => { throw new HostModalPreflightBusyError("menu stays open"); },
+    "place result", 0.1
+  ), error => error instanceof HostModalTimeoutError);
 
   let attempts = 0;
   await assert.rejects(

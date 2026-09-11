@@ -16,7 +16,7 @@ import {
   selectLayerById,
   unlockResultLayer,
 } from "./layers";
-import { app, batchPlay, openDocumentById, storage } from "./runtime";
+import { activateDocumentById, batchPlay, closeScratchDocument, createScratchDocument, openDocumentById, storage } from "./runtime";
 import { type Bounds } from "./types";
 
 let smartObjectMarkerSequence = 0;
@@ -60,7 +60,7 @@ export async function createFileSmartObject(
     await sourceFile.write(fileBytes, { format: storage.formats.binary });
     const token = storage.localFileSystem.createSessionToken(sourceFile);
 
-    scratch = await app.createDocument({
+    scratch = await createScratchDocument({
       width,
       height,
       resolution: 72,
@@ -68,7 +68,7 @@ export async function createFileSmartObject(
       name: "mm-result-source",
       profile: SRGB_PROFILE,
     });
-    if (!scratch) throw new Error("Photoshop could not create the Smart Object source document.");
+    await activateDocumentById(scratch.id);
 
     await batchPlay(
       [
@@ -94,7 +94,7 @@ export async function createFileSmartObject(
             _obj: "imageSize",
             width: { _unit: "pixelsUnit", _value: targetWidth },
             height: { _unit: "pixelsUnit", _value: targetHeight },
-            constrainProportions: false,
+            constrainProportions: true,
             interpolation: { _enum: "interpolationType", _value: "bicubic" },
             _options: { dialogOptions: "dontDisplay" },
           },
@@ -106,7 +106,7 @@ export async function createFileSmartObject(
     const sizedSource = scratch.activeLayers?.[0] || embeddedSource;
     await scratch.duplicateLayers([sizedSource], targetDocument);
 
-    app.activeDocument = targetDocument;
+    await activateDocumentById(targetDocument.id);
     const createdLayers = newDocumentLayers(targetDocument, existingTargetLayerIds);
     placedLayer = createdLayers.find((layer) => layer.name === sourceMarker) || null;
     if (!placedLayer && createdLayers.length === 1) placedLayer = createdLayers[0];
@@ -128,7 +128,7 @@ export async function createFileSmartObject(
     };
   } catch (error) {
     if (openDocumentById(targetDocument.id)) {
-      app.activeDocument = targetDocument;
+      await activateDocumentById(targetDocument.id);
       const incompleteLayers = newDocumentLayers(targetDocument, existingTargetLayerIds);
       if (
         placedLayer &&
@@ -157,13 +157,13 @@ export async function createFileSmartObject(
   } finally {
     if (scratch && openDocumentById(scratch.id)) {
       try {
-        await scratch.closeWithoutSaving();
-      } catch {
-        /* only the plugin-created scratch document is eligible for closing */
+        await closeScratchDocument(scratch.id);
+      } catch (error) {
+        console.log("[Mega Musa] could not close the Smart Object source document:", error);
       }
     }
     if (sourceFile) await deleteMegaMusaTemporaryFile(sourceFile);
-    if (openDocumentById(targetDocument.id)) app.activeDocument = targetDocument;
+    if (openDocumentById(targetDocument.id)) await activateDocumentById(targetDocument.id);
   }
 }
 
@@ -233,7 +233,7 @@ export async function moveActiveLayer(offsetX: number, offsetY: number): Promise
 export async function positionSmartObjectAtBounds(layer: any, target: Bounds): Promise<void> {
   const targetW = target.right - target.left;
   const targetH = target.bottom - target.top;
-  const tolerance = 1;
+  const tolerance = 0.01;
   const current = await smartObjectBounds(layer);
   if (!current) throw new Error("Photoshop did not report the Smart Object bounds.");
   const currentW = current.right - current.left;

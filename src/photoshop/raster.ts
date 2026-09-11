@@ -8,7 +8,7 @@ import { coverResampleRGBA } from "../images/resample";
 import { SRGB_PROFILE } from "./document-state";
 import { bringResultToDocumentFront, renameActiveLayer } from "./layers";
 import { makeLayerMaskFromSnapshot } from "./masks";
-import { app, batchPlay, imaging } from "./runtime";
+import { activateDocumentById, app, batchPlay, imaging } from "./runtime";
 import { scaleViaPhotoshopInModal } from "./scaling";
 import { type Bounds, type PlacementClip, type SelectionSnapshot } from "./types";
 
@@ -35,6 +35,8 @@ export async function placeRasterFallback(
     }
   }
 
+  // A failed scratch operation must never redirect the fallback into another document.
+  await activateDocumentById(docId);
   await batchPlay(
     [{ _obj: "make", _target: [{ _ref: "layer" }], _options: { dialogOptions: "dontDisplay" } }],
     {}

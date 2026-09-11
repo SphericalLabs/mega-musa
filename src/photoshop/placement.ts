@@ -4,16 +4,17 @@
  */
 
 import { type EmbeddedResultStorage, type GenerationArchive } from "../archive/types";
-import { DEFAULT_HOST_MODAL_TIMEOUT_SECONDS, type HostModalLease } from "../host-modal";
+import { DEFAULT_HOST_MODAL_TIMEOUT_SECONDS, HostModalPreflightBusyError, isHostModalBusyError, type HostModalLease } from "../host-modal";
 import { type RefImage } from "../references";
 import { archiveReferenceAssetsInActiveDocument } from "../references/archive";
-import { selectionNeedsMask } from "./geometry";
+import { coverBounds, selectionNeedsMask } from "./geometry";
 import { withHistory } from "./history";
 import { bringResultToDocumentFront, deleteResultLayer, descendantLayers, selectLayerById } from "./layers";
-import { makeLayerMaskFromSnapshot } from "./masks";
+import { makeLayerMaskFromBounds, makeLayerMaskFromSnapshot } from "./masks";
 import { writeLayerGenerationArchive } from "./metadata";
 import { placeRasterFallback } from "./raster";
-import { app, runModal, withActiveDocument } from "./runtime";
+import { app, isPhotoshopCommandUnavailable, runModal, withActiveDocument } from "./runtime";
+import { clearSelection, readCurrentSelectionSnapshot, withSelectionPreserved } from "./selection";
 import { createFileSmartObject, positionSmartObjectAtBounds } from "./smart-object";
 import { type Bounds, type PlacementClip, type PlacementResult, type SelectionSnapshot } from "./types";
 
@@ -49,7 +50,18 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
   return await runModal(
     "place result",
     async (executionContext) => withActiveDocument(docId, async () => {
-      return withHistory(executionContext, docId, historyName, async () => {
+      // Tool flyouts can reject Get even after executeAsModal admits the callback.
+      // Retry only this read, before history suspension or any document edits.
+      let liveSelection: SelectionSnapshot | null;
+      try {
+        liveSelection = await readCurrentSelectionSnapshot(docId);
+      } catch (error) {
+        if (isHostModalBusyError(error) || isPhotoshopCommandUnavailable(error)) {
+          throw new HostModalPreflightBusyError("Photoshop is temporarily blocking placement preparation.");
+        }
+        throw error;
+      }
+      return withHistory(executionContext, docId, historyName, () => withSelectionPreserved(docId, async () => {
         const document = app.activeDocument;
         const frozenAnchor = Number.isFinite(anchorLayerId)
           ? descendantLayers(document).find((layer) => Number(layer?.id) === Number(anchorLayerId))
@@ -66,22 +78,27 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
 
         if (placeAsSmartObject) {
           try {
+            const fitted = coverBounds(width, height, bounds);
             const created = await createFileSmartObject(
               document,
               rgba,
               width,
               height,
-              bounds,
+              fitted,
               layerName,
               reduceDocumentSize
             );
             incompleteSmartObject = created.layer;
             resultStorage = created.storage;
-            await positionSmartObjectAtBounds(incompleteSmartObject, bounds);
             await bringResultToDocumentFront(incompleteSmartObject);
+            await positionSmartObjectAtBounds(incompleteSmartObject, fitted);
 
             if (clippingSelection) {
               await makeLayerMaskFromSnapshot(docId, incompleteSmartObject.id, clippingSelection);
+              clip = "mask";
+            } else if (fitted.left !== bounds.left || fitted.top !== bounds.top ||
+              fitted.right !== bounds.right || fitted.bottom !== bounds.bottom) {
+              await makeLayerMaskFromBounds(incompleteSmartObject.id, bounds);
               clip = "mask";
             }
             resultLayer = incompleteSmartObject;
@@ -105,6 +122,7 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
         }
 
         if (!smartObject) {
+          await clearSelection();
           if (resolvedAnchorLayerId) await selectLayerById(resolvedAnchorLayerId);
           const fallback = await placeRasterFallback(
             docId,
@@ -153,7 +171,7 @@ export async function placeResult(request: PlacementRequest, context: PlacementC
           resultStorage,
         };
         return placement;
-      });
+      }, liveSelection));
     }),
     lease,
     timeoutSeconds

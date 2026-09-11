@@ -8,7 +8,7 @@ import { type ArchivedGenerationGeometry } from "../archive/types";
 import { type HostModalLease } from "../host-modal";
 import { resampleGray } from "../images/resample";
 import { getActiveArtboard } from "./artboards";
-import { boundsFrom } from "./geometry";
+import { boundsFrom, selectionNeedsMask } from "./geometry";
 import { app, batchPlay, getActiveDoc, imaging, runModal, withActiveDocument } from "./runtime";
 import { type Bounds, type SelectionSnapshot } from "./types";
 
@@ -31,6 +31,63 @@ export async function replaceRectSelection(b: Bounds): Promise<void> {
     ],
     {}
   );
+}
+
+// These helpers run inside the caller's modal operation.
+export async function clearSelection(): Promise<void> {
+  await batchPlay([{
+    _obj: "set",
+    _target: [{ _ref: "channel", _property: "selection" }],
+    to: { _enum: "ordinal", _value: "none" },
+    _options: { dialogOptions: "dontDisplay" },
+  }], {});
+}
+
+export async function replaceSelectionSnapshot(docId: number, snapshot: SelectionSnapshot | null): Promise<void> {
+  if (!snapshot) return clearSelection();
+  if (!selectionNeedsMask(snapshot)) return replaceRectSelection(snapshot.bounds);
+  const width = snapshot.bounds.right - snapshot.bounds.left;
+  const height = snapshot.bounds.bottom - snapshot.bounds.top;
+  if (width < 1 || height < 1 || snapshot.data.length !== width * height) {
+    throw new Error("The captured selection does not match its bounds.");
+  }
+  const imageData = await imaging.createImageDataFromBuffer(snapshot.data, {
+    width, height, components: 1, componentSize: 8,
+    colorSpace: "Grayscale", colorProfile: "Gray Gamma 2.2", chunky: true,
+  });
+  try {
+    await imaging.putSelection({ documentID: docId, imageData, targetBounds: snapshot.bounds, replace: true });
+  } finally {
+    imageData.dispose();
+  }
+}
+
+// Keep the selection that exists when placement starts, including edits made while
+// generation was running. The job's captured selection is used only for clipping.
+export async function readCurrentSelectionSnapshot(docId: number): Promise<SelectionSnapshot | null> {
+  const bounds = await getSelectionBounds(docId);
+  return bounds ? { bounds, data: await readSelectionMask(docId, bounds) } : null;
+}
+
+export async function withSelectionPreserved<T>(
+  docId: number, run: () => Promise<T>, captured?: SelectionSnapshot | null
+): Promise<T> {
+  const snapshot = captured === undefined ? await readCurrentSelectionSnapshot(docId) : captured;
+  let failed = false;
+  try {
+    await clearSelection();
+    return await run();
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    try {
+      await replaceSelectionSnapshot(docId, snapshot);
+    } catch (error) {
+      if (!failed) throw error;
+      console.log("[Mega Musa] could not restore the selection after failed placement:", error);
+    }
+  }
 }
 
 export async function setRectSelection(
@@ -81,7 +138,8 @@ export async function getSelectionBounds(docId?: number): Promise<Bounds | null>
           { _property: "selection" },
           documentTarget,
         ],
-        _options: { dialogOptions: "dontDisplay" },
+        // dontDisplay can still show the native "Get is not available" error dialog.
+        _options: { dialogOptions: "silent" },
       },
     ],
     {}
@@ -115,7 +173,7 @@ export async function readSelectionMask(docId: number, bounds: Bounds): Promise<
     const raw = await imageData.getData({ chunky: true });
     let gray: Uint8Array;
     if (components === 1) {
-      gray = raw;
+      gray = new Uint8Array(raw);
     } else {
       gray = new Uint8Array(sourceW * sourceH);
       for (let i = 0; i < gray.length; i++) gray[i] = raw[i * components];

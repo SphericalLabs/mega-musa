@@ -47,8 +47,8 @@ export function prepareGenerationResult(job: GenerationJob, input: PreparedGener
   if (returnedRatioDiffers) {
     notes.push(
       exactOutputSize
-        ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It is sized to the exact placement bounds.`
-        : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It is sized to the exact placement bounds.`
+        ? `Provider returned ${returnedSize} instead of ${exactOutputSize}. It fills the original rectangle proportionally, with excess edges cropped.`
+        : `Provider returned ${returnedSize} instead of the requested ${ratioLabel} frame. It fills the original rectangle proportionally, with excess edges cropped.`
     );
   } else if (returnedSizeDiffers) {
     notes.push(`Provider returned ${returnedSize} instead of ${exactOutputSize}. It is sized to fit without stretching.`);

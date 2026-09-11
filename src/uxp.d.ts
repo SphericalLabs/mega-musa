@@ -59,9 +59,10 @@ interface PhotoshopModule {
     ): Promise<any>;
   };
   imaging: {
-    getPixels(options: any): Promise<{ imageData: PhotoshopImageData }>;
+    getPixels(options: any): Promise<{ imageData: PhotoshopImageData; sourceBounds?: any; level?: number }>;
     getSelection(options: any): Promise<PhotoshopSelectionData>;
     putPixels(options: any): Promise<void>;
+    putSelection(options: any): Promise<void>;
     createImageDataFromBuffer(buffer: Uint8Array, options: any): Promise<PhotoshopImageData>;
   };
 }

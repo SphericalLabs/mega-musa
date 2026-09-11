@@ -103,6 +103,9 @@ export function createGenerationWorkflow(context: GenerationContext, services: G
       job.pendingPlacement = prepareGenerationResult(job, input, result, usageDetails, context);
       await placement.completeGenerationPlacement(job);
     } catch (err: any) {
+      // A returned image is already billed. Keep it even if Photoshop reports a
+      // command failure or cancellation rather than a modal acquisition timeout.
+      if (placement.preserveFailedPlacement(job, err)) return;
       const providerFailure = err instanceof ProviderFailure ? err : null;
       const reportedCharge = validCost(providerFailure?.outcome.costUSD);
       if (isCancelledError(err) || providerFailure?.outcome.canceled) {
@@ -124,12 +127,9 @@ export function createGenerationWorkflow(context: GenerationContext, services: G
         queue.remove(job);
       } else {
         if (reportedCharge !== null) renderBudget(addToBudget(reportedCharge));
-        const message = (job.pendingPlacement ? "Image generated, but Photoshop placement failed. " : "") + errorMessage(err);
-        if (!placement.preserveTimedOutPlacement(job, err)) {
-          job.pendingPlacement = null;
-          queue.update(job, "failed", "Error: " + message);
-          setStatus("Error: " + message, "error");
-        }
+        const message = errorMessage(err);
+        queue.update(job, "failed", "Error: " + message);
+        setStatus("Error: " + message, "error");
       }
     } finally {
       queue.releaseSlot(job);

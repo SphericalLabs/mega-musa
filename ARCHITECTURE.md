@@ -26,7 +26,9 @@ The generation controller captures a submission and adds it to the queue, where 
 
 Adapters mark dispatch immediately before the first potentially billable request, allowing the workflow to distinguish cancellation before and after that point. Canceling before dispatch adds no charge; after dispatch, the workflow records the captured estimate once unless the provider has confirmed a charge. Late responses must leave the panel and spending totals untouched once cancellation has been handled.
 
-When a result arrives, the workflow records its charge before decoding or placing the image, so a local failure does not lose the billing record. If placement encounters a modal timeout, the plugin retains the paid image and retries with the same pixels and destination without another provider request. Smart Object placement also keeps a raster fallback so a failed conversion can still preserve the result.
+When a result arrives, the workflow records its charge before decoding or placing the image, so a local failure does not lose the billing record. Placement waits up to 30 seconds for Photoshop, including blocked selection reads before edits begin. Any placement failure retains the paid pixels in memory for Retry Placement with the same destination and no new provider request. Failed placement rolls back its document history. Smart Object placement also keeps a raster fallback so a failed conversion can still preserve the result.
+
+Temporary documents are verified against the IDs open before creation. Cleanup closes only a verified temporary ID through a targeted action; it does not use the DOM's select-then-close helper. Scaling and embedding verify the active document before operating, and raster fallback rechecks the original destination before adding a layer.
 
 ## State and module boundaries
 

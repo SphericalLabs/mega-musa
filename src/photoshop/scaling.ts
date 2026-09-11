@@ -4,9 +4,10 @@
  */
 
 import { type HostModalLease } from "../host-modal";
+import { coverDimensions } from "../images/resample";
 import { SRGB_PROFILE } from "./document-state";
-import { copyPixels } from "./pixel-data";
-import { app, batchPlay, imaging, runModal } from "./runtime";
+import { readRegionInModal } from "./pixels";
+import { activateDocumentById, app, batchPlay, closeScratchDocument, createScratchDocument, imaging, runModal } from "./runtime";
 
 // Cover-fit through Photoshop's Image Size and read a centered crop. Propagate failures
 // so the caller can use the JavaScript fallback.
@@ -17,7 +18,8 @@ export async function scaleViaPhotoshopInModal(
   dstW: number,
   dstH: number
 ): Promise<Uint8Array> {
-  const scratch = await app.createDocument({
+  const previousDocId = app.activeDocument?.id;
+  const scratch = await createScratchDocument({
     width: srcW,
     height: srcH,
     resolution: 72,
@@ -25,8 +27,8 @@ export async function scaleViaPhotoshopInModal(
     name: "mm-scale",
     profile: SRGB_PROFILE,
   });
-  if (!scratch) throw new Error("Could not create scratch document for scaling.");
   try {
+    await activateDocumentById(scratch.id);
     const layerId = scratch.layers[0].id;
     const srcData = await imaging.createImageDataFromBuffer(rgba, {
       width: srcW,
@@ -49,8 +51,7 @@ export async function scaleViaPhotoshopInModal(
     }
 
     const scale = Math.max(dstW / srcW, dstH / srcH);
-    const targetW = Math.max(dstW, Math.ceil(srcW * scale));
-    const targetH = Math.max(dstH, Math.ceil(srcH * scale));
+    const { width: targetW, height: targetH } = coverDimensions(srcW, srcH, dstW, dstH);
     if (targetW !== srcW || targetH !== srcH) {
       const method = scale < 1 ? "bicubicSharper" : scale > 1 ? "bicubicSmoother" : "bicubic";
       await batchPlay(
@@ -76,9 +77,9 @@ export async function scaleViaPhotoshopInModal(
     const left = Math.floor((resizedW - dstW) / 2);
     const top = Math.floor((resizedH - dstH) / 2);
 
-    const { data: raw, width: outputW, height: outputH, components: comps } = await copyPixels({
-      documentID: scratch.id, sourceBounds: { left, top, right: left + dstW, bottom: top + dstH },
-    });
+    const { image: { data: raw, width: outputW, height: outputH, components: comps } } = await readRegionInModal(
+      scratch.id, { left, top, right: left + dstW, bottom: top + dstH }, false
+    );
     if (outputW !== dstW || outputH !== dstH) {
       throw new Error("Photoshop returned the wrong cover-fit dimensions.");
     }
@@ -96,10 +97,11 @@ export async function scaleViaPhotoshopInModal(
     return rgbaOut;
   } finally {
     try {
-      await scratch.closeWithoutSaving();
-    } catch {
-      /* Scratch cleanup must not discard the scaled pixels. */
+      await closeScratchDocument(scratch.id);
+    } catch (error) {
+      console.log("[Mega Musa] could not close the scaling document:", error);
     }
+    if (previousDocId !== undefined) await activateDocumentById(previousDocId);
   }
 }
 

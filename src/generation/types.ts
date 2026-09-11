@@ -3,7 +3,7 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { type ModelSettings } from "../models/types";
+import { type ModelSettings, type OutputFrame } from "../models/types";
 import { type GenerationArchive } from "../archive/types";
 import { type DocumentState } from "../photoshop/document-state";
 import { type ActiveArtboard, type Bounds, type SelectionSnapshot } from "../photoshop/types";
@@ -35,8 +35,25 @@ export interface PendingGenerationPlacement {
   activeArtboard: ActiveArtboard | null;
 }
 
+// Read together in one Photoshop modal operation and shared by expanded prompts.
+export interface GenerationCanvasInput {
+  readonly docId: number;
+  readonly docWidth: number;
+  readonly docHeight: number;
+  readonly anchorLayerId: number | null;
+  readonly activeArtboard: ActiveArtboard | null;
+  readonly rawSelection: Bounds | null;
+  readonly documentState: DocumentState;
+  readonly region: Bounds;
+  readonly inputBounds: Bounds;
+  readonly frame: OutputFrame;
+  readonly selectionSnapshot: SelectionSnapshot | null;
+  readonly basePng?: Uint8Array;
+  readonly requestMaxEdge: number;
+}
+
 // Captured at submission; subsequent panel changes cannot retarget a queued job.
-export interface GenerationInput {
+export interface GenerationInput extends GenerationCanvasInput {
   readonly prompt: string;
   readonly model: string;
   readonly provider: string;
@@ -50,13 +67,6 @@ export interface GenerationInput {
   readonly reduceDocumentSize: boolean;
   readonly references: RefImage[];
   readonly archiveReferences: () => Promise<RefImage[]>;
-  readonly docId: number;
-  readonly docWidth: number;
-  readonly docHeight: number;
-  readonly anchorLayerId: number | null;
-  readonly activeArtboard: ActiveArtboard | null;
-  readonly rawSelection: Bounds | null;
-  readonly documentState: DocumentState;
 }
 
 export interface GenerationJob extends GenerationInput, CancellableJob {

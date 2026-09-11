@@ -8,7 +8,7 @@ const { encodePng } = await loadModule("src/images/codec.ts");
 const image = { mimeType: "image/png", bytes: encodePng(Uint8Array.of(20, 40, 60, 255), 1, 1, 4) };
 const bounds = { left: 0, top: 0, right: 1, bottom: 1 };
 
-async function harness({ prepare, generate, place, dispatch = true } = {}) {
+async function harness({ prepare, generate, place, dispatch = true, onRecallRefresh = () => {} } = {}) {
   const storage = memoryStorage();
   const { createGenerationWorkflow, HostModalTimeoutError, ProviderFailure } = await loadModule(["src/generation/workflow.ts", "src/host-modal.ts", "src/providers/failure.ts"], { globals: { localStorage: storage } });
   const queue = new GenerationQueue();
@@ -23,7 +23,7 @@ async function harness({ prepare, generate, place, dispatch = true } = {}) {
   const requests = [], placements = [], charges = [];
   const context = {
     queue, processor: { resize() { throw new Error("unexpected resize"); } },
-    setStatus() { }, setNote() { }, renderBudget(budget) { charges.push(budget); }, confirmDocumentWarnings: async () => true, onRecallRefresh() { }, onQueueRefresh() { }
+    setStatus() { }, setNote() { }, renderBudget(budget) { charges.push(budget); }, confirmDocumentWarnings: async () => true, onRecallRefresh, onQueueRefresh() { }
   };
   const workflow = createGenerationWorkflow(context, {
     prepare: prepare || (async () => ({
@@ -92,12 +92,18 @@ for (const late of ["success", "failure"]) {
   assert.equal(broken.placements.length, 0);
   assert.equal(broken.job.state, "failed");
 }
-// Placement timeouts keep the paid pixels. Retrying never calls or bills the provider again.
-{
+// Any placement failure keeps paid pixels, including a cancellation after the image arrived.
+// Repeated placement retries never call or bill the provider again.
+for (const failure of [
+  TimeoutError => new TimeoutError("place", 30),
+  () => Object.assign(new Error('The command "Get" is not currently available.'), { result: -25920 }),
+  () => Object.assign(new Error("Photoshop canceled"), { number: -128 }),
+  () => Object.assign(new Error("Aborted"), { name: "AbortError" }),
+]) {
   let attempts = 0;
   const h = await harness({
     place: async (_request, TimeoutError) => {
-      if (attempts++ === 0) throw new TimeoutError("place", 30);
+      if (attempts++ < 2) throw failure(TimeoutError);
       return { smartObject: true, clip: "none", archiveSaved: true };
     }
   });
@@ -107,12 +113,23 @@ for (const late of ["success", "failure"]) {
   assert.equal(h.charges.length, 1);
   const paidPixels = h.job.pendingPlacement.rgba;
   await h.workflow.retryGenerationPlacement(h.job);
-  assert.equal(h.placements.length, 2);
-  assert.equal(h.placements[1].rgba, paidPixels);
-  assert.equal(h.placements[1].docId, 7);
+  assert.equal(h.job.state, "placement-failed");
+  assert.equal(h.job.pendingPlacement.rgba, paidPixels);
+  await h.workflow.retryGenerationPlacement(h.job);
+  assert.equal(h.placements.length, 3);
+  assert.ok(h.placements.every(request => request.rgba === paidPixels && request.docId === 7));
   assert.equal(h.requests.length, 1);
   assert.equal(h.charges.length, 1);
   assert.equal(h.queue.items.length, 0);
+}
+// A refresh error after successful placement must not allow duplicate placement.
+{
+  const h = await harness({ onRecallRefresh: () => { throw new Error("Refresh failed"); } });
+  await h.workflow.runGenerationJob(h.job);
+  assert.equal(h.job.pendingPlacement, null);
+  await h.workflow.retryGenerationPlacement(h.job);
+  assert.equal(h.placements.length, 1);
+  assert.equal(h.charges.length, 1);
 }
 console.log("Generation workflow: frozen destination, cancellation, billing, decoding failures and paid placement retry passed.");
 

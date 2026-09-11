@@ -125,6 +125,12 @@ for (const mode of ["lossless", "compact", "failure"]) {
               const layer = { id: 70, name: "embedded" };
               doc.layers.push(layer);
               doc.activeLayers = [layer];
+            } else if (command._obj === "select" && command._target[0]._ref === "document") {
+              app.activeDocument = app.documents.find(item => item.id === command._target[0]._id);
+            } else if (command._obj === "close") {
+              assert.equal(command._target[0]._id, 9);
+              app.documents = [target];
+              app.activeDocument = target;
             } else if (command._obj === "select") doc.activeLayers = doc.layers.filter((layer) => layer.id === command._target[0]._id);
             else if (command._obj === "set") doc.activeLayers[0].name = command.to.name;
             else if (command._obj !== "imageSize") throw new Error(`Unexpected placement command: ${command._obj}`);

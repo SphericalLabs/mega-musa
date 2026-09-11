@@ -18,7 +18,8 @@ export async function withHistory<T>(
     throw error;
   } finally {
     try {
-      await context.hostControl.resumeHistory(suspension);
+      // Roll back incomplete placement before offering Retry Placement.
+      await context.hostControl.resumeHistory(suspension, !failed);
     } catch (error) {
       if (!failed) throw error;
       // Cleanup failure must not replace the original placement error.

@@ -10,13 +10,23 @@ let closed = 0;
 let reads = 0;
 const commands = [];
 const userDoc = { id: 1 };
-const scratch = { id: 2, width: 1, height: 1, closeWithoutSaving: async () => { closed++; } };
+const scratch = { id: 2, width: 1, height: 1, closeWithoutSaving: () => assert.fail("DOM close must not be used") };
 const host = {
-  app: { activeDocument: userDoc, createDocument: async () => scratch },
+  app: { activeDocument: userDoc, documents: [userDoc], createDocument: async () => {
+    host.app.documents.push(scratch);
+    host.app.activeDocument = scratch;
+    return scratch;
+  } },
   core: { executeAsModal: async (fn) => fn({}) },
   action: { batchPlay: async ([command]) => {
     assert.equal(command._options?.dialogOptions, "silent", "clipboard commands must suppress native error dialogs");
     commands.push(command._obj);
+    if (command._obj === "close") {
+      assert.equal(command._target[0]._id, scratch.id);
+      host.app.documents = [userDoc];
+      host.app.activeDocument = userDoc;
+      closed++;
+    }
     return command._obj === "paste" && pasteError ? [pasteError] : [{}];
   } },
   imaging: { getPixels: async () => {
@@ -29,7 +39,7 @@ const host = {
 };
 const { readClipboardImage } = await loadModule("src/photoshop/clipboard.ts", { modules: { photoshop: host } });
 assert.equal(await readClipboardImage(), null);
-assert.deepEqual(commands, ["paste"], "unavailable Paste must stop before trim or pixel extraction");
+assert.deepEqual(commands, ["paste", "close"], "unavailable Paste must stop before trim or pixel extraction");
 assert.equal(reads, 0);
 assert.equal(closed, 1, "empty clipboard must still close the scratch document");
 

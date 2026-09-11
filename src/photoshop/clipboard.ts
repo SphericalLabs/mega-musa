@@ -6,7 +6,7 @@
 import { type HostModalLease } from "../host-modal";
 import { SRGB_PROFILE } from "./document-state";
 import { copyPixels } from "./pixel-data";
-import { app, batchPlay, runModal } from "./runtime";
+import { activateDocumentById, app, batchPlay, closeScratchDocument, createScratchDocument, runModal } from "./runtime";
 import { type PastedImage } from "./types";
 
 // Cap pasted references to limit PNG encoding time and request size.
@@ -21,7 +21,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
       // Guard scratch cleanup against closing the user's document.
       const userDocId: number | undefined = app.activeDocument?.id;
 
-      const scratch = await app.createDocument({
+      const scratch = await createScratchDocument({
         width: 64,
         height: 64,
         resolution: 72,
@@ -29,13 +29,9 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         name: "mm-paste",
         profile: SRGB_PROFILE,
       });
-      if (!scratch) throw new Error("Could not create a scratch document for the paste.");
       try {
         // Never paste unless the scratch document is active.
-        app.activeDocument = scratch;
-        if (app.activeDocument?.id !== scratch.id) {
-          throw new Error("Could not activate the scratch document for the paste.");
-        }
+        await activateDocumentById(scratch.id);
         // dontDisplay still opens Photoshop error dialogs; silent returns errors to us.
         try {
           await batchPlay(
@@ -119,11 +115,12 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
       } finally {
         if (scratch && scratch.id !== userDocId) {
           try {
-            await scratch.closeWithoutSaving();
-          } catch {
-            /* Scratch cleanup must not discard successfully read pixels. */
+            await closeScratchDocument(scratch.id);
+          } catch (error) {
+            console.log("[Mega Musa] could not close the clipboard document:", error);
           }
         }
+        if (userDocId !== undefined) await activateDocumentById(userDocId);
       }
     },
     lease
