@@ -3,7 +3,8 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { checkGeminiOutput, requestJson } from "../errors";
+import { checkGeminiOutput } from "./errors";
+import { requestJson } from "../../errors";
 import {
   DESCRIPTION_INSTRUCTIONS,
   MAX_OUTPUT_TOKENS,
@@ -11,13 +12,14 @@ import {
   finiteNumber,
   parseDescriptionJson,
   requestInit,
-} from "./description-format";
+} from "../description-format";
 import {
   type DescribeImagesOptions,
   type DescriptionResult,
   type DescriptionUsage,
-  type GeminiThinkingLevel,
-} from "./description-types";
+} from "../description-types";
+
+export type GeminiThinkingLevel = "minimal" | "low" | "high";
 
 const GEMINI_MODELS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -55,6 +57,8 @@ export async function describeWithGemini(opts: DescribeImagesOptions): Promise<D
     },
   };
 
+  if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
+  opts.onDispatch?.();
   const json = await requestJson("Gemini", `${GEMINI_MODELS_ENDPOINT}/${encodeURIComponent(opts.model.model)}:generateContent`,
     requestInit(body, { "x-goog-api-key": opts.apiKey }, opts.signal));
   const rawUsage = json?.usageMetadata;

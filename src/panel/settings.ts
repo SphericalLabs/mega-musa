@@ -3,71 +3,100 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import {
-  CURRENCIES,
-  currencyNote,
-  displayCurrency,
-  formatMoneyRange,
-  refreshExchangeRates,
-  setDisplayCurrency,
-} from "../currency";
+import { CURRENCIES, currencyNote, displayCurrency, formatMoneyRange, refreshExchangeRates, setDisplayCurrency } from "../currency";
 import { DEFAULT_MODEL, MODELS, modelSpec } from "../models/catalog";
-import {
-  DEFAULT_GEMINI_DESCRIPTION_MODEL,
-  DEFAULT_OPENAI_DESCRIPTION_MODEL,
-  DESCRIPTION_MODELS,
-  descriptionModelSpec,
-} from "../models/description-catalog";
-import { nearestImageSize, nearestRatioLabel } from "../models/geometry";
-import { resolutionLabel, resolutionMenuLabel } from "../models/labels";
-import { isOpenAIModel } from "../models/provider";
-import { IMAGE_QUALITY_OPTIONS, normalizeImageQuality } from "../models/quality";
+import { DESCRIPTION_MODELS, descriptionModelSpec } from "../models/description-catalog";
+import { resolutionMenuLabel } from "../models/labels";
+import { imageQualityLabel } from "../models/quality";
+import { normalizeModelSettings, freezeModelSettings } from "../models/settings";
+import { type ModelSettings } from "../models/types";
+import { loadModelPreferences, saveModelPreferences } from "../model-preferences";
 import { type DescriptionModelSpec } from "../providers/description-types";
-import { type ImageQuality } from "../providers/types";
-import { loadApiKey, loadOpenAIApiKey, loadSetting, saveSetting } from "../storage";
-import { $, buildMenu, hasOption, isChecked, setCheckedSafe, setPickerSafe, setValueSafe } from "./controls";
+import { providerRegistry } from "../providers/registry";
+import { loadSetting, saveSetting } from "../storage";
+import { $, buildMenu, hasOption, isChecked, setCheckedSafe, setPickerSafe } from "./controls";
+import { providerCredentials, missingCredential, restoreProviderSettings } from "./provider-settings";
+import { createModelOptions } from "./model-options";
 import { renderBudget, setStatus } from "./status";
 
 export function descriptionApiKey(model: DescriptionModelSpec): string {
-  return String(model.provider === "openai" ? $("openaiApiKey")?.value || "" : $("geminiApiKey")?.value || "").trim();
+  return providerCredentials(model.provider).apiKey || "";
 }
 
 export function createSettingsController(onSelectionChange: () => void) {
-  const PICKERS = ["model", "resolution", "quality", "selRatio"];
-
-  function buildModelMenu(): void {
-    // Retain hidden models in the table for archive recall.
-    const visibleModels = MODELS.filter((model) =>
-      ["gemini-3-pro-image", "gemini-3.1-flash-image", "openai:gpt-image-2.5-sunburst", "openai:gpt-image-2.5-flare", "openai:gpt-image-2"].includes(model.id)
-    );
-    buildMenu(
-      "model",
-      visibleModels.map((m) => ({ value: m.id, label: m.label })),
-      DEFAULT_MODEL
-    );
-  }
-
-  function preferredDescriptionModel(): string {
-    const hasOpenAIKey = String($("openaiApiKey")?.value || "").trim().length > 0;
-    const hasGeminiKey = String($("geminiApiKey")?.value || "").trim().length > 0;
-    if (hasOpenAIKey) return DEFAULT_OPENAI_DESCRIPTION_MODEL;
-    if (hasGeminiKey) return DEFAULT_GEMINI_DESCRIPTION_MODEL;
-    return DEFAULT_OPENAI_DESCRIPTION_MODEL;
-  }
+  const options = createModelOptions();
+  let activeModel = "";
 
   function refreshDescriptionModelSelection(current?: string): void {
-    const stored = loadSetting("describeModel", "");
-    const storedSpec = descriptionModelSpec(stored);
-    const selected = storedSpec && descriptionApiKey(storedSpec) ? stored : preferredDescriptionModel();
-    buildMenu(
-      "describeModel",
-      DESCRIPTION_MODELS.map((model) => ({
-        value: model.id, label: `${model.label} (ca. ${formatMoneyRange(...model.estimateRangeUSD)})`,
-      })),
-      current || selected
-    );
+    const stored = descriptionModelSpec(loadSetting("describeModel", ""));
+    const ready = providerRegistry.providers.filter((provider) => provider.describe && !missingCredential(provider.id));
+    // Preserve the existing OpenAI-first default preference through provider metadata order.
+    const preferred = [...ready].reverse().find((provider) => provider.defaultDescriptionModel)?.defaultDescriptionModel;
+    const fallback = [...providerRegistry.providers].reverse().find((provider) => provider.defaultDescriptionModel)?.defaultDescriptionModel || DESCRIPTION_MODELS[0]?.id || "";
+    buildMenu("describeModel", DESCRIPTION_MODELS.map((model) => ({
+      value: model.id, label: model.estimateRangeUSD ? `${model.label} (ca. ${formatMoneyRange(...model.estimateRangeUSD)})` : `${model.label} (price unknown)`,
+    })), current || (stored && !missingCredential(stored.provider) ? stored.id : preferred || fallback));
   }
 
+  function captureSettings(): ModelSettings {
+    const spec = modelSpec(activeModel || $("model")?.value || DEFAULT_MODEL);
+    const normalized = normalizeModelSettings(spec, {
+      resolution: $("resolution")?.value, ratio: $("selRatio")?.value, quality: $("quality")?.value,
+      options: options.read(),
+    });
+    return freezeModelSettings(normalized.settings);
+  }
+
+  function persistModel(): void {
+    if (activeModel) saveModelPreferences(modelSpec(activeModel), captureSettings());
+  }
+
+  function refreshResolutionLabels(): void {
+    const spec = modelSpec($("model")?.value || DEFAULT_MODEL);
+    const settings = captureSettings();
+    buildMenu("resolution", ["auto", ...spec.imageSizes].map((size) => ({
+      value: size, label: resolutionMenuLabel(size, spec, settings.ratio, settings.quality, settings),
+    })), settings.resolution);
+    persistModel();
+  }
+
+  function applyModelCapabilities(modelId: string, preferRatio?: string, preferSize?: string, preferQuality?: string, archived?: ModelSettings): string {
+    const spec = modelSpec(modelId);
+    const loaded = loadModelPreferences(spec);
+    const normalized = normalizeModelSettings(spec, archived || {
+      ...loaded.settings,
+      ...(preferRatio ? { ratio: preferRatio } : {}),
+      ...(preferSize ? { resolution: preferSize } : {}),
+      ...(preferQuality ? { quality: preferQuality } : {}),
+      // Old archives have no extra options: restore defaults for those fields.
+      ...(preferRatio ? { options: {} } : {}),
+    });
+    const { settings } = normalized;
+    activeModel = modelId;
+    if ($("qualityField")) $("qualityField").style.display = spec.qualities.length > 1 ? "flex" : "none";
+    buildMenu("quality", spec.qualities.map((value) => ({ value, label: imageQualityLabel(value) })), settings.quality);
+    buildMenu("selRatio", spec.aspectRatios.map((value) => ({ value, label: value })), settings.ratio);
+    buildMenu("resolution", ["auto", ...spec.imageSizes].map((value) => ({
+      value, label: resolutionMenuLabel(value, spec, settings.ratio, settings.quality, settings),
+    })), settings.resolution);
+    options.render(spec, settings.options, onOptionChange);
+    saveModelPreferences(spec, settings);
+    return [...loaded.notes, ...normalized.notes].join(" ");
+  }
+
+  function onOptionChange(): void {
+    const spec = modelSpec(activeModel);
+    const current = normalizeModelSettings(spec, { ...captureSettings(), options: options.read() });
+    options.render(spec, current.settings.options, onOptionChange);
+    saveModelPreferences(spec, current.settings);
+    refreshResolutionLabels();
+    if (current.notes.length) setStatus(current.notes.join(" "));
+  }
+
+  async function updateExchangeRates(): Promise<void> {
+    await refreshExchangeRates();
+    refreshCurrencyLabels();
+  }
   function refreshCurrencyLabels(): void {
     $("currencyNote").textContent = currencyNote();
     refreshResolutionLabels();
@@ -75,124 +104,19 @@ export function createSettingsController(onSelectionChange: () => void) {
     renderBudget();
   }
 
-  async function updateExchangeRates(): Promise<void> {
-    await refreshExchangeRates();
-    refreshCurrencyLabels();
-  }
-
-  function buildQualityMenu(modelId: string, selected: string): ImageQuality {
-    const field = $("qualityField");
-    const openai = isOpenAIModel(modelId);
-    if (field) field.style.display = openai ? "flex" : "none";
-    if (!openai) {
-      setValueSafe($("quality"), "auto");
-      return "auto";
-    }
-    const spec = modelSpec(modelId);
-    const options = IMAGE_QUALITY_OPTIONS.filter((option) =>
-      option.value === "auto" || (spec.outputQualityFactors
-        ? spec.outputQualityFactors[option.value] !== undefined
-        : option.value !== "xhigh" && option.value !== "max")
-    );
-    const requested = normalizeImageQuality(selected);
-    const quality = options.some((option) => option.value === requested) ? requested : "high";
-    buildMenu(
-      "quality",
-      options.map((option) => ({ value: option.value, label: option.label })),
-      quality
-    );
-    saveSetting("quality", quality);
-    return quality;
-  }
-
-  function buildResolutionMenu(
-    spec: ReturnType<typeof modelSpec>,
-    ratio: string,
-    selected: string,
-    quality: ImageQuality = "auto"
-  ): string {
-    const size = nearestImageSize(selected, spec);
-    buildMenu(
-      "resolution",
-      [{ value: "auto", label: resolutionMenuLabel("auto", spec, ratio, quality) }].concat(
-        spec.imageSizes.map((s) => ({ value: s, label: resolutionMenuLabel(s, spec, ratio, quality) }))
-      ),
-      size
-    );
-    saveSetting("resolution", size);
-    return size;
-  }
-
-  function refreshResolutionLabels(): void {
-    const model = $("model")?.value || DEFAULT_MODEL;
-    const spec = modelSpec(model);
-    const quality = isOpenAIModel(model) ? normalizeImageQuality($("quality")?.value || "auto") : "auto";
-    buildResolutionMenu(spec, $("selRatio")?.value || "1:1", $("resolution")?.value || "auto", quality);
-  }
-
-  // Restore preferred settings and reconcile them with model capabilities. Return notes
-  // for adjusted ratio or resolution choices.
-  function applyModelCapabilities(
-    modelId: string,
-    preferRatio?: string,
-    preferSize?: string,
-    preferQuality?: string
-  ): string {
-    const spec = modelSpec(modelId);
-    const notes: string[] = [];
-    const quality = buildQualityMenu(
-      modelId,
-      isOpenAIModel(modelId)
-        ? preferQuality || loadSetting("quality", "low")
-        : "auto"
-    );
-
-    const wantRatio = preferRatio || $("selRatio")?.value || "1:1";
-    const ratio = nearestRatioLabel(wantRatio, spec.aspectRatios);
-    buildMenu(
-      "selRatio",
-      spec.aspectRatios.map((r) => ({ value: r, label: r })),
-      ratio
-    );
-    saveSetting("selRatio", ratio);
-    if (ratio !== wantRatio) {
-      notes.push(`${spec.label} cannot do ${wantRatio} — ratio set to ${ratio}.`);
-    }
-
-    const wantSize = preferSize || $("resolution")?.value || "auto";
-    const size = buildResolutionMenu(spec, ratio, wantSize, quality);
-    if (size !== wantSize) {
-      notes.push(
-        spec.imageSizes.length
-          ? `${spec.label} does not output ${resolutionLabel(wantSize)} — resolution set to ${resolutionLabel(size)}.`
-          : `${spec.label} has no resolution control — its output size follows the ratio.`
-      );
-    }
-    return notes.join(" ");
-  }
-
-  async function restoreSettings(): Promise<void> {
+  async function restoreSettings(): Promise<string> {
     buildMenu("displayCurrency", CURRENCIES, displayCurrency());
     $("currencyNote").textContent = currencyNote();
-    setValueSafe($("geminiApiKey"), await loadApiKey());
-    setValueSafe($("openaiApiKey"), await loadOpenAIApiKey());
+    await restoreProviderSettings(() => refreshDescriptionModelSelection());
     refreshDescriptionModelSelection();
-    // Restore only visible model options so stale settings cannot leave the picker blank.
-    buildModelMenu();
-    const storedModel = loadSetting("model", "");
-    if (storedModel && hasOption($("model"), storedModel)) setPickerSafe($("model"), storedModel);
-    else if (storedModel) saveSetting("model", "");
-    applyModelCapabilities(
-      $("model").value || DEFAULT_MODEL,
-      loadSetting("selRatio", "1:1"),
-      loadSetting("resolution", "2K"),
-      loadSetting("quality", "low")
-    );
-    // Lossy document-size reduction is opt-in.
-    setCheckedSafe($("includeSelection"), loadSetting("includeSelection", "1") !== "0");
-    refreshResolutionLabels();
-    setCheckedSafe($("placeAsSmartObject"), loadSetting("placeAsSmartObject", "1") !== "0");
-    setCheckedSafe($("reduceDocumentSize"), loadSetting("reduceDocumentSize", "0") !== "0");
+    buildMenu("model", MODELS.filter((model) => model.visible !== false).map((model) => ({ value: model.id, label: model.label })), DEFAULT_MODEL);
+    const stored = loadSetting("model", "");
+    if (stored && hasOption($("model"), stored)) setPickerSafe($("model"), stored);
+    const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);
+    for (const [id, fallback] of [["includeSelection", "1"], ["placeAsSmartObject", "1"], ["reduceDocumentSize", "0"]]) {
+      setCheckedSafe($(id), loadSetting(id, fallback) !== "0");
+    }
+    return note;
   }
 
   function persistSettingsHooks(): void {
@@ -201,36 +125,25 @@ export function createSettingsController(onSelectionChange: () => void) {
       refreshCurrencyLabels();
       void updateExchangeRates();
     });
-    for (const id of PICKERS) {
-      if (id === "selRatio" || id === "quality") continue;
-      $(id)?.addEventListener("change", () => saveSetting(id, $(id).value));
-    }
-    $("quality")?.addEventListener("change", () => {
-      saveSetting("quality", normalizeImageQuality($("quality").value || "auto"));
-      refreshResolutionLabels();
-    });
-    $("selRatio")?.addEventListener("change", () => {
-      saveSetting("selRatio", $("selRatio").value);
-      refreshResolutionLabels();
+    // Keep the native picker's items intact while it commits its selection.
+    // Resolution changes do not affect the option labels or available tiers.
+    $("resolution")?.addEventListener("change", persistModel);
+    for (const id of ["quality", "selRatio"]) $(id)?.addEventListener("change", () => {
+      persistModel(); refreshResolutionLabels();
     });
     $("model")?.addEventListener("change", () => {
-      const note = applyModelCapabilities($("model").value || DEFAULT_MODEL);
+      const model = $("model").value || DEFAULT_MODEL;
+      const note = applyModelCapabilities(model);
+      saveSetting("model", model);
       if (note) setStatus(note);
-    });
-    $("includeSelection")?.addEventListener("change", () => {
-      saveSetting("includeSelection", isChecked($("includeSelection")) ? "1" : "0");
       onSelectionChange();
     });
-    $("placeAsSmartObject")?.addEventListener("change", () =>
-      saveSetting("placeAsSmartObject", isChecked($("placeAsSmartObject")) ? "1" : "0")
-    );
-    $("reduceDocumentSize")?.addEventListener("change", () =>
-      saveSetting("reduceDocumentSize", isChecked($("reduceDocumentSize")) ? "1" : "0")
-    );
-    $("describeModel")?.addEventListener("change", () =>
-      saveSetting("describeModel", $("describeModel").value || DEFAULT_OPENAI_DESCRIPTION_MODEL)
-    );
+    for (const id of ["includeSelection", "placeAsSmartObject", "reduceDocumentSize"]) $(id)?.addEventListener("change", () => {
+      saveSetting(id, isChecked($(id)) ? "1" : "0");
+      if (id === "includeSelection") onSelectionChange();
+    });
+    $("describeModel")?.addEventListener("change", () => saveSetting("describeModel", $("describeModel").value || ""));
   }
-  return { restoreSettings, persistSettingsHooks, applyModelCapabilities, refreshDescriptionModelSelection, refreshResolutionLabels, updateExchangeRates };
+  return { restoreSettings, persistSettingsHooks, applyModelCapabilities, captureSettings, refreshDescriptionModelSelection, refreshResolutionLabels, updateExchangeRates };
 }
 export type SettingsController = ReturnType<typeof createSettingsController>;

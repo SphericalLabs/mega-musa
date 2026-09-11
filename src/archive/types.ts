@@ -3,6 +3,7 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
+import { type ModelSettings } from "../models/types";
 import { type Bounds } from "../photoshop/types";
 
 export type AssetStorageMode = "original" | "png-srgb" | "jpeg-90";
@@ -60,6 +61,8 @@ export interface ArchivedGenerationGeometry {
 
 export interface GenerationArchive {
   v: 1;
+  providerId?: string;
+  settings?: ModelSettings;
   prompt: string;
   provider: string;
   model: string;

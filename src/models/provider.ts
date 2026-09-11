@@ -3,12 +3,8 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-export const OPENAI_MODEL_PREFIX = "openai:";
-
-export function isOpenAIModel(model: string): boolean {
-  return model.startsWith(OPENAI_MODEL_PREFIX);
-}
-
-export function modelProviderLabel(model: string): string {
-  return isOpenAIModel(model) ? "OpenAI" : "Gemini";
-}
+import { modelSpec } from "./catalog";
+import { providerRegistry } from "../providers/registry";
+export { OPENAI_MODEL_PREFIX } from "../providers/openai/images";
+export function isOpenAIModel(model: string): boolean { return modelSpec(model).provider === "openai"; }
+export function modelProviderLabel(model: string): string { return providerRegistry.provider(modelSpec(model).provider).label; }

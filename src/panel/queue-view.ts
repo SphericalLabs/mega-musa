@@ -6,12 +6,11 @@
 import { GenerationQueue, generationJobIsActive } from "../generation/queue";
 import { type GenerationJob } from "../generation/types";
 import { modelSpec } from "../models/catalog";
-import { isOpenAIModel } from "../models/provider";
 import { imageQualityLabel } from "../models/quality";
 import { $, clearChildren } from "./controls";
 
 export function generationJobMeta(job: GenerationJob): string {
-  const quality = isOpenAIModel(job.model) ? imageQualityLabel(job.quality) : "Auto";
+  const quality = modelSpec(job.model).qualities.length > 1 ? imageQualityLabel(job.quality) : "Auto";
   const referenceCount = `${job.references.length} reference image${job.references.length === 1 ? "" : "s"}`;
   return `${modelSpec(job.model).label} · ${quality} quality · ${referenceCount}`;
 }

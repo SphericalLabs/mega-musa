@@ -10,7 +10,6 @@ import { GenerationQueue } from "../generation/queue";
 import { createGenerationWorkflow } from "../generation/workflow";
 import { ReferenceCollection } from "../references/collection";
 import { ReferenceImageProcessor } from "../references/processor";
-import { saveApiKey, saveOpenAIApiKey } from "../storage";
 import { clearMegaMusaTemporaryFiles } from "../temp-files";
 import { $ } from "./controls";
 import { createDescriptionController } from "./description";
@@ -56,7 +55,7 @@ export function createPanel() {
     onRecallRefresh: () => recall.scheduleGenerationRecallRefresh(), onQueueRefresh: refreshQueue
   });
   const generation = createGenerationController({
-    queue, references, processor, workflow,
+    queue, references, processor, workflow, captureSettings: settings.captureSettings,
     descriptionBusy: () => description.busy
   });
   const referencePanel = createReferencePanel({
@@ -101,21 +100,6 @@ export function createPanel() {
       setupCollapsibleSections();
       setupPromptResize();
       prompt.init();
-      for (const key of [
-        { label: "Gemini", field: "geminiApiKey", button: "saveGeminiKey", save: saveApiKey },
-        { label: "OpenAI", field: "openaiApiKey", button: "saveOpenAIKey", save: saveOpenAIApiKey },
-      ]) {
-        $(key.button).addEventListener("click", async () => {
-          const apiKey = ($(key.field).value || "").trim();
-          try {
-            await key.save(apiKey);
-            settings.refreshDescriptionModelSelection();
-            setStatus(apiKey ? `${key.label} API key saved securely.` : `${key.label} API key cleared.`, "ok");
-          } catch (error) {
-            setStatus(`Could not save ${key.label} API key: ` + errorMessage(error), "error");
-          }
-        });
-      }
       const actions: Record<string, () => void | Promise<void>> = {
         addRefs: referencePanel.onAddRefs,
         pasteRef: referencePanel.onPasteRef,
@@ -151,12 +135,12 @@ export function createPanel() {
         event.preventDefault();
         void referencePanel.onPasteRef();
       });
-      await settings.restoreSettings();
+      const settingsNote = await settings.restoreSettings();
       settings.persistSettingsHooks();
       referencePanel.renderThumbs();
       refreshQueue();
       renderBudget();
-      setStatus("Ready. Write a prompt and optionally select a region and/or add references.");
+      setStatus(["Ready. Write a prompt and optionally select a region and/or add references.", settingsNote].filter(Boolean).join(" "));
       void settings.updateExchangeRates();
     } catch (error) {
       setStatus("Init error: " + errorMessage(error), "error");

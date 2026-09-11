@@ -5,52 +5,11 @@
 
 import { type ImageQuality, type ImageUsage } from "../providers/types";
 import { outputSizeFor } from "./geometry";
-import { type ExplicitQuality, type ModelSpec } from "./types";
+import { type ExplicitQuality, type ModelSpec, type ModelSettings } from "./types";
 
-// Flexible-size output estimates use the quality factors below and this USD token rate.
-export const GPT_IMAGE_2_OUTPUT_USD_PER_MILLION = 30;
-
-export const OPENAI_TOKEN_RATES: Record<string, { textInput: number; imageInput: number; imageOutput: number }> = {
-  "openai:gpt-image-2.5-sunburst": { textInput: 5, imageInput: 8, imageOutput: 30 },
-  "openai:gpt-image-2.5-flare": { textInput: 5, imageInput: 8, imageOutput: 30 },
-  "openai:gpt-image-2": { textInput: 5, imageInput: 8, imageOutput: 30 },
-  "openai:gpt-image-1.5": { textInput: 5, imageInput: 8, imageOutput: 32 },
-  "openai:gpt-image-1-mini": { textInput: 2, imageInput: 2.5, imageOutput: 8 },
-};
-
-export function imageOutputTokens(size: string, qualityFactor: number): number | null {
-  const match = /^(\d+)x(\d+)$/.exec(size);
-  if (!match) return null;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  const pixels = width * height;
-  const longEdge = Math.max(width, height);
-  const shortEdge = Math.min(width, height);
-  if (
-    !width ||
-    !height ||
-    width % 16 !== 0 ||
-    height % 16 !== 0 ||
-    pixels < 655360 ||
-    pixels > 8294400 ||
-    longEdge > 3840 ||
-    longEdge > shortEdge * 3
-  ) {
-    return null;
-  }
-
-  // Match the pricing calculator: round exact half ties to the nearest even integer.
-  const shortAxis = qualityFactor * shortEdge / longEdge;
-  const floor = Math.floor(shortAxis);
-  const shortAxisFactor = shortAxis - floor === 0.5 ? floor + floor % 2 : Math.round(shortAxis);
-  const numerator = qualityFactor * shortAxisFactor * (2000000 + pixels);
-  return Math.floor((numerator + 3999999) / 4000000);
-}
-
-export function imageOutputUSD(size: string, qualityFactor: number): number | null {
-  const tokens = imageOutputTokens(size, qualityFactor);
-  return tokens === null ? null : (tokens * GPT_IMAGE_2_OUTPUT_USD_PER_MILLION) / 1000000;
-}
+import { imageOutputUSD } from "../providers/openai/pricing";
+// Compatibility exports; implementation belongs to the provider.
+export { OPENAI_TOKEN_RATES, GPT_IMAGE_2_OUTPUT_USD_PER_MILLION, imageOutputTokens, imageOutputUSD } from "../providers/openai/pricing";
 
 export function qualityPriceUSD(spec: ModelSpec, outputSize: string | null, quality: ExplicitQuality): number | null {
   if (!outputSize) return null;
@@ -95,15 +54,18 @@ export function estimatedTotalUSD(
   spec: ModelSpec,
   token: string,
   outputSize: string | undefined,
-  quality: ImageQuality
+  quality: ImageQuality,
+  settings?: ModelSettings
 ): number | null {
+  if (spec.estimateCost) return validCost(spec.estimateCost(settings || { version: spec.settingsVersion ?? 1, resolution: token, quality, ratio: "1:1", options: {} }, outputSize));
   const output = estimatedUSD(spec, token, outputSize, quality);
   return output === null ? null : output + INPUT_OVERHEAD_USD;
 }
 
 // Use response token counts when enough usage data and model rates are available.
 export function actualUsageUSD(spec: ModelSpec, usage: ImageUsage): number | null {
-  const rates = OPENAI_TOKEN_RATES[spec.id];
+  if (spec.actualCost) return validCost(spec.actualCost(usage));
+  const rates = spec.tokenRates;
   if (!rates) return null;
   const outputTokens = usage.outputTokens;
   if (outputTokens === undefined) return null;
@@ -115,5 +77,9 @@ export function actualUsageUSD(spec: ModelSpec, usage: ImageUsage): number | nul
   const usd =
     (inputTextTokens * rates.textInput + inputImageTokens * rates.imageInput + outputTokens * rates.imageOutput) /
     1000000;
-  return usd;
+  return validCost(usd);
+}
+
+export function validCost(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }

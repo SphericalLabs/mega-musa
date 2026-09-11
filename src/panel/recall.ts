@@ -10,8 +10,7 @@ import { bytesToBase64 } from "../images/base64";
 import { encodePng } from "../images/codec";
 import { toRGBA } from "../images/pixels";
 import { resolutionLabel } from "../models/labels";
-import { isOpenAIModel } from "../models/provider";
-import { imageQualityLabel, normalizeImageQuality } from "../models/quality";
+import { imageQualityLabel } from "../models/quality";
 import { readLayerGenerationArchive } from "../photoshop/metadata";
 import { readLayerThumbnail } from "../photoshop/pixels";
 import { getActiveDoc } from "../photoshop/runtime";
@@ -117,11 +116,11 @@ export function createRecallController({ queue, references, settings, prompt, on
     if (generation.resolution) {
       details.push(generation.resolution === "auto" ? "Default resolution" : resolutionLabel(generation.resolution));
     }
-    // Gemini's stored Auto quality is a placeholder; hide it in recall details.
-    if (generation.quality && isOpenAIModel(generation.model)) {
-      const requestedQuality = imageQualityLabel(normalizeImageQuality(generation.quality));
+    // Hide placeholder quality unless the provider reported a resolved value.
+    if (generation.quality && (generation.quality !== "auto" || generation.resolvedQuality)) {
+      const requestedQuality = imageQualityLabel(generation.quality);
       const resolvedQuality = generation.resolvedQuality
-        ? imageQualityLabel(normalizeImageQuality(generation.resolvedQuality))
+        ? imageQualityLabel(generation.resolvedQuality)
         : "";
       details.push(
         generation.quality === "auto" && resolvedQuality && resolvedQuality !== requestedQuality
@@ -279,7 +278,8 @@ export function createRecallController({ queue, references, settings, prompt, on
         generation.model,
         generation.ratio,
         generation.resolution,
-        generation.quality
+        generation.quality,
+        generation.settings
       );
       if (capabilityNote) messages.push(capabilityNote);
     } else {

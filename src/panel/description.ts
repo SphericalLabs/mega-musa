@@ -4,6 +4,9 @@
  */
 
 import { addDescriptionToBudget } from "../budget";
+import { ProviderFailure } from "../providers/failure";
+import { validCost } from "../models/pricing";
+import { providerCredentials, missingCredential } from "./provider-settings";
 import { formatMoney } from "../currency";
 import { formatDescriptions } from "../description-format";
 import { errorMessage } from "../errors";
@@ -188,8 +191,10 @@ export function createDescriptionController({ references, processor, queue, prom
       return;
     }
     const apiKey = descriptionApiKey(model);
-    if (!apiKey) {
-      setStatus(`Enter your ${model.provider === "openai" ? "OpenAI" : "Gemini"} API key and press Save.`, "error");
+    const credentials = providerCredentials(model.provider);
+    const missing = missingCredential(model.provider, credentials);
+    if (missing) {
+      setStatus(`Enter your ${missing} and press Save.`, "error");
       return;
     }
 
@@ -197,18 +202,20 @@ export function createDescriptionController({ references, processor, queue, prom
     const controller = newAbortController();
     let requestSent = false;
     let inputImageCount = 0;
-    let estimatedCharge = 0;
+    let estimatedCharge: number | null = null;
+    let chargeRecorded = false;
     let budgetCharge: number | null = null;
     let usedEstimate = false;
-    const recordDescriptionCharge = (usage?: DescriptionUsage) => {
+    const recordDescriptionCharge = (usage?: DescriptionUsage, reportedCost?: number) => {
       // A late response after Cancel must not add the same request a second time.
-      if (budgetCharge !== null) return;
-      const usageCharge = usage ? descriptionUsageUSD(model, usage) : null;
+      if (chargeRecorded) return;
+      chargeRecorded = true;
+      const usageCharge = validCost(reportedCost) ?? (usage ? descriptionUsageUSD(model, usage) : null);
       usedEstimate = usageCharge === null;
       budgetCharge = usageCharge ?? estimatedCharge;
       renderBudget(addDescriptionToBudget(budgetCharge, inputImageCount, job.cancelRequested, usedEstimate));
     };
-    const descriptionChargeText = () => budgetCharge === null ? "" :
+    const descriptionChargeText = () => !chargeRecorded ? "" : budgetCharge === null ? " Price unknown; no amount added to the budget." :
       ` ${usedEstimate ? "Estimate" : "Usage cost"}: ca. ${formatMoney(budgetCharge)} added to the budget.`;
     descriptionJob = job;
     setDescriptionBusy(true);
@@ -223,9 +230,10 @@ export function createDescriptionController({ references, processor, queue, prom
       setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
       inputImageCount = inputs.length;
       estimatedCharge = estimatedDescriptionUSD(model, inputImageCount);
-      requestSent = true;
       const request = describeImages({
         apiKey,
+        credentials,
+        onDispatch: () => { throwIfCancelled(job); requestSent = true; },
         model,
         images: inputs.map((input) => input.image),
         signal: controller.signal,
@@ -233,6 +241,7 @@ export function createDescriptionController({ references, processor, queue, prom
       });
       const result = await awaitCancellable(job, request, controller);
       throwIfCancelled(job);
+      recordDescriptionCharge(result.usage);
       if (!prompt.replace(formatDescriptions(inputs, result.descriptions), "Describe")) {
         throw new Error("The description could not be applied to the prompt.");
       }
@@ -245,13 +254,16 @@ export function createDescriptionController({ references, processor, queue, prom
         "ok"
       );
     } catch (error: any) {
-      if (isCancelledError(error)) {
-        if (requestSent) recordDescriptionCharge();
+      const failure = error instanceof ProviderFailure ? error : null;
+      if (isCancelledError(error) || failure?.outcome.canceled) {
+        job.cancelRequested = true;
+        if (requestSent || failure?.outcome.costUSD !== undefined) recordDescriptionCharge(undefined, failure?.outcome.costUSD);
         setStatus(
           "Description canceled. Prompt unchanged." + descriptionChargeText() +
           (requestSent ? " Final provider billing may differ." : "")
         );
       } else {
+        if (failure?.outcome.costUSD !== undefined) recordDescriptionCharge(undefined, failure.outcome.costUSD);
         setStatus("Description error: " + errorMessage(error) + descriptionChargeText(), "error");
       }
     } finally {

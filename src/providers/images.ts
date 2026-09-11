@@ -3,14 +3,14 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { isOpenAIModel } from "../models/provider";
-import { type OutputFrame } from "../models/types";
-import { generateEdit } from "./gemini-images";
-import { generateOpenAIImage } from "./openai-images";
+import { type OutputFrame, type ModelSettings } from "../models/types";
+import { freezeModelSettings, normalizeModelSettings, validateModelInput } from "../models/settings";
+import { providerRegistry } from "./registry";
 import { type GenerateResult, type ImageQuality, type RefImage } from "./types";
 
 export interface ImageRequest {
   apiKey: string;
+  credentials?: Readonly<Record<string, string>>;
   model: string;
   prompt: string;
   baseImagePng?: Uint8Array;
@@ -18,27 +18,23 @@ export interface ImageRequest {
   frame: OutputFrame;
   resolution: string;
   quality: ImageQuality;
+  settings?: ModelSettings;
   signal?: AbortSignal;
+  onDispatch?: () => void;
 }
+export interface ImageProvider { generate(request: ImageRequest): Promise<GenerateResult> }
 
-export interface ImageProvider {
-  generate(request: ImageRequest): Promise<GenerateResult>;
-}
-
-const providers: Record<"openai" | "gemini", ImageProvider> = {
-  openai: {
-    generate: ({ frame, ...request }) => {
-      if (!frame.openaiSize) return Promise.reject(new Error("The OpenAI output size is missing."));
-      return generateOpenAIImage({ ...request, size: frame.openaiSize });
-    }
-  },
-  gemini: {
-    generate: ({ frame, resolution, ...request }) => generateEdit({
-      ...request, aspectRatio: frame.geminiAspect, imageSize: resolution === "auto" ? undefined : resolution,
-    })
-  },
-};
-
-export function generateImage(request: ImageRequest): Promise<GenerateResult> {
-  return providers[isOpenAIModel(request.model) ? "openai" : "gemini"].generate(request);
+export async function generateImage(request: ImageRequest, registry = providerRegistry): Promise<GenerateResult> {
+  const model = registry.model(request.model);
+  const provider = registry.provider(model.provider);
+  if (!provider.generate) throw new Error(`${provider.label} does not support image generation.`);
+  const settings = freezeModelSettings(normalizeModelSettings(model, request.settings || {
+    resolution: request.resolution, quality: request.quality,
+  }).settings);
+  validateModelInput(model, settings, !!request.baseImagePng, request.references.length);
+  const credentials = request.credentials || { apiKey: request.apiKey };
+  for (const field of provider.credentials) {
+    if (field.required && !credentials[field.id]?.trim()) throw new Error(`Enter and save ${field.label}.`);
+  }
+  return provider.generate({ ...request, credentials, model, settings });
 }

@@ -3,6 +3,7 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
+import { type ModelSettings } from "../models/types";
 import { type GenerationArchive } from "../archive/types";
 import { type DocumentState } from "../photoshop/document-state";
 import { type ActiveArtboard, type Bounds, type SelectionSnapshot } from "../photoshop/types";
@@ -41,6 +42,8 @@ export interface GenerationInput {
   readonly provider: string;
   readonly quality: ImageQuality;
   readonly apiKey: string;
+  readonly credentials?: Readonly<Record<string, string>>;
+  readonly settings?: ModelSettings;
   readonly resolution: string;
   readonly includeSelection: boolean;
   readonly placeAsSmartObject: boolean;

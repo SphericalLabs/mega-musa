@@ -75,25 +75,25 @@ export async function prepareGeneration(job: GenerationJob, context: GenerationC
     throwIfCancelled(job);
     const coversEntireTarget = placementCoversEntireTarget(region, targetBounds, selectionSnapshot);
 
-    const openaiDimensions = frame.openaiSize?.split("x").map(Number) || [];
+    const outputDimensions = frame.width && frame.height ? [frame.width, frame.height] : [];
     const exactOutputSize =
-      openaiDimensions.length === 2 && openaiDimensions.every(Number.isFinite)
-        ? pixelSize(openaiDimensions[0], openaiDimensions[1])
+      outputDimensions.length === 2 && outputDimensions.every(Number.isFinite)
+        ? pixelSize(outputDimensions[0], outputDimensions[1])
         : "";
     const [pickerRatioW, pickerRatioH] = ratioLabel.split(":").map(Number);
     const pickerIsApproximate =
       !!exactOutputSize &&
-      openaiDimensions[0] * pickerRatioH !== openaiDimensions[1] * pickerRatioW;
+      outputDimensions[0] * pickerRatioH !== outputDimensions[1] * pickerRatioW;
     const tierLongEdge: Record<string, number> = {
       "512px": 512,
       "1K": 1024,
       "2K": 2048,
       "4K": 4096,
     };
-    const outputLongEdge = openaiDimensions.length === 2
-      ? Math.max(openaiDimensions[0], openaiDimensions[1])
+    const outputLongEdge = outputDimensions.length === 2
+      ? Math.max(outputDimensions[0], outputDimensions[1])
       : tierLongEdge[resolution] || 1024;
-    const requestMaxEdge = Math.max(REQUEST_MIN_MAX_EDGE, outputLongEdge);
+    const requestMaxEdge = Math.min(spec.inputs.maxEdge, Math.max(REQUEST_MIN_MAX_EDGE, outputLongEdge));
 
     const notes: string[] = [];
     if (
@@ -184,7 +184,7 @@ export async function prepareGeneration(job: GenerationJob, context: GenerationC
       requestReferences.push(await processor.resize(generationRefs[index], { maxEdge: requestMaxEdge }));
     }
 
-    return { frame, region, cropW, cropH, isRegion, selectionSnapshot, notes, exactOutputSize, outputFrameNote, openaiDimensions, requestReferences, basePng };
+    return { frame, region, cropW, cropH, isRegion, selectionSnapshot, notes, exactOutputSize, outputFrameNote, outputDimensions, requestReferences, basePng };
   } finally { hostReservation?.release(); }
 }
 export type PreparedGeneration = Awaited<ReturnType<typeof prepareGeneration>>;

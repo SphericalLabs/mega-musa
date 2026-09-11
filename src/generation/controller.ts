@@ -7,9 +7,10 @@ import { errorMessage } from "../errors";
 import { MAX_BRACKET_GENERATION_JOBS, MAX_MANUAL_GENERATION_JOBS } from "../generation-limits";
 import { runHostModalTask } from "../host-modal";
 import { DEFAULT_MODEL, modelSpec } from "../models/catalog";
-import { nearestImageSize } from "../models/geometry";
-import { isOpenAIModel, modelProviderLabel } from "../models/provider";
-import { normalizeImageQuality } from "../models/quality";
+import { modelProviderLabel } from "../models/provider";
+import { freezeModelSettings, normalizeModelSettings, validateModelInput } from "../models/settings";
+import { type ModelSettings } from "../models/types";
+import { providerCredentials, missingCredential } from "../panel/provider-settings";
 import { $, isChecked } from "../panel/controls";
 import { showDocumentBlocker } from "../panel/document-warnings";
 import { setNote, setStatus } from "../panel/status";
@@ -19,7 +20,6 @@ import { getActiveDoc } from "../photoshop/runtime";
 import { getSelectionBounds } from "../photoshop/selection";
 import { type ActiveArtboard, type Bounds } from "../photoshop/types";
 import { expandPromptTemplate } from "../prompt-expansion";
-import { type ImageQuality } from "../providers/types";
 import { type RefImage } from "../references";
 import { ReferenceCollection } from "../references/collection";
 import { prepareReferenceArchiveImages } from "../references/preparation";
@@ -27,12 +27,13 @@ import { ReferenceImageProcessor } from "../references/processor";
 import { GenerationQueue } from "./queue";
 import { type GenerationJob } from "./types";
 import { type GenerationWorkflow } from "./workflow";
-export function createGenerationController({ queue, references, processor, workflow, descriptionBusy }: {
+export function createGenerationController({ queue, references, processor, workflow, descriptionBusy, captureSettings }: {
   queue: GenerationQueue;
   references: ReferenceCollection;
   processor: ReferenceImageProcessor;
   workflow: GenerationWorkflow;
   descriptionBusy: () => boolean;
+  captureSettings?: () => ModelSettings;
 }) {
   function updateGenerateControl(): void {
     const generate = $("generate");
@@ -61,17 +62,22 @@ export function createGenerationController({ queue, references, processor, workf
 
     const promptTemplate = ($("prompt").value || "").trim();
     const model = $("model").value || DEFAULT_MODEL;
-    const provider = modelProviderLabel(model);
-    const quality: ImageQuality = isOpenAIModel(model)
-      ? normalizeImageQuality($("quality")?.value || "auto")
-      : "auto";
-    const apiKey = (
-      isOpenAIModel(model) ? $("openaiApiKey").value || "" : $("geminiApiKey").value || ""
-    ).trim();
-    if (!apiKey) {
-      setStatus(`Enter your ${provider} API key and press Save.`, "error");
-      return;
-    }
+    let settings: ModelSettings;
+    let credentials: Readonly<Record<string, string>>;
+    let provider: string;
+    try {
+      const spec = modelSpec(model);
+      provider = modelProviderLabel(model);
+      credentials = providerCredentials(spec.provider);
+      const missing = missingCredential(spec.provider, credentials);
+      if (missing) throw new Error(`Enter your ${missing} and press Save.`);
+      settings = freezeModelSettings(captureSettings ? captureSettings() : normalizeModelSettings(spec, {
+        resolution: $("resolution")?.value, quality: $("quality")?.value, ratio: $("selRatio")?.value,
+      }).settings);
+      validateModelInput(spec, settings, isChecked($("includeSelection")), references.length);
+    } catch (error) { setStatus(errorMessage(error), "error"); return; }
+    const { quality, resolution } = settings;
+    const apiKey = credentials.apiKey || "";
     if (!promptTemplate) {
       setStatus("Enter a prompt describing the edit.", "error");
       return;
@@ -100,9 +106,6 @@ export function createGenerationController({ queue, references, processor, workf
       return;
     }
 
-    const spec = modelSpec(model);
-    // Revalidate the resolution in case the picker still holds a stale value.
-    const resolution = nearestImageSize($("resolution").value || "auto", spec);
     // Disabling canvas input still preserves the selection or target as placement bounds.
     const includeSelection = isChecked($("includeSelection"));
     const placeAsSmartObject = isChecked($("placeAsSmartObject"));
@@ -144,6 +147,8 @@ export function createGenerationController({ queue, references, processor, workf
       provider,
       quality,
       apiKey,
+      credentials,
+      settings,
       resolution,
       includeSelection,
       placeAsSmartObject,

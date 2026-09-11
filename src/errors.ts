@@ -89,23 +89,3 @@ export async function requestJson(provider: string, url: string, init: any): Pro
     throw error;
   }
 }
-
-export function checkGeminiOutput(json: any): void {
-  const block = json?.promptFeedback?.blockReason;
-  if (block && block !== "BLOCK_REASON_UNSPECIFIED") {
-    throw apiError("Gemini", { code: block });
-  }
-  for (const candidate of json?.candidates || []) {
-    const code = candidate?.finishReason;
-    if (code && code !== "STOP" && code !== "FINISH_REASON_UNSPECIFIED") {
-      throw apiError("Gemini", { code, message: candidate.finishMessage });
-    }
-  }
-}
-
-export function checkOpenAIOutput(json: any): void {
-  if (json?.error) throw apiError("OpenAI", json.error);
-  if (["failed", "incomplete", "cancelled", "queued", "in_progress"].includes(json?.status)) {
-    throw apiError("OpenAI", { code: json.incomplete_details?.reason || json.status });
-  }
-}

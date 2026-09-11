@@ -19,12 +19,16 @@ The plugin uses feature modules with a few objects that own state. There is no a
 | `src/generation/placement.ts` | Place results, retain paid pixels after a modal timeout and retry placement |
 | `src/photoshop/` | Document access, checked action descriptors, selection, pixels, masks, metadata and placement |
 | `src/references/` | Reference collection, WebView image processing, archive preparation, deduplication and restoration |
-| `src/providers/` | Provider request/response formats and shared image and description contracts |
-| `src/models/` | Model catalogs, supported sizes, geometry, labels and pricing |
+| `src/providers/` | Bundled provider registry, provider-owned catalogs, credentials metadata and request/response adapters |
+| `src/models/` | Catalog access, capability/settings contracts, normalization, geometry, labels and pricing helpers |
+| `src/model-preferences.ts` | Versioned settings per model with legacy preference migration |
+| `src/exchange-rates/` | Rate-source registry and USD-normalized source adapters |
 | `src/archive/` | Persisted metadata types and validation, including older records |
 | `src/images/` | Encoding, decoding, color tags, channel conversion and resampling |
 | `src/webview/` | Browser entry, canvas conversion and the shared message/chunk protocol |
 | `public/` | HTML, CSS, manifest and static assets |
+
+Provider-specific implementations live under `src/providers/gemini/` and `src/providers/openai/`, including HTTP adapters, response validation and provider-only sizing/pricing helpers. Shared provider contracts, routing and reusable description helpers remain at `src/providers/`.
 
 Existing root entry modules such as `photoshop-bridge.ts`, `image-codec.ts` and `models.ts` re-export the new implementations. Internal imports point directly to the owning module. The placement API now takes a `PlacementRequest` object and a separate optional `PlacementContext` instead of 14 positional arguments.
 
@@ -35,6 +39,7 @@ Existing root entry modules such as `photoshop-bridge.ts`, `image-codec.ts` and 
 - `ReferenceImageProcessor` owns pending resize requests, timers and thumbnail deduplication. Disconnecting rejects pending requests and clears their timers.
 - Description, recall and drop controllers keep their transient state inside their factory closures. The panel composition root connects them through explicit dependencies and callbacks.
 - `PromptHistory` owns the panel session's text timeline. All programmatic prompt changes go through the injected prompt controller's `replace(text, source)` method. Describe owns the prompt lock and may apply its result while locked; Recall and undo/redo cannot change the prompt until the lock is released. A no-op does not create a step or discard redo. Undo/redo advances only after a verified text write. No native undo buffer, synthetic input event, DOM setter override or Photoshop history operation is needed to record a replacement.
+- The settings controller owns custom option controls. Provider credential controls expose only the selected provider's values. Model preferences are separate from global placement/display preferences.
 - Provider, model, archive schema and image codec modules do not load panel or Photoshop code at runtime. The bundle test checks these boundaries and rejects runtime dependency cycles.
 - Photoshop host objects and Spectrum elements still use explicit `any` at parts of the host boundary. The project has no complete SDK type definitions. Domain state, placement options and outgoing WebView messages are typed; implicit `any` and unused variables are compiler errors.
 
@@ -42,9 +47,9 @@ Existing root entry modules such as `photoshop-bridge.ts`, `image-codec.ts` and 
 
 1. Plain submissions stop at four active jobs. One brace-expanded submission can contain up to 10 images. Provider requests use two slots with FIFO ordering; Photoshop modal work uses its separate host gate.
 2. A queued job retains its submitted prompt, model, reference list, placement preferences and original document ID. Later panel edits cannot replace those captured fields.
-3. Canceling before dispatch adds no budget charge. Canceling after dispatch records the frozen estimate once. Late responses cannot overwrite the panel or charge again. Successful responses are counted before image decoding or placement.
+3. Canceling before dispatch adds no budget charge. Canceling after dispatch records the frozen estimate once unless a provider has already reported a confirmed charge. Adapters mark dispatch immediately before the first potentially billable network request. Late responses cannot overwrite the panel or charge again. Successful responses are counted before image decoding or placement.
 4. A host modal timeout during placement retains the returned pixels. Retry uses the same pixels and destination without another provider request. Other placement failures retain the existing raster fallback and error behavior.
-5. Archive version 1, metadata namespaces and storage keys remain unchanged. Recall supports older records and leaves global Smart Object and reduced-storage preferences alone. Restored references are not recompressed and existing originals take priority over compressed duplicates.
+5. Archive envelope version 1, metadata namespaces and legacy credential keys remain compatible. New archives optionally include a provider ID and a versioned model-settings record. Recall supports older records and leaves global Smart Object and reduced-storage preferences alone. Restored references are not recompressed and existing originals take priority over compressed duplicates.
 6. The panel and WebView share message names, chunk limits and transfer assembly. Both receivers check their message source. Missing or invalid chunks cannot be accepted as complete images.
 
 ## Separate correctness fixes
@@ -74,7 +79,9 @@ For prompt history, check on macOS and Windows: typing → paste → Describe �
 
 ## Keeping future changes lean
 
-- Put new model capabilities and prices in the model catalogs. Keep provider-specific HTTP details in the corresponding provider module.
+- Add providers through `src/providers/registry.ts`. Put capabilities and prices in provider-owned model catalogs and keep HTTP details in the adapter. See [the developer extension guide](DEVELOPER.md) for complete examples.
+- Quality choices, model visibility and framing are explicit capabilities. Pricing metadata must not select behavior. New model options use a small primitive-value schema plus optional validation and migration hooks.
+- Exchange rates are cached per source and currency; malformed or missing quotes cannot discard valid unrelated quotes. USD budget storage is independent of conversion.
 - Add an abstraction when it removes repeated behavior or owns a real lifecycle. Small stateless functions remain functions; a shared base class for every provider or controller would add indirection without solving a current problem.
 - Keep tests aimed at outcomes and public module APIs. Avoid checking source text or injecting private exports into the application entry point.
 - Preserve small differences in host action descriptors when their behavior differs. Deduplicate the common host boundary and resource handling, not every superficially similar command.

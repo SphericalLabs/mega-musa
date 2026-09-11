@@ -8,7 +8,6 @@ import { decodeImage } from "../images/codec";
 import { toRGBA } from "../images/pixels";
 import { modelSpec } from "../models/catalog";
 import { resolutionLabel } from "../models/labels";
-import { isOpenAIModel } from "../models/provider";
 import { modelNameWithoutYear, pixelSize, ratioDiffers, resultLayerName } from "./presentation";
 import { type GenerationJob } from "./types";
 
@@ -36,15 +35,15 @@ export function prepareGenerationResult(job: GenerationJob, input: PreparedGener
   const spec = modelSpec(model);
 
   const { queue } = context;
-  const { frame, region, cropW, cropH, isRegion, selectionSnapshot, notes, exactOutputSize, outputFrameNote, openaiDimensions } = input;
+  const { frame, region, cropW, cropH, isRegion, selectionSnapshot, notes, exactOutputSize, outputFrameNote, outputDimensions } = input;
   const ratioLabel = frame.label;
-  const resolvedQuality = isOpenAIModel(model) ? result.usage?.quality || quality : undefined;
+  const resolvedQuality = spec.qualities.length > 1 ? result.usage?.quality || quality : undefined;
   const decoded = decodeImage(result.mimeType, result.bytes);
   const returnedSize = pixelSize(decoded.width, decoded.height);
   const returnedRatioDiffers = ratioDiffers(decoded.width, decoded.height, frame.ratio);
   const returnedSizeDiffers =
     !!exactOutputSize &&
-    (decoded.width !== openaiDimensions[0] || decoded.height !== openaiDimensions[1]);
+    (decoded.width !== outputDimensions[0] || decoded.height !== outputDimensions[1]);
   if (returnedRatioDiffers) {
     notes.push(
       exactOutputSize
@@ -70,6 +69,8 @@ export function prepareGenerationResult(job: GenerationJob, input: PreparedGener
   layerDetails.push(resolutionDetail);
   const archive: GenerationArchive = {
     v: 1,
+    providerId: spec.provider,
+    settings: job.settings,
     prompt,
     provider,
     model,

@@ -3,9 +3,10 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { checkGeminiOutput, requestJson } from "../errors";
-import { base64ToBytes, bytesToBase64 } from "../images/base64";
-import { type GenerateOptions, type GenerateResult } from "./types";
+import { checkGeminiOutput } from "./errors";
+import { requestJson } from "../../errors";
+import { base64ToBytes, bytesToBase64 } from "../../images/base64";
+import { type GenerateOptions, type GenerateResult } from "../types";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -38,6 +39,8 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
   };
   if (opts.signal) requestInit.signal = opts.signal;
 
+  if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
+  opts.onDispatch?.();
   const json = await requestJson("Gemini", `${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, requestInit);
   checkGeminiOutput(json);
 

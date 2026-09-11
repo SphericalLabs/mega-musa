@@ -6,8 +6,8 @@
 import { formatMoney, formatMoneyRange } from "../currency";
 import { type ImageQuality } from "../providers/types";
 import { outputSizeFor } from "./geometry";
-import { INPUT_OVERHEAD_USD, outputPriceRangeUSD, qualityPriceUSD } from "./pricing";
-import { type ModelSpec } from "./types";
+import { INPUT_OVERHEAD_USD, outputPriceRangeUSD, qualityPriceUSD, estimatedTotalUSD } from "./pricing";
+import { type ModelSpec, type ModelSettings } from "./types";
 
 export function resolutionLabel(token: string): string {
   if (token === "auto") return "Auto";
@@ -16,7 +16,11 @@ export function resolutionLabel(token: string): string {
   return token;
 }
 
-export function priceLabel(spec: ModelSpec, token: string, ratio: string, quality: ImageQuality): string {
+export function priceLabel(spec: ModelSpec, token: string, ratio: string, quality: ImageQuality, settings?: ModelSettings): string {
+  if (spec.estimateCost) {
+    const value = estimatedTotalUSD(spec, token, outputSizeFor(spec, token, ratio) || undefined, quality, settings ? { ...settings, resolution: token } : undefined);
+    return value === null ? "" : formatMoney(value);
+  }
   const allowance = INPUT_OVERHEAD_USD;
   const size = outputSizeFor(spec, token, ratio);
   if (quality !== "auto") {
@@ -34,12 +38,13 @@ export function resolutionMenuLabel(
   token: string,
   spec: ModelSpec,
   ratio = "1:1",
-  quality: ImageQuality = "auto"
+  quality: ImageQuality = "auto",
+  settings?: ModelSettings
 ): string {
   const label = resolutionLabel(token);
   // Show an Auto price only when there are no explicit resolution tiers. Budget
   // estimates still use Auto prices.
   if (token === "auto" && spec.imageSizes.length) return label;
-  const price = priceLabel(spec, token, ratio, quality);
+  const price = priceLabel(spec, token, ratio, quality, settings);
   return price ? `${label} / ${price}` : label;
 }

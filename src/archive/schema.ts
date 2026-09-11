@@ -107,16 +107,27 @@ export function isEmbeddedResultStorage(value: any): value is EmbeddedResultStor
   );
 }
 
+export function isArchivedModelSettings(value: any): boolean {
+  return value != null && Number.isInteger(value.version) && value.version > 0 &&
+    typeof value.resolution === "string" && typeof value.ratio === "string" && typeof value.quality === "string" &&
+    value.options != null && typeof value.options === "object" && !Array.isArray(value.options) &&
+    Object.entries(value.options).every(([key, item]) => !["__proto__", "constructor", "prototype"].includes(key) &&
+      (typeof item === "string" || typeof item === "boolean" || (typeof item === "number" && Number.isFinite(item))));
+}
+
 export function isGenerationArchive(value: any): value is GenerationArchive {
   return (
     value?.v === 1 &&
     typeof value.prompt === "string" &&
     typeof value.provider === "string" &&
+    (value.providerId === undefined || typeof value.providerId === "string") &&
+    (value.settings === undefined || isArchivedModelSettings(value.settings)) &&
     typeof value.model === "string" &&
     typeof value.modelLabel === "string" &&
     typeof value.resolution === "string" &&
     typeof value.ratio === "string" &&
     typeof value.quality === "string" &&
+    (value.resolvedQuality === undefined || typeof value.resolvedQuality === "string") &&
     typeof value.includeSelection === "boolean" &&
     (value.placeAsSmartObject === undefined || typeof value.placeAsSmartObject === "boolean") &&
     (value.reduceDocumentSize === undefined || typeof value.reduceDocumentSize === "boolean") &&

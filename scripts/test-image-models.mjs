@@ -68,3 +68,8 @@ assert.ok(Math.abs(estimatedTotalUSD(sunburst, "2K", "2048x2048", "low") - outpu
 assert.equal(resolutionMenuLabel("2K", sunburst, "1:1", "low"), "2K / USD 0.02");
 assert.equal(estimatedTotalUSD({ id: "unknown", imageSizes: [], aspectRatios: [] }, "auto", undefined, "auto"), null);
 console.log("Input allowance and estimated total tests passed.");
+
+// Removing pricing data must not change a model's output geometry or controls.
+const withoutPrices = { ...sunburst, outputQualityFactors: undefined };
+assert.equal(outputFrame(withoutPrices, "2K", 1000, 1000).openaiSize, "2048x2048");
+assert.ok(withoutPrices.qualities.includes("max"));

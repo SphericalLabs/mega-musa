@@ -74,7 +74,7 @@ reloaded.nextDay();
 await reloaded.refreshExchangeRates();
 assert.equal(reloaded.requests.length, 1);
 
-// Failed or invalid refreshes must preserve the complete cache.
+// Entirely failed refreshes preserve the cache byte for byte.
 const savedCache = JSON.stringify({
   checkedDate: "2026-09-09",
   rates: Object.fromEntries(rows.map((row) => [row.quote, { rate: row.rate, date: row.date }])),
@@ -84,11 +84,7 @@ for (const fetcher of [
   async () => ({ ok: false }),
   async () => ({ ok: true, json: async () => { throw new Error("bad JSON"); } }),
   async () => response({ rates: {} }),
-  async () => response(rows.slice(1)),
-  ...[0, -1, Infinity, "1.5"].map((rate) => async () => response([{ ...rows[0], rate }, ...rows.slice(1)])),
-  async () => response([{ ...rows[0], date: "2026-02-30" }, ...rows.slice(1)]),
-  async () => response([{ ...rows[0], date: "2027-01-01" }, ...rows.slice(1)]),
-  async () => response([{ ...rows[0], base: "EUR" }, ...rows.slice(1)]),
+
 ]) {
   const settings = new Map([["nbp.exchangeRates.ecb", savedCache]]);
   const test = setup(settings, fetcher);
@@ -98,6 +94,32 @@ for (const fetcher of [
   assert.equal(test.requests.length, 2, "failures must allow another attempt in the same session");
   assert.equal(test.formatMoney(2), "CHF 3.00");
   assert.equal(settings.get("nbp.exchangeRates.ecb"), savedCache);
+}
+
+// A missing or malformed quote preserves its old rate while valid quotes refresh.
+for (const first of [null, ...[0, -1, Infinity, "1.5"].map((rate) => ({ ...rows[0], rate })),
+  { ...rows[0], date: "2026-02-30" }, { ...rows[0], date: "2027-01-01" }, { ...rows[0], base: "EUR" }]) {
+  const settings = new Map([["nbp.exchangeRates.ecb", savedCache]]);
+  const test = setup(settings, async () => response([...(first ? [first] : []), ...rows.slice(1).map(row => ({ ...row, rate: row.rate * 2 }))]));
+  test.setDisplayCurrency("EUR");
+  await test.refreshExchangeRates();
+  assert.equal(test.formatMoney(2), "EUR 1.00");
+  test.setDisplayCurrency("CHF");
+  assert.equal(test.formatMoney(2), "CHF 6.00");
+  await test.refreshExchangeRates();
+  assert.equal(test.requests.length, 2, "a missing quote remains eligible for retry");
+}
+
+// An old cache missing a newly supported currency retains all other rates offline.
+{
+  const rates = Object.fromEntries(rows.slice(1).map(row => [row.quote, { rate: row.rate, date: row.date }]));
+  const test = setup(new Map([["nbp.exchangeRates.ecb", JSON.stringify({ checkedDate: today, rates })]]), async () => { throw new Error("offline"); });
+  test.setDisplayCurrency("CHF");
+  assert.equal(test.formatMoney(2), "CHF 3.00");
+  await test.refreshExchangeRates();
+  assert.equal(test.requests.length, 1, "missing rates must bypass the daily cache");
+  test.setDisplayCurrency("EUR");
+  assert.equal(test.formatMoney(2), "USD 2.00");
 }
 
 // A stalled request must release the refresh lock; late data cannot replace the cache.

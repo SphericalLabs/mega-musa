@@ -3,21 +3,23 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-export type DescriptionProvider = "openai" | "gemini";
+export type DescriptionProvider = string;
 
-export type OpenAIReasoningEffort = "none" | "high";
+export type { OpenAIReasoningEffort } from "./openai/descriptions";
 
-export type GeminiThinkingLevel = "minimal" | "low" | "high";
+export type { GeminiThinkingLevel } from "./gemini/descriptions";
 
 export interface DescriptionModelSpec {
   id: string;
   label: string;
   provider: DescriptionProvider;
   model: string;
-  effort: OpenAIReasoningEffort | GeminiThinkingLevel;
+  effort?: string;
+  options?: Record<string, string | number | boolean>;
+  actualCost?: (usage: DescriptionUsage, at: Date) => number | null;
   // Midpoint of the single-image menu estimate, used when usage is unavailable.
-  estimatedUSD: number;
-  estimateRangeUSD: [number, number];
+  estimatedUSD: number | null;
+  estimateRangeUSD: [number, number] | null;
 }
 
 export interface DescriptionImage {
@@ -43,6 +45,8 @@ export interface DescriptionResult {
 
 export interface DescribeImagesOptions {
   apiKey: string;
+  credentials?: Readonly<Record<string, string>>;
+  onDispatch?: () => void;
   model: DescriptionModelSpec;
   images: DescriptionImage[];
   signal?: AbortSignal;

@@ -3,17 +3,10 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { gptImage2Size } from "./image-size";
+export { gptImage2RepresentativeSize } from "../providers/openai/image-size";
 import { type ModelSpec, type OutputFrame } from "./types";
 
 export const TIER_ORDER = ["512px", "1K", "2K", "4K"];
-
-export function gptImage2RepresentativeSize(token: string, ratio: string): string | null {
-  if (token !== "1K" && token !== "2K" && token !== "4K") return null;
-  const [rw, rh] = ratio.split(":").map(Number);
-  if (!rw || !rh) return gptImage2Size(1000, 1000, token);
-  return gptImage2Size(rw * 1000, rh * 1000, token);
-}
 
 export function fixedOutputSize(spec: ModelSpec, ratio: string): string | null {
   const match = spec.fixedSizes?.find((size) => size.label === ratio);
@@ -21,7 +14,11 @@ export function fixedOutputSize(spec: ModelSpec, ratio: string): string | null {
 }
 
 export function outputSizeFor(spec: ModelSpec, token: string, ratio: string): string | null {
-  if (spec.outputQualityFactors) return gptImage2RepresentativeSize(token, ratio);
+  if (spec.resolveFrame) {
+    const [w, h] = ratio.split(":").map(Number);
+    const frame = spec.resolveFrame(spec, token, w || 1, h || 1);
+    return frame.width && frame.height ? `${frame.width}x${frame.height}` : null;
+  }
   return fixedOutputSize(spec, ratio);
 }
 
@@ -60,13 +57,7 @@ export function outputFrame(
   const safeW = width > 0 ? width : 1;
   const safeH = height > 0 ? height : 1;
 
-  if (spec.outputQualityFactors) {
-    const openaiSize = gptImage2Size(safeW, safeH, tier === "auto" ? undefined : tier);
-    const [outputW, outputH] = openaiSize.split("x").map(Number);
-    const ratio = outputW / outputH;
-    const label = nearestRatioLabel(`${outputW}:${outputH}`, spec.aspectRatios);
-    return { label, ratio, openaiSize };
-  }
+  if (spec.resolveFrame) return spec.resolveFrame(spec, tier, safeW, safeH);
 
   if (spec.fixedSizes?.length) {
     const cropRatio = safeW / safeH;
@@ -77,7 +68,8 @@ export function outputFrame(
         : a
     );
     const label = nearestRatioLabel(best.label, spec.aspectRatios);
-    return { label, ratio: best.ratio, openaiSize: best.size };
+    const [width, height] = best.size.split("x").map(Number);
+    return { label, ratio: best.ratio, width, height, openaiSize: best.size };
   }
 
   const label = nearestRatioLabel(`${safeW}:${safeH}`, spec.aspectRatios);

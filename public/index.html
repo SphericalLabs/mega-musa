@@ -47,7 +47,8 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
             <sp-button id="saveOpenAIKey" variant="primary" size="s">Save</sp-button>
           </div>
         </div>
-        <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Both are stored securely on this machine.</div>
+        <div id="providerCredentials"></div>
+        <div class="muted">You only need the key for the model you pick below &mdash; only that one is ever sent. Keys are stored securely on this machine.</div>
         <div class="field">
           <span class="label">Display currency</span>
           <sp-picker id="displayCurrency" size="s" aria-label="Display currency">
@@ -85,6 +86,7 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
             <sp-menu slot="options"></sp-menu>
           </sp-picker>
         </div>
+        <div id="modelOptions"></div>
         <div class="row spread">
           <span id="budget" class="muted">
             <span id="budgetTotal">Budget spent: &mdash;</span>

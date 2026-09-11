@@ -16,6 +16,7 @@ A Photoshop panel for AI image generation and localized editing with Google Gemi
 - Choose Nano Banana Pro, Nano Banana 2, OpenAI Sunburst, OpenAI Flare or OpenAI GPT Image 2, then set the selected model's supported resolution, quality and aspect ratio.
 - Queue multiple generations while continuing to edit the controls. Each click freezes its prompt, model, quality, references, Photoshop pixels, selection and destination. Plain Generate clicks allow up to four active jobs, while one brace-expanded prompt can add up to 10. Two provider requests run concurrently; additional jobs wait.
 - Cancel one queued generation from its row or cancel every waiting and running generation with **Cancel All**. A request that has already reached the provider counts as billed and is added to the spend counter.
+- Resolution, quality, ratio and any additional model options are remembered separately for each model. Switching models restores that model's preferences.
 - Sunburst and Flare support Low, Medium, High, XHigh, Max and Auto quality. GPT Image 2 supports up to High. Resolution defaults to 2K and quality to Low; saved preferences take priority.
 - Generation estimates include one flat USD 0.01 overhead for the prompt, all references and canvas input combined, regardless of image count. This is a rough allowance; API-reported token usage replaces the estimate when available.
 - Track image generation and Describe costs in one local USD total displayed in your selected currency, with separate counts for generated and described images.
@@ -42,7 +43,7 @@ In UXP Developer Tool, add `dist/manifest.json` and click **Load**. After change
 
 ## Development
 
-Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps.
+Run `npm test` for the automated suites and `npm run typecheck` for strict TypeScript checks. See [Source architecture](ARCHITECTURE.md) for the module map, state ownership, refactor decisions and Photoshop validation steps. The [developer extension guide](DEVELOPER.md) explains how to add providers, model-specific settings, currencies and exchange-rate sources.
 
 ## Use
 
@@ -110,7 +111,7 @@ PSD is the safest archival master for Photoshop-specific behavior. Photoshop can
 
 Choose **Display currency** under **API Keys**: EUR, CHF, USD, JPY, KRW, CNY, GBP, CAD, AUD, INR or BRL. The default is USD; a saved currency preference takes priority. Price menus and the budget update immediately when a rate is available.
 
-On startup, non-USD selections fetch [ECB reference rates through Frankfurter](https://frankfurter.dev/providers/ecb/) in the background unless a successful lookup is already cached for the current UTC day. Switching away from USD also triggers a lookup when needed. USD requires no lookup. All supported rates are cached together, so switching currencies does not require separate requests. The [ECB publishes rates around 16:00 CET on working days](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html); weekends and holidays use the latest published rates. The selector shows the rate date. These are display estimates; payment providers may use different rates and add fees.
+On startup, non-USD selections fetch [ECB reference rates through Frankfurter](https://frankfurter.dev/providers/ecb/) in the background unless a successful lookup is already cached for the current UTC day. Switching away from USD also triggers a lookup when needed. USD requires no lookup. Valid rates are cached individually. Once all quotes are available for the day, switching currencies does not require separate requests. A missing quote can retry without discarding other cached rates. The [ECB publishes rates around 16:00 CET on working days](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html); weekends and holidays use the latest published rates. The rate note shows the source and publication date. These are display estimates; payment providers may use different rates and add fees.
 
 Offline connections, service errors and a five-second timeout fail silently. The plugin keeps the last successful rates, or displays amounts explicitly in USD if no rate is available. A failed lookup can retry on the next startup. Only currency codes are sent to Frankfurter; API keys, prompts, images and spending amounts are not included. Stored USD spending is never changed by exchange-rate updates; historical totals are displayed using the latest cached rate.
 

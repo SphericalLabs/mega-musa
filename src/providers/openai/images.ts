@@ -3,17 +3,17 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { checkOpenAIOutput, requestJson } from "../errors";
-import { base64ToBytes } from "../images/base64";
-import { normalizeImageQuality } from "../models/quality";
-import { type GenerateResult, type ImageQuality, type ImageUsage, type RefImage } from "./types";
+import { checkOpenAIOutput } from "./errors";
+import { requestJson } from "../../errors";
+import { base64ToBytes } from "../../images/base64";
+import { normalizeImageQuality } from "../../models/quality";
+import { type GenerateResult, type ImageQuality, type ImageUsage, type RefImage } from "../types";
 
 const EDITS_ENDPOINT = "https://api.openai.com/v1/images/edits";
 
 const GENERATIONS_ENDPOINT = "https://api.openai.com/v1/images/generations";
 
-import { OPENAI_MODEL_PREFIX } from "../models/provider";
-export { OPENAI_MODEL_PREFIX } from "../models/provider";
+export const OPENAI_MODEL_PREFIX = "openai:";
 
 export interface OpenAIGenerateOptions {
   apiKey: string;
@@ -24,6 +24,7 @@ export interface OpenAIGenerateOptions {
   size: string; // Exact pixel dimensions, e.g. "1456x1088".
   quality?: ImageQuality;
   signal?: AbortSignal;
+  onDispatch?: () => void;
 }
 
 function finiteNumber(value: any): number | undefined {
@@ -173,6 +174,8 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
   }
   if (opts.signal) requestInit.signal = opts.signal;
 
+  if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
+  opts.onDispatch?.();
   const json = await requestJson("OpenAI", textOnly ? GENERATIONS_ENDPOINT : EDITS_ENDPOINT, requestInit);
   checkOpenAIOutput(json);
 

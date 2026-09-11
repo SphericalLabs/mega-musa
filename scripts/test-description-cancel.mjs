@@ -363,7 +363,7 @@ for (const lateSelection of ["selection", "error"]) {
   assert.equal(initial.analysisCancelled, 0);
   assert.equal(initial.analysisEstimates, 0);
   assert.equal(test.budgetText(initial).counts,
-    "(4 images, 0 images described, 1 unpriced, 2 image requests canceled but billed)");
+    "(4 images, 0 images described, 1 unpriced, 2 image requests canceled after dispatch)");
   test.addDescriptionToBudget(0.00125, 10);
   test.addToBudget(0.2);
   test.addDescriptionToBudget(0.0015, 2, true, true);

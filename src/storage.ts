@@ -79,6 +79,21 @@ export async function saveOpenAIApiKey(value: string): Promise<void> {
   await saveSecureString(KEY_OPENAI_API, value);
 }
 
+export async function loadProviderCredential(provider: string, id: string, secret: boolean): Promise<string> {
+  if (provider === "gemini" && id === "apiKey") return loadApiKey();
+  if (provider === "openai" && id === "apiKey") return loadOpenAIApiKey();
+  const name = `provider.${provider}.${id}`;
+  return secret ? loadSecureString(PREFIX + name) : loadSetting(name, "");
+}
+
+export async function saveProviderCredential(provider: string, id: string, secret: boolean, value: string): Promise<void> {
+  if (provider === "gemini" && id === "apiKey") return saveApiKey(value);
+  if (provider === "openai" && id === "apiKey") return saveOpenAIApiKey(value);
+  const name = `provider.${provider}.${id}`;
+  if (secret) await saveSecureString(PREFIX + name, value);
+  else saveSetting(name, value);
+}
+
 async function loadSecureString(key: string): Promise<string> {
   try {
     const stored = await storage.secureStorage.getItem(key);

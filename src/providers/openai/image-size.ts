@@ -49,3 +49,11 @@ export function gptImage2Size(cropW: number, cropH: number, tier?: string): stri
   }
   return `${w}x${h}`;
 }
+
+export function gptImage2RepresentativeSize(token: string, ratio: string): string | null {
+  if (token !== "1K" && token !== "2K" && token !== "4K") return null;
+  const [rw, rh] = ratio.split(":").map(Number);
+  if (!rw || !rh) return gptImage2Size(1000, 1000, token);
+  return gptImage2Size(rw * 1000, rh * 1000, token);
+}
+

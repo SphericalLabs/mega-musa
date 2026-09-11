@@ -3,7 +3,8 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { apiError, checkOpenAIOutput, requestJson } from "../errors";
+import { checkOpenAIOutput } from "./errors";
+import { apiError, requestJson } from "../../errors";
 import {
   DESCRIPTION_INSTRUCTIONS,
   MAX_OUTPUT_TOKENS,
@@ -11,13 +12,14 @@ import {
   finiteNumber,
   parseDescriptionJson,
   requestInit,
-} from "./description-format";
+} from "../description-format";
 import {
   type DescribeImagesOptions,
   type DescriptionResult,
   type DescriptionUsage,
-  type OpenAIReasoningEffort,
-} from "./description-types";
+} from "../description-types";
+
+export type OpenAIReasoningEffort = "none" | "high";
 
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 
@@ -68,6 +70,8 @@ export async function describeWithOpenAI(opts: DescribeImagesOptions): Promise<D
     },
   };
 
+  if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
+  opts.onDispatch?.();
   const json = await requestJson("OpenAI", OPENAI_RESPONSES_ENDPOINT,
     requestInit(body, { Authorization: `Bearer ${opts.apiKey}` }, opts.signal));
   const rawUsage = json?.usage;

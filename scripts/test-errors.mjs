@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 const bundle = await build({
-  stdin: { contents: 'export * from "./src/errors"; export * from "./src/gemini"; export * from "./src/openai"; export * from "./src/describe";', resolveDir: process.cwd() },
+  stdin: { contents: 'export * from "./src/errors"; export * from "./src/providers/gemini/errors"; export * from "./src/providers/openai/errors"; export * from "./src/gemini"; export * from "./src/openai"; export * from "./src/describe";', resolveDir: process.cwd() },
   bundle: true, format: "esm", platform: "node", write: false,
 });
 const api = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
@@ -18,7 +18,7 @@ try {
     () => api.generateEdit(opts),
     () => api.generateOpenAIImage(opts),
     ...["gemini", "openai"].map(provider => () => api.describeImages({
-      apiKey: opts.apiKey, model: { provider, model: "test", effort: "high" },
+      apiKey: opts.apiKey, model: api.DESCRIPTION_MODELS.find((model) => model.provider === provider),
       images: [{ mimeType: "image/png", base64: "test" }],
     })),
   ];
@@ -48,7 +48,7 @@ try {
     globalThis.fetch = async () => reply(provider === "openai"
       ? { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, usage: { input_tokens: 1, output_tokens: 1 } }
       : { candidates: [{ finishReason: "MAX_TOKENS" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } });
-    await assert.rejects(() => api.describeImages({ apiKey: "test", model: { provider, model: "test" },
+    await assert.rejects(() => api.describeImages({ apiKey: "test", model: api.DESCRIPTION_MODELS.find((model) => model.provider === provider),
       images: [{ mimeType: "image/png", base64: "test" }], onUsage: () => { usageReported = true; } }), /output limit/);
     assert.equal(usageReported, true);
   }

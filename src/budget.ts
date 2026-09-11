@@ -101,9 +101,10 @@ export function addToBudget(usd: number | null, cancelled = false): Budget {
   return b;
 }
 
-export function addDescriptionToBudget(usd: number, imageCount: number, cancelled = false, estimated = false): Budget {
+export function addDescriptionToBudget(usd: number | null, imageCount: number, cancelled = false, estimated = false): Budget {
   const b = loadBudget();
-  b.usd += usd;
+  if (usd !== null) b.usd += usd;
+  else b.unpriced += 1;
   b.imagesAnalyzed += imageCount;
   if (cancelled) b.analysisCancelled += imageCount;
   if (estimated) b.analysisEstimates += imageCount;
@@ -139,7 +140,7 @@ export function budgetText(b: Budget): { total: string; counts: string } {
     (analysisDetails.length ? ` (${analysisDetails.join(", ")})` : "");
   const counts = [`${b.images} images`, analyzed];
   if (b.unpriced) counts.push(`${b.unpriced} unpriced`);
-  if (b.cancelled) counts.push(`${b.cancelled} image requests canceled but billed`);
+  if (b.cancelled) counts.push(`${b.cancelled} image requests canceled after dispatch`);
   return {
     // Round only the display; small description charges retain full precision.
     total: `Budget spent since ${formatDate(b.since)}: ca. ${formatMoney(b.usd, 2)}`,

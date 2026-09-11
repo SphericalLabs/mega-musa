@@ -4,6 +4,6 @@
  */
 
 // Compatibility exports for existing plugin modules and integrations.
-export { gptImage2Size } from "./models/image-size";
-export { OPENAI_MODEL_PREFIX, generateOpenAIImage, isGptImage2 } from "./providers/openai-images";
-export type { OpenAIGenerateOptions } from "./providers/openai-images";
+export { gptImage2Size } from "./providers/openai/image-size";
+export { OPENAI_MODEL_PREFIX, generateOpenAIImage, isGptImage2 } from "./providers/openai/images";
+export type { OpenAIGenerateOptions } from "./providers/openai/images";

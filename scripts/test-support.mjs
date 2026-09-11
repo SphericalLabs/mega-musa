@@ -8,15 +8,16 @@ import { runInNewContext } from "node:vm";
 const require = createRequire(import.meta.url);
 const bundles = new Map();
 
-export async function loadModule(entry, { modules = {}, globals = {} } = {}) {
+export async function loadModule(entry, { modules = {}, globals = {}, plugins = [] } = {}) {
   const entries = Array.isArray(entry) ? entry : [entry];
   const key = JSON.stringify(entries);
-  if (!bundles.has(key)) bundles.set(key, build({
+  const compiled = !plugins.length && bundles.has(key) ? bundles.get(key) : build({
     stdin: { contents: 'import "./src/polyfills";\n' + entries.map((path) => `export * from ${JSON.stringify("./" + path)};`).join("\n"), resolveDir: process.cwd(), loader: "ts" },
     bundle: true, format: "cjs", platform: "node", write: false,
-    external: ["photoshop", "uxp"], logLevel: "silent",
-  }));
-  const bundle = await bundles.get(key);
+    external: ["photoshop", "uxp"], logLevel: "silent", plugins,
+  });
+  if (!plugins.length) bundles.set(key, compiled);
+  const bundle = await compiled;
   const module = { exports: {} };
   runInNewContext(bundle.outputFiles[0].text, {
     module, exports: module.exports,

@@ -100,4 +100,30 @@ prompt.undo();
 assert.equal(elements.prompt.value, "", "recalling identical text must not add a duplicate history entry");
 recall.dispose();
 prompt.dispose();
+
+// A native picker must keep its menu items while handling its own selection.
+// Replacing them during change can interrupt the host's selection commit.
+const visibleModels = elements.model.querySelectorAll("sp-menu-item").map(item => item.getAttribute("value"));
+const chosenResolutions = new Map();
+for (const model of visibleModels) {
+  elements.model.value = model;
+  elements.model.dispatchEvent(new Event("change"));
+  const menu = elements.resolution.querySelector("sp-menu");
+  for (const item of [...menu.children]) {
+    const resolution = item.getAttribute("value");
+    elements.resolution.value = resolution;
+    elements.resolution.dispatchEvent(new Event("change"));
+    assert.ok(menu.children.includes(item), `${model}: selecting a resolution must not replace its active menu item`);
+    assert.equal(elements.resolution.value, resolution);
+    assert.equal(settings.captureSettings().resolution, resolution);
+    assert.equal(JSON.parse(values.get(`nbp.modelSettings.${model}`)).resolution, resolution);
+    chosenResolutions.set(model, resolution);
+  }
+}
+await settings.restoreSettings();
+for (const [model, resolution] of chosenResolutions) {
+  elements.model.value = model;
+  elements.model.dispatchEvent(new Event("change"));
+  assert.equal(elements.resolution.value, resolution, "resolution survives reload and switching models");
+}
 console.log("Panel settings: defaults, persistence and recall without changing global storage preferences passed.");

@@ -8,7 +8,7 @@ export interface RefImage {
   base64: string;
 }
 
-export type ImageQuality = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ImageQuality = string;
 
 export interface ImageUsage {
   quality?: ImageQuality;
@@ -28,10 +28,13 @@ export interface GenerateOptions {
   aspectRatio?: string; // Omitted values use the provider default.
   imageSize?: string;
   signal?: AbortSignal;
+  onDispatch?: () => void;
 }
 
 export interface GenerateResult {
   mimeType: string;
   bytes: Uint8Array;
   usage?: ImageUsage;
+  // A provider-reported or adapter-calculated USD charge, if known.
+  costUSD?: number;
 }
