@@ -14,11 +14,10 @@ export const PASTE_MAX_EDGE = 2048;
 
 // Paste through Photoshop into a scratch document to read clipboard images. Validate
 // returned pixels because a paste can silently do nothing.
-export async function readClipboardImage(lease?: HostModalLease): Promise<PastedImage> {
+export async function readClipboardImage(lease?: HostModalLease): Promise<PastedImage | null> {
   return await runModal(
     "paste reference",
     async () => {
-      const trace: string[] = [];
       // Guard scratch cleanup against closing the user's document.
       const userDocId: number | undefined = app.activeDocument?.id;
 
@@ -31,49 +30,51 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
         profile: SRGB_PROFILE,
       });
       if (!scratch) throw new Error("Could not create a scratch document for the paste.");
-      // Paste targets the active document, so activate the scratch document first.
       try {
+        // Never paste unless the scratch document is active.
         app.activeDocument = scratch;
-      } catch (e: any) {
-        trace.push(`activate: ${e?.message || e}`);
-      }
-      try {
-        await batchPlay(
-          [
-            {
-              _obj: "paste",
-              antiAlias: { _enum: "antiAliasType", _value: "antiAliasNone" },
-              _options: { dialogOptions: "dontDisplay" },
-            },
-          ],
-          {}
-        );
-        trace.push("paste ok");
-      } catch (e: any) {
-        trace.push(`paste: ${e?.message || e}`);
-      }
-      // Reveal and trim the paste; empty documents may reject either operation.
-      for (const cmd of [
-        { _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } },
-        {
-          _obj: "trim",
-          trimBasedOn: { _enum: "trimBasedOn", _value: "transparency" },
-          top: true,
-          bottom: true,
-          left: true,
-          right: true,
-          _options: { dialogOptions: "dontDisplay" },
-        },
-      ]) {
-        try {
-          await batchPlay([cmd], {});
-        } catch (e: any) {
-          trace.push(`${cmd._obj}: ${e?.message || e}`);
+        if (app.activeDocument?.id !== scratch.id) {
+          throw new Error("Could not activate the scratch document for the paste.");
         }
-      }
-      trace.push(`after trim ${Math.round(scratch.width)}x${Math.round(scratch.height)}`);
+        // dontDisplay still opens Photoshop error dialogs; silent returns errors to us.
+        try {
+          await batchPlay(
+            [
+              {
+                _obj: "paste",
+                antiAlias: { _enum: "antiAliasType", _value: "antiAliasNone" },
+                _options: { dialogOptions: "silent" },
+              },
+            ],
+            {}
+          );
+        } catch (e: any) {
+          // An empty or text-only clipboard makes Photoshop's Paste unavailable.
+          if (/not (?:currently )?available|clipboard.*(?:empty|no image)/i.test(String(e?.message || e))) {
+            return null;
+          }
+          throw e;
+        }
+        // Reveal and trim the paste; empty documents may reject either operation.
+        for (const cmd of [
+          { _obj: "revealAll", _options: { dialogOptions: "silent" } },
+          {
+            _obj: "trim",
+            trimBasedOn: { _enum: "trimBasedOn", _value: "transparency" },
+            top: true,
+            bottom: true,
+            left: true,
+            right: true,
+            _options: { dialogOptions: "silent" },
+          },
+        ]) {
+          try {
+            await batchPlay([cmd], {});
+          } catch (e: any) {
+            console.log(`[Mega Musa] paste ${cmd._obj}:`, e?.message || e);
+          }
+        }
 
-      try {
         const originalWidth = Math.round(scratch.width);
         const originalHeight = Math.round(scratch.height);
         const longest = Math.max(originalWidth, originalHeight);
@@ -87,7 +88,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
                 height: { _unit: "pixelsUnit", _value: Math.max(1, Math.round(originalHeight * k)) },
                 constrainProportions: true,
                 interpolation: { _enum: "interpolationType", _value: "bicubicSharper" },
-                _options: { dialogOptions: "dontDisplay" },
+                _options: { dialogOptions: "silent" },
               },
             ],
             {}
@@ -110,9 +111,7 @@ export async function readClipboardImage(lease?: HostModalLease): Promise<Pasted
             }
           }
           if (!opaque) {
-            throw new Error(
-              `Photoshop pasted nothing — the clipboard has no image it can read. [${trace.join(" | ")}]`
-            );
+            return null;
           }
         }
 

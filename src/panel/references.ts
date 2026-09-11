@@ -11,6 +11,7 @@ import { pickReferenceImages } from "../references";
 import { MAX_REFS, ReferenceCollection } from "../references/collection";
 import { ReferenceImageProcessor } from "../references/processor";
 import { $, clearChildren } from "./controls";
+import { showModalNotice } from "./notices";
 import { setStatus } from "./status";
 
 export function createReferencePanel({ references, processor, onChange }: {
@@ -78,6 +79,16 @@ export function createReferencePanel({ references, processor, onChange }: {
     setStatus("Pasting from the clipboard…");
     try {
       const img = await readClipboardImage();
+      if (!img) {
+        setStatus("No image on the clipboard. Copy an image first.");
+        await showModalNotice({
+          kind: "warning",
+          title: "Mega Musa — No image on the clipboard",
+          message: "Copy an image to the clipboard first, then click Paste.",
+          primaryLabel: "OK",
+        });
+        return;
+      }
       const base64 = bytesToBase64(encodePng(img.data, img.width, img.height, img.components));
       references.add({
         name: `Pasted ${img.width}×${img.height}`,
@@ -94,7 +105,7 @@ export function createReferencePanel({ references, processor, onChange }: {
         "ok"
       );
     } catch (err: any) {
-      // Keep the paste trace in the console; the status box is narrow.
+      // Preserve unexpected host failures for diagnostics.
       console.log("[Mega Musa] paste failed:", errorMessage(err));
       setStatus("Could not paste: " + errorMessage(err), "error");
     }
