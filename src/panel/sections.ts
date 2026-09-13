@@ -47,7 +47,15 @@ export function setupCollapsibleSections(): void {
       setSectionExpanded(sectionId, expanded);
       saveSetting(settingName, expanded ? "1" : "0");
     };
-    toggle.addEventListener("click", toggleSection);
+    // Handle each press/release directly: UXP may omit rapid successive clicks.
+    const onMouseUp = (event: MouseEvent) => {
+      document.removeEventListener("mouseup", onMouseUp, true);
+      if (event.button === 0 && toggle.contains(event.target)) toggleSection();
+    };
+    toggle.addEventListener("mousedown", (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      document.addEventListener("mouseup", onMouseUp, true);
+    });
     toggle.addEventListener("keydown", (event: KeyboardEvent) => {
       if (event.repeat || !["Enter", " ", "Spacebar"].includes(event.key)) return;
       event.preventDefault();
