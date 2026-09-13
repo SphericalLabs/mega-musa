@@ -58,7 +58,11 @@ h3 {
   line-height: 16px;
   font-weight: 700;
   text-align: left;
-  cursor: pointer;
+}
+
+.section-toggle,
+.section-toggle * {
+  cursor: default;
 }
 
 .section-toggle:focus {
