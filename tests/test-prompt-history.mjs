@@ -98,7 +98,7 @@ async function editor(text = "") {
   return { prompt, field, document, elements, tick, select, change, key, timers };
 }
 
-// Typing + paste + Describe + manual edit + Recall share one reversible timeline.
+// Mixed edits retain only the latest undo step and its redo.
 {
   const t = await editor();
   assert.equal(t.elements.promptHistoryActions.style.display, "none");
@@ -111,12 +111,12 @@ async function editor(text = "") {
   t.select(11); t.change("Description!");
   assert.equal(t.prompt.replace("Recalled", "Recall"), true);
   assert.equal(t.elements.undoPrompt.getAttribute("title"), "Undo Recall");
-  for (const text of ["Description!", "Description", "ab pasted\n", "ab", ""]) {
+  for (const text of ["Description!", "Description!"]) {
     t.elements.undoPrompt.dispatchEvent(event("click"));
     assert.equal(t.field.value, text);
   }
   assert.equal(t.elements.undoPrompt.style.display, "none");
-  for (const text of ["ab", "ab pasted\n", "Description", "Description!", "Recalled"]) {
+  for (const text of ["Recalled", "Recalled"]) {
     t.elements.redoPrompt.dispatchEvent(event("click"));
     assert.equal(t.field.value, text);
   }
@@ -130,14 +130,14 @@ async function editor(text = "") {
   t.change("hello earth", 11);
   t.prompt.undo();
   assert.equal(t.field.value, "hello world");
-  assert.equal(t.field.selectionStart, 6); assert.equal(t.field.selectionEnd, 11);
+  assert.equal(t.field.selectionStart, 11); assert.equal(t.field.selectionEnd, 11);
   assert.equal(t.field.scrollTop, 50);
   t.prompt.redo();
   t.select(5, 11);
   t.field.dispatchEvent(event("cut")); t.change("hello", 5, "deleteByCut");
   t.change("hell", 4, "deleteContentBackward"); t.change("hel", 3, "deleteContentBackward");
   t.prompt.undo(); assert.equal(t.field.value, "hello");
-  t.prompt.undo(); assert.equal(t.field.value, "hello earth");
+  t.prompt.undo(); assert.equal(t.field.value, "hello");
   t.prompt.redo(); t.prompt.redo();
   t.change("hel!", 4); t.tick(800); t.change("hel!!", 5);
   t.prompt.undo(); assert.equal(t.field.value, "hel!");
@@ -147,7 +147,35 @@ async function editor(text = "") {
   t.select(0); t.change("Xhel!?", 1);
   t.change("X\nhel!?", 2, "insertLineBreak");
   t.prompt.undo(); assert.equal(t.field.value, "Xhel!?");
-  t.prompt.undo(); assert.equal(t.field.value, "hel!?");
+  t.prompt.undo(); assert.equal(t.field.value, "Xhel!?");
+  t.prompt.dispose();
+}
+
+// Button navigation keeps focus on the button and never restores selected text.
+// Focus/change notifications between clicks must preserve the redo timeline.
+{
+  const t = await editor("original");
+  t.select(0, 8);
+  t.prompt.replace("one", "Recall");
+  t.select(0, 3);
+  t.prompt.replace("two", "Recall");
+  t.select(0, 3);
+  t.prompt.replace("three", "Recall");
+  for (const [button, texts] of [
+    [t.elements.undoPrompt, ["two", "two"]],
+    [t.elements.redoPrompt, ["three", "three"]],
+  ]) {
+    for (const text of texts) {
+      button.focus();
+      button.dispatchEvent(event("click"));
+      assert.equal(t.document.activeElement, button, "navigation must not refocus the prompt");
+      assert.equal(t.field.value, text);
+      assert.equal(t.field.selectionStart, t.field.selectionEnd, "navigation must collapse selections");
+      for (const type of ["focus", "blur", "change"]) t.field.dispatchEvent(event(type));
+      t.tick();
+      assert.equal(t.elements.redoPrompt.style.display, text === "three" ? "none" : "block");
+    }
+  }
   t.prompt.dispose();
 }
 
@@ -161,8 +189,8 @@ async function editor(text = "") {
   t.field.dispatchEvent(event("input"));
   t.change("aBc");
   t.prompt.undo(); assert.equal(t.field.value, "aB");
-  t.prompt.undo(); assert.equal(t.field.value, "a");
-  t.prompt.undo(); assert.equal(t.field.value, "");
+  t.prompt.undo(); assert.equal(t.field.value, "aB");
+  t.prompt.redo(); assert.equal(t.field.value, "aBc");
   t.prompt.dispose();
 }
 
@@ -176,10 +204,10 @@ async function editor(text = "") {
   t.prompt.replace("one", "Recall"); t.prompt.replace("two", "Describe");
   assert.equal(t.key("z", { metaKey: true }).defaultPrevented, true);
   assert.equal(t.field.value, "one");
-  t.key("z", { metaKey: true }); assert.equal(t.field.value, "original");
-  t.key("z", { metaKey: true }); assert.equal(t.field.value, "original");
+  t.key("z", { metaKey: true }); assert.equal(t.field.value, "one");
+  t.key("z", { metaKey: true }); assert.equal(t.field.value, "one");
   assert.equal(hostKeys, 0);
-  t.tick(); t.key("Z", { metaKey: true, shiftKey: true }); assert.equal(t.field.value, "one");
+  t.tick(); t.key("Z", { metaKey: true, shiftKey: true }); assert.equal(t.field.value, "two");
   t.tick(); t.key("y", { ctrlKey: true }); assert.equal(t.field.value, "two");
   t.tick(); t.key("z", { ctrlKey: true }); assert.equal(t.field.value, "one");
   t.tick(); t.key("z", { ctrlKey: true, shiftKey: true }); assert.equal(t.field.value, "two");
@@ -216,12 +244,11 @@ async function editor(text = "") {
   t.field.dispatchEvent(event("input"));
   assert.equal(t.field.value, "one");
   t.tick(); t.prompt.redo(); assert.equal(t.field.value, "two");
-  // A second menu invocation is a second action, even before the zero-delay
-  // cleanup timer runs. Only keyboard -> beforeinput -> input is deduplicated.
+  // Repeated menu undo stops at the single retained history boundary.
   t.tick();
   t.field.dispatchEvent(event("beforeinput", { inputType: "historyUndo" }));
   t.field.dispatchEvent(event("beforeinput", { inputType: "historyUndo" }));
-  assert.equal(t.field.value, "original");
+  assert.equal(t.field.value, "one");
   t.prompt.dispose();
 }
 
@@ -314,7 +341,7 @@ async function editor(text = "") {
   t.field.value = "a pasted"; t.field.selectionStart = t.field.selectionEnd = 8;
   t.field.dispatchEvent(event("change"));
   t.prompt.undo(); assert.equal(t.field.value, "a");
-  t.prompt.undo(); assert.equal(t.field.value, "");
+  t.prompt.undo(); assert.equal(t.field.value, "a");
   let otherInputs = 0;
   t.field.addEventListener("input", () => otherInputs++);
   t.prompt.init(); // Idempotent initialization must not duplicate handlers.

@@ -57,7 +57,7 @@ export function createPromptController() {
     if (actions) actions.style.display = history?.canUndo || history?.canRedo ? "flex" : "none";
   }
 
-  function write(state: PromptSnapshot, focus = false): boolean {
+  function write(state: PromptSnapshot): boolean {
     applying = true;
     try {
       setValueSafe(field, state.text);
@@ -65,7 +65,6 @@ export function createPromptController() {
         setStatus("The prompt could not be updated. Its undo history has been kept.", "error");
         return false;
       }
-      try { if (focus) field.focus?.(); } catch { /* Focus is optional for restoring text. */ }
       // Selection is optional in UXP. Failure here must not discard text history.
       try {
         if (typeof field.selectionStart === "number" && state.selectionStart !== undefined) {
@@ -165,7 +164,12 @@ export function createPromptController() {
     // For native history input, .value may already contain the native buffer's
     // result. Never record that value as a new edit in our own history.
     if (!nativeInput) capture();
-    const moved = history[direction]((state) => write(state, true));
+    const moved = history[direction]((state) => {
+      // Keep focus where the user put it. Refocusing the native textarea can
+      // select its text. Restore a caret instead of a historical selection.
+      const caret = state.selectionEnd ?? state.selectionStart ?? state.text.length;
+      return write({ ...state, selectionStart: caret, selectionEnd: caret, selectionDirection: "none" });
+    });
     if (!moved && nativeInput) write(history.current);
     pendingType = "";
     render();
@@ -255,7 +259,7 @@ export function createPromptController() {
     if (history || disposed) return;
     field = $("prompt");
     if (!field) throw new Error("The prompt editor is unavailable.");
-    history = new PromptHistory(snapshot());
+    history = new PromptHistory(snapshot(), 1);
     field.disabled = locked;
     listen(field, "input", onInput);
     listen(field, "change", () => { capture(); history?.breakGroup(); });

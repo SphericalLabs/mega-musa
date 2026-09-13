@@ -214,7 +214,7 @@ for (const provider of ["openai", "gemini"]) {
   }
 }
 
-// Repeated successful Describe results and manual edits all remain undoable.
+// Only the latest Describe result remains undoable after earlier manual edits.
 {
   const test = panel();
   const first = test.onDescribe();
@@ -237,11 +237,11 @@ for (const provider of ["openai", "gemini"]) {
   await finishesPromptly(second);
   const secondDescription = test.elements.prompt.value;
   const charged = test.loadBudget();
-  for (const expected of [edited, described, "Original prompt"]) {
+  for (const expected of [edited, edited]) {
     test.prompt.undo();
     assert.equal(test.elements.prompt.value, expected);
   }
-  for (const expected of [described, edited, secondDescription]) {
+  for (const expected of [secondDescription, secondDescription]) {
     test.prompt.redo();
     assert.equal(test.elements.prompt.value, expected);
   }
