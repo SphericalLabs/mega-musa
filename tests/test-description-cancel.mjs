@@ -56,8 +56,11 @@ async function finishesPromptly(promise) {
 function panel(provider = "openai", Controller = AbortController, photoshop = {}, settings = new Map()) {
   const { elements, document } = panelDocument(
     ["describe", "describeModel", "undoPrompt", "redoPrompt", "promptHistoryActions", "prompt", "generate", "includeSelection",
-      "openaiApiKey", "geminiApiKey", "status", "dropWebview", "budgetTotal", "budgetCounts"]
+      "openaiApiKey", "geminiApiKey", "status", "dropWebview", "budgetTotal", "budgetCounts",
+      "noticeDialog", "noticeDialogTitle", "noticeDialogMessage", "noticeDialogInstruction", "noticeDialogCancel", "noticeDialogPrimary"]
   );
+  const notices = [];
+  elements.noticeDialog.showModal = async () => notices.push(elements.noticeDialogMessage.textContent);
   elements.prompt.value = "Original prompt";
   elements.openaiApiKey.value = elements.geminiApiKey.value = "test-key";
   const resizes = [];
@@ -107,7 +110,7 @@ function panel(provider = "openai", Controller = AbortController, photoshop = {}
   api.setTestReferences([reference]);
   api.updateDescriptionControls();
   return {
-    ...api, elements, resizes, requests, settings, model, reportedUsage,
+    ...api, elements, resizes, requests, notices, settings, model, reportedUsage,
     finishResize(index = resizes.length - 1) {
       const requestId = resizes[index];
       assert.ok(requestId, "a reference resize must have started");
@@ -142,6 +145,80 @@ function expectIdle({ elements }) {
   for (const id of ["prompt", "describeModel", "generate"]) {
     assert.equal(elements[id].disabled, false, `${id} is restored after a description`);
   }
+}
+
+// Empty inputs stay clickable and open a dialog, even before credentials are set.
+for (const includeSelection of [false, true]) {
+  for (const activeDocument of [null, { id: 1 }]) {
+    const test = panel("openai", AbortController, {
+      app: { activeDocument }, action: { batchPlay: async () => [{}] },
+    });
+    test.setTestReferences([]);
+    test.elements.includeSelection.checked = includeSelection;
+    test.elements.openaiApiKey.value = "";
+    test.updateDescriptionControls();
+    assert.equal(test.elements.describe.disabled, false);
+    await test.onDescribe();
+    assert.deepEqual(test.notices, ["Describe requires a Photoshop selection or at least one reference image."]);
+    assert.equal(test.elements.status.className, "error");
+    assert.equal(test.elements.prompt.value, "Original prompt");
+    assert.equal(test.requests.length, 0);
+    assert.equal(test.loadBudget().usd, 0);
+    assert.equal(test.elements.describe.disabled, false);
+    expectIdle(test);
+  }
+}
+
+// A failed selection read must not silently send references; the next click retries
+// the live selection without needing a Photoshop notification or checkbox toggle.
+for (const provider of ["openai", "gemini"]) {
+  let blocked = true;
+  let reads = 0;
+  const test = panel(provider, AbortController, {
+    app: { activeDocument: { id: 1, width: 2, height: 2 } },
+    action: { batchPlay: async () => {
+      reads++;
+      if (blocked) throw new Error("Get is not currently available");
+      return [{ selection: { left: 0, top: 0, right: 2, bottom: 2 } }];
+    } },
+    core: { executeAsModal: async (target) => target({}) },
+    imaging: { getPixels: async () => ({ imageData: {
+      width: 2, height: 2, components: 3,
+      getData: async () => new Uint8Array(12).fill(128), dispose() {},
+    } }) },
+  });
+  test.elements.includeSelection.checked = true;
+  await test.onDescribe();
+  assert.match(test.elements.status.textContent, /Couldn't read the Photoshop selection/);
+  assert.equal(test.requests.length, 0);
+  assert.equal(test.resizes.length, 0);
+  assert.equal(test.notices.length, 0, "read failures are distinct from missing inputs");
+  assert.equal(test.elements.describe.disabled, false);
+  blocked = false;
+  test.setTestReferences([]);
+  const run = test.onDescribe();
+  await flush();
+  assert.equal(reads, 2);
+  assert.equal(test.requests.length, 1, "selection alone must dispatch without a background availability check");
+  test.finishRequest(0, "Selection description.");
+  await finishesPromptly(run);
+  assert.match(test.elements.prompt.value, /Selection description/);
+  assert.equal(test.loadBudget().imagesAnalyzed, 1);
+  assert.equal(test.elements.describe.disabled, false);
+}
+
+// References still work with Include selection enabled when no document is open.
+{
+  const test = panel("openai", AbortController, { app: { activeDocument: null } });
+  test.elements.includeSelection.checked = true;
+  const run = test.onDescribe();
+  await flush();
+  test.finishResize();
+  await flush();
+  test.finishRequest(0, "Reference description.");
+  await finishesPromptly(run);
+  assert.match(test.elements.prompt.value, /Reference description/);
+  assert.equal(test.notices.length, 0);
 }
 
 // Cancel works without AbortController; late responses cannot overwrite a newer run.
@@ -262,7 +339,7 @@ for (const provider of ["openai", "gemini"]) {
   await test.onDescribe();
   await finishesPromptly(run);
   expectIdle(test);
-  assert.equal(test.elements.describe.disabled, true);
+  assert.equal(test.elements.describe.disabled, false);
   const canceledStatus = test.elements.status.textContent;
   assert.equal(canceledStatus, "Description canceled. Prompt unchanged.");
   test.finishResize();

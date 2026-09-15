@@ -34,6 +34,7 @@ import { type RefImage as RequestReference } from "../providers/types";
 import { ReferenceCollection } from "../references/collection";
 import { ReferenceImageProcessor } from "../references/processor";
 import { $, isChecked } from "./controls";
+import { showModalNotice } from "./notices";
 import { type PromptController } from "./prompt";
 import { descriptionApiKey } from "./settings";
 import { renderBudget, setStatus } from "./status";
@@ -51,12 +52,6 @@ export function createDescriptionController({ references, processor, queue, prom
 
   let descriptionJob: CancellableJob | null = null;
 
-  let descriptionInputRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-  let descriptionInputRefreshSequence = 0;
-
-  let hasDescriptionSelection = false;
-
   const DESCRIPTION_INPUT_MAX_EDGE = 2048;
 
   interface PreparedDescriptionInput {
@@ -68,8 +63,7 @@ export function createDescriptionController({ references, processor, queue, prom
     const busy = queue.hasActive || describing;
     const describeButton = $("describe");
     if (describeButton) {
-      const hasInput = references.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection);
-      describeButton.disabled = !describing && (busy || !hasInput);
+      describeButton.disabled = !describing && queue.hasActive;
       describeButton.textContent = describing ? "Cancel" : "Describe";
       describeButton.setAttribute("variant", describing ? "warning" : "primary");
     }
@@ -82,29 +76,6 @@ export function createDescriptionController({ references, processor, queue, prom
     prompt.setLocked(on);
     onBusyChange();
     updateDescriptionControls();
-  }
-
-  async function refreshDescriptionInputAvailability(sequence: number): Promise<void> {
-    let hasSelection = false;
-    try {
-      const selection = await getSelectionBounds();
-      hasSelection =
-        !!selection && selection.right - selection.left > 1 && selection.bottom - selection.top > 1;
-    } catch {
-      /* No document or no readable selection means no Photoshop input. */
-    }
-    if (sequence !== descriptionInputRefreshSequence) return;
-    hasDescriptionSelection = hasSelection;
-    updateDescriptionControls();
-  }
-
-  function scheduleDescriptionInputRefresh(): void {
-    if (descriptionInputRefreshTimer !== null) clearTimeout(descriptionInputRefreshTimer);
-    const sequence = ++descriptionInputRefreshSequence;
-    descriptionInputRefreshTimer = setTimeout(() => {
-      descriptionInputRefreshTimer = null;
-      void refreshDescriptionInputAvailability(sequence);
-    }, 60);
   }
 
   function selectedDescriptionModel(): DescriptionModelSpec | null {
@@ -121,7 +92,8 @@ export function createDescriptionController({ references, processor, queue, prom
       try {
         rawSelection = await getSelectionBounds();
       } catch {
-        /* References can still be described without an open Photoshop document. */
+        throwIfCancelled(job);
+        throw new Error("Couldn't read the Photoshop selection. Finish the active tool or dialog, then retry.");
       }
       throwIfCancelled(job);
       const hasSelection =
@@ -181,22 +153,7 @@ export function createDescriptionController({ references, processor, queue, prom
       return;
     }
     if (queue.hasActive || describing) return;
-    if (!(references.length > 0 || (isChecked($("includeSelection")) && hasDescriptionSelection))) {
-      setStatus("Add a reference image or draw and include a Photoshop selection.", "error");
-      return;
-    }
     const model = selectedDescriptionModel();
-    if (!model) {
-      setStatus("Choose a description model.", "error");
-      return;
-    }
-    const apiKey = descriptionApiKey(model);
-    const credentials = providerCredentials(model.provider);
-    const missing = missingCredential(model.provider, credentials);
-    if (missing) {
-      setStatus(`Enter your ${missing} and press Save.`, "error");
-      return;
-    }
 
     const job: CancellableJob = { cancelRequested: false, cancelInFlight: null };
     const controller = newAbortController();
@@ -208,7 +165,7 @@ export function createDescriptionController({ references, processor, queue, prom
     let usedEstimate = false;
     const recordDescriptionCharge = (usage?: DescriptionUsage, reportedCost?: number) => {
       // A late response after Cancel must not add the same request a second time.
-      if (chargeRecorded) return;
+      if (!model || chargeRecorded) return;
       chargeRecorded = true;
       const usageCharge = validCost(reportedCost) ?? (usage ? descriptionUsageUSD(model, usage) : null);
       usedEstimate = usageCharge === null;
@@ -224,8 +181,22 @@ export function createDescriptionController({ references, processor, queue, prom
       const inputs = await awaitCancellable(job, prepareDescriptionInputs(job), controller);
       throwIfCancelled(job);
       if (!inputs.length) {
-        throw new Error("Add a reference image or draw and include a Photoshop selection.");
+        const message = "Describe requires a Photoshop selection or at least one reference image.";
+        setStatus(message, "error");
+        await showModalNotice({
+          kind: "blocker",
+          title: "An image is required",
+          message,
+          instruction: "Add a reference image or draw a selection and enable Include Photoshop selection.",
+          primaryLabel: "Close",
+        });
+        return;
       }
+      if (!model) throw new Error("Choose a description model.");
+      const apiKey = descriptionApiKey(model);
+      const credentials = providerCredentials(model.provider);
+      const missing = missingCredential(model.provider, credentials);
+      if (missing) throw new Error(`Enter your ${missing} and press Save.`);
 
       setStatus(`Describing ${inputs.length} visual input${inputs.length === 1 ? "" : "s"} with ${model.label}… (10–90s)`);
       inputImageCount = inputs.length;
@@ -273,5 +244,5 @@ export function createDescriptionController({ references, processor, queue, prom
     }
   }
 
-  return { onDescribe, updateDescriptionControls, scheduleDescriptionInputRefresh, get busy() { return describing; }, dispose() { if (descriptionInputRefreshTimer !== null) clearTimeout(descriptionInputRefreshTimer); descriptionInputRefreshSequence += 1; } };
+  return { onDescribe, updateDescriptionControls, get busy() { return describing; } };
 }

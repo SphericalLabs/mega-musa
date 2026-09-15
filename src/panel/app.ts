@@ -73,7 +73,6 @@ export function createPanel() {
 
   function refreshSelection(): void {
     description.updateDescriptionControls();
-    description.scheduleDescriptionInputRefresh();
   }
 
   function refreshActivity(): void {
@@ -90,7 +89,6 @@ export function createPanel() {
 
   const onPhotoshopChange = () => {
     recall.scheduleGenerationRecallRefresh();
-    description.scheduleDescriptionInputRefresh();
   };
 
   async function init(): Promise<void> {
@@ -150,7 +148,6 @@ export function createPanel() {
   function dispose(): void {
     unsubscribeQueue();
     prompt.dispose();
-    description.dispose();
     recall.dispose();
     drop.dispose();
     processor.dispose();
