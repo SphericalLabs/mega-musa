@@ -24,9 +24,9 @@ import { descriptionModelSpec } from "../models/description-catalog";
 import { descriptionUsageUSD, estimatedDescriptionUSD } from "../models/description-pricing";
 import { getActiveArtboard } from "../photoshop/artboards";
 import { intersectBounds } from "../photoshop/geometry";
-import { readRegion } from "../photoshop/pixels";
-import { getActiveDoc } from "../photoshop/runtime";
-import { getSelectionBounds } from "../photoshop/selection";
+import { readRegionInModal } from "../photoshop/pixels";
+import { app, getActiveDoc, runModal } from "../photoshop/runtime";
+import { getSelectionBounds, replaceRectSelection } from "../photoshop/selection";
 import { type Bounds } from "../photoshop/types";
 import { type DescriptionModelSpec, type DescriptionUsage } from "../providers/description-types";
 import { describeImages } from "../providers/descriptions";
@@ -87,25 +87,27 @@ export function createDescriptionController({ references, processor, queue, prom
     const includeSelection = isChecked($("includeSelection"));
     const descriptionRefs = references.snapshot();
 
-    if (includeSelection) {
-      let rawSelection: Bounds | null = null;
-      try {
-        rawSelection = await getSelectionBounds();
-      } catch {
+    if (includeSelection && app.activeDocument) {
+      // Read the selection, pixels and optional full-frame selection in one modal
+      // scope so the document cannot change between these operations.
+      await runModal("read description input", async () => {
         throwIfCancelled(job);
-        throw new Error("Couldn't read the Photoshop selection. Finish the active tool or dialog, then retry.");
-      }
-      throwIfCancelled(job);
-      const hasSelection =
-        !!rawSelection && rawSelection.right - rawSelection.left > 1 && rawSelection.bottom - rawSelection.top > 1;
-      if (hasSelection) {
-        setStatus("Reading Photoshop selection for description…");
         const doc = getActiveDoc();
+        let rawSelection: Bounds | null = null;
+        try {
+          rawSelection = await getSelectionBounds(doc.id);
+        } catch {
+          throwIfCancelled(job);
+          throw new Error("Couldn't read the Photoshop selection. Finish the active tool or dialog, then retry.");
+        }
+        throwIfCancelled(job);
+        if (rawSelection && (rawSelection.right - rawSelection.left <= 1 || rawSelection.bottom - rawSelection.top <= 1)) return;
+        setStatus(rawSelection ? "Reading Photoshop selection for description…" : "Reading the full Photoshop frame for description…");
         const documentBounds: Bounds = { left: 0, top: 0, right: doc.width, bottom: doc.height };
         const activeArtboard = await getActiveArtboard(doc);
         throwIfCancelled(job);
         const targetBounds = activeArtboard?.bounds || documentBounds;
-        const region = intersectBounds(rawSelection as Bounds, targetBounds);
+        const region = rawSelection ? intersectBounds(rawSelection, targetBounds) : targetBounds;
         if (!region) {
           throw new Error(
             activeArtboard
@@ -114,7 +116,9 @@ export function createDescriptionController({ references, processor, queue, prom
           );
         }
 
-        const read = await readRegion(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
+        const read = await readRegionInModal(doc.id, region, false, DESCRIPTION_INPUT_MAX_EDGE);
+        throwIfCancelled(job);
+        if (!rawSelection) await replaceRectSelection(region);
         throwIfCancelled(job);
         const png = encodePng(read.image.data, read.image.width, read.image.height, read.image.components);
         inputs.push({
@@ -122,7 +126,7 @@ export function createDescriptionController({ references, processor, queue, prom
           image: { mimeType: "image/png", base64: bytesToBase64(png) },
         });
         console.log("[Mega Musa] description", read.debug);
-      }
+      });
     }
 
     for (let index = 0; index < descriptionRefs.length; index += 1) {
@@ -181,13 +185,13 @@ export function createDescriptionController({ references, processor, queue, prom
       const inputs = await awaitCancellable(job, prepareDescriptionInputs(job), controller);
       throwIfCancelled(job);
       if (!inputs.length) {
-        const message = "Describe requires a Photoshop selection or at least one reference image.";
+        const message = "Describe requires a Photoshop document or at least one reference image.";
         setStatus(message, "error");
         await showModalNotice({
           kind: "blocker",
           title: "An image is required",
           message,
-          instruction: "Add a reference image or draw a selection and enable Include Photoshop selection.",
+          instruction: "Add a reference image or open a document and enable Include Photoshop selection.",
           primaryLabel: "Close",
         });
         return;

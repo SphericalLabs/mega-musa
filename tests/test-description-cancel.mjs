@@ -22,6 +22,7 @@ const bundle = await build({
       export { ReferenceImageProcessor } from "./references/processor";
       export { GenerationQueue } from "./generation/queue";
       export { DESCRIPTION_MODELS, descriptionUsageUSD, estimatedDescriptionUSD } from "./describe";
+      export { decodePng } from "./images/codec";
       export { loadBudget, resetBudget, addToBudget, addDescriptionToBudget, budgetText } from "./budget";
     `,
     resolveDir: resolve("src"),
@@ -150,6 +151,7 @@ function expectIdle({ elements }) {
 // Empty inputs stay clickable and open a dialog, even before credentials are set.
 for (const includeSelection of [false, true]) {
   for (const activeDocument of [null, { id: 1 }]) {
+    if (includeSelection && activeDocument) continue; // An open document is now a valid full-frame input.
     const test = panel("openai", AbortController, {
       app: { activeDocument }, action: { batchPlay: async () => [{}] },
     });
@@ -159,12 +161,98 @@ for (const includeSelection of [false, true]) {
     test.updateDescriptionControls();
     assert.equal(test.elements.describe.disabled, false);
     await test.onDescribe();
-    assert.deepEqual(test.notices, ["Describe requires a Photoshop selection or at least one reference image."]);
+    assert.deepEqual(test.notices, ["Describe requires a Photoshop document or at least one reference image."]);
     assert.equal(test.elements.status.className, "error");
     assert.equal(test.elements.prompt.value, "Original prompt");
     assert.equal(test.requests.length, 0);
     assert.equal(test.loadBudget().usd, 0);
     assert.equal(test.elements.describe.disabled, false);
+    expectIdle(test);
+  }
+}
+
+// Full documents and active artboards become visible rectangular selections.
+// Existing selections keep their bounds; failures and cancellation never dispatch.
+for (const provider of ["openai", "gemini"]) {
+  for (const scenario of ["document", "artboard", "selection", "read-error", "select-error", "cancel"]) {
+    const artboard = { id: 10, name: "Page", bounds: { left: -4, top: 2, right: 0, bottom: 4 } };
+    const expectedBounds = scenario === "artboard" ? artboard.bounds
+      : scenario === "selection" ? { left: 1, top: 0, right: 3, bottom: 2 }
+      : { left: 0, top: 0, right: 4, bottom: 2 };
+    const doc = { id: 1, width: 4, height: 2,
+      artboards: scenario === "artboard" ? [artboard, { id: 11, name: "Other page" }] : [],
+      activeLayers: scenario === "artboard" ? [artboard] : [],
+    };
+    let modal = false;
+    const selections = [];
+    let finishPixels;
+    const test = panel(provider, AbortController, {
+      app: { activeDocument: doc },
+      core: { executeAsModal: async (target) => {
+        assert.equal(modal, false, "capture must not nest modal operations");
+        modal = true;
+        try { return await target({}); } finally { modal = false; }
+      } },
+      action: { batchPlay: async (commands) => commands.map(command => {
+        assert.equal(modal, true);
+        if (command._obj === "get" && command._target[0]._property === "selection") {
+          return scenario === "selection" ? { selection: expectedBounds } : {};
+        }
+        if (command._obj === "get" && command._target[0]._ref === "layer") {
+          return { artboard: { artboardRect: artboard.bounds } };
+        }
+        assert.equal(command._obj, "set");
+        if (scenario === "select-error") throw new Error("Selection update failed");
+        selections.push(Object.fromEntries(["left", "top", "right", "bottom"].map(key => [key, command.to[key]._value])));
+        return {};
+      }) },
+      imaging: { getPixels: async ({ sourceBounds }) => {
+        assert.equal(modal, true);
+        assert.deepEqual(JSON.parse(JSON.stringify(sourceBounds)), expectedBounds);
+        if (scenario === "read-error") throw new Error("Pixel read failed");
+        if (scenario === "cancel") await new Promise(resolve => { finishPixels = resolve; });
+        const width = expectedBounds.right - expectedBounds.left;
+        return { sourceBounds, imageData: {
+          width, height: 2, components: 3,
+          getData: async () => new Uint8Array(width * 2 * 3).fill(128), dispose() {},
+        } };
+      } },
+    });
+    test.elements.includeSelection.checked = true;
+    test.setTestReferences([]);
+    const run = test.onDescribe();
+    await flush();
+    if (scenario === "cancel") {
+      assert.equal(typeof finishPixels, "function");
+      await test.onDescribe();
+      await finishesPromptly(run);
+      finishPixels();
+      await flush();
+    } else if (scenario.endsWith("error")) {
+      await finishesPromptly(run);
+      assert.equal(test.elements.status.className, "error");
+    } else {
+      assert.deepEqual(selections, scenario === "selection" ? [] : [expectedBounds]);
+      assert.equal(test.requests.length, 1);
+      const body = JSON.parse(test.requests[0].init.body);
+      const base64 = provider === "openai"
+        ? body.input[0].content.find(part => part.type === "input_image").image_url.split(",")[1]
+        : body.contents[0].parts.find(part => part.inlineData).inlineData.data;
+      const decoded = test.decodePng(new Uint8Array(Buffer.from(base64, "base64")));
+      assert.equal(decoded.width, expectedBounds.right - expectedBounds.left);
+      assert.equal(decoded.height, 2);
+      assert.deepEqual(Array.from(decoded.data.slice(0, 4)), [128, 128, 128, 255]);
+      test.finishRequest(0, "Frame description.");
+      await finishesPromptly(run);
+      assert.match(test.elements.prompt.value, /Frame description/);
+    }
+    if (scenario.endsWith("error") || scenario === "cancel") {
+      assert.equal(test.requests.length, 0);
+      assert.equal(test.loadBudget().usd, 0);
+      assert.equal(test.elements.prompt.value, "Original prompt");
+      assert.deepEqual(selections, []);
+    }
+    assert.equal(test.notices.length, 0);
     expectIdle(test);
   }
 }
@@ -361,10 +449,12 @@ for (const lateSelection of ["selection", "error"]) {
   });
   const test = panel("openai", AbortController, {
     app: { activeDocument: { id: 1 } },
+    core: { executeAsModal: async (target) => target({}) },
     action: { batchPlay: () => selection },
   });
   test.elements.includeSelection.checked = true;
   const run = test.onDescribe();
+  await flush(); // Let the modal scope start the pending read before canceling.
   await test.onDescribe();
   await finishesPromptly(run);
   expectIdle(test);
