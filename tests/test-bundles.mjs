@@ -97,6 +97,27 @@ for (const path of Object.keys(bundle.metafile.inputs)) visit(path);
   elements.prompt.dispatchEvent(enter);
   assert.equal(enter.defaultPrevented, true, "Generate keeps its own prompt shortcut");
   assert.match(elements.status.textContent, /API key/, "Generate handler still runs and validates the missing test key");
+
+  // Both submission routes show the missing-prompt dialog before checking keys or
+  // touching Photoshop. Whitespace is empty too, and a dismissed dialog can reopen.
+  let notices = 0;
+  elements.noticeDialog.showModal = async () => { notices++; };
+  for (const value of ["", " \n\t "]) {
+    for (const viaShortcut of [false, true]) {
+      elements.prompt.value = value;
+      const event = new Event(viaShortcut ? "keydown" : "click", { bubbles: true, cancelable: true });
+      if (viaShortcut) Object.assign(event, { key: "Enter", metaKey: true });
+      (viaShortcut ? elements.prompt : elements.generate).dispatchEvent(event);
+      await flush();
+      if (viaShortcut) assert.equal(event.defaultPrevented, true);
+      assert.equal(elements.noticeDialogTitle.textContent, "A prompt is required");
+      assert.equal(elements.noticeDialogMessage.textContent, "Enter a prompt describing the edit.");
+      assert.equal(elements.status.textContent, "Enter a prompt describing the edit.");
+      assert.equal(elements.status.className, "error");
+      assert.equal(elements.prompt.value, value, "missing-input validation preserves the prompt");
+    }
+  }
+  assert.equal(notices, 4, "each empty submission opens the dialog");
   panel.dispose();
 }
 console.log("Bundles: UXP polyfill ordering, WebView startup and runtime module boundaries passed.");

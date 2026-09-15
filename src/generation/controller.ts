@@ -13,6 +13,7 @@ import { type ModelSettings } from "../models/types";
 import { providerCredentials, missingCredential } from "../panel/provider-settings";
 import { $, isChecked } from "../panel/controls";
 import { showDocumentBlocker } from "../panel/document-warnings";
+import { showModalNotice } from "../panel/notices";
 import { setNote, setStatus } from "../panel/status";
 import { documentBlocker, type DocumentState, getDocumentState } from "../photoshop/document-state";
 import { getActiveDoc } from "../photoshop/runtime";
@@ -59,6 +60,21 @@ export function createGenerationController({ queue, references, processor, workf
     setStatus("Starting…"); // immediate feedback that the click was received
 
     const promptTemplate = ($("prompt").value || "").trim();
+    if (!promptTemplate) {
+      const message = "Enter a prompt describing the edit.";
+      setStatus(message, "error");
+      try {
+        await showModalNotice({
+          kind: "blocker",
+          title: "A prompt is required",
+          message,
+          primaryLabel: "Close",
+        });
+      } catch (error) {
+        setStatus(`${message} ${errorMessage(error)}`, "error");
+      }
+      return;
+    }
     const model = $("model").value || DEFAULT_MODEL;
     let settings: ModelSettings;
     let credentials: Readonly<Record<string, string>>;
@@ -76,10 +92,6 @@ export function createGenerationController({ queue, references, processor, workf
     } catch (error) { setStatus(errorMessage(error), "error"); return; }
     const { quality, resolution } = settings;
     const apiKey = credentials.apiKey || "";
-    if (!promptTemplate) {
-      setStatus("Enter a prompt describing the edit.", "error");
-      return;
-    }
     let expandedPrompts: string[];
     try {
       expandedPrompts = expandPromptTemplate(promptTemplate, MAX_BRACKET_GENERATION_JOBS);
