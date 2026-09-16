@@ -23,14 +23,14 @@ export type OpenAIReasoningEffort = "none" | "high";
 
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 
-function openAIOutputText(json: any): string {
+function openAIOutputText(json: any, apiKey: string): string {
   const pieces: string[] = [];
   for (const item of json?.output || []) {
     for (const content of item?.content || []) {
       if (content?.type === "output_text" && typeof content.text === "string") {
         pieces.push(content.text);
       } else if (content?.type === "refusal" && content.refusal) {
-        throw apiError("OpenAI", { code: "refusal", message: content.refusal });
+        throw apiError("OpenAI", { code: "refusal", message: content.refusal }, undefined, apiKey);
       }
     }
   }
@@ -87,8 +87,8 @@ export async function describeWithOpenAI(opts: DescribeImagesOptions): Promise<D
     }
     : undefined;
   opts.onUsage?.(usage);
-  checkOpenAIOutput(json);
-  const text = openAIOutputText(json);
+  checkOpenAIOutput(json, opts.apiKey);
+  const text = openAIOutputText(json, opts.apiKey);
   if (!text) throw new Error("OpenAI returned no image description.");
   return { descriptions: parseDescriptionJson(text, opts.images.length), usage };
 }

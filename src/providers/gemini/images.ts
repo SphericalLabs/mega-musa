@@ -42,7 +42,7 @@ export async function generateEdit(opts: GenerateOptions): Promise<GenerateResul
   if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
   opts.onDispatch?.();
   const json = await requestJson("Gemini", `${ENDPOINT}/${encodeURIComponent(opts.model)}:generateContent`, requestInit);
-  checkGeminiOutput(json);
+  checkGeminiOutput(json, opts.apiKey);
 
   const candidates: any[] = json?.candidates || [];
   for (const cand of candidates) {

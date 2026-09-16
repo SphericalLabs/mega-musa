@@ -177,7 +177,7 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
   if (opts.signal?.aborted) throw Object.assign(new Error("Canceled before dispatch."), { name: "AbortError" });
   opts.onDispatch?.();
   const json = await requestJson("OpenAI", textOnly ? GENERATIONS_ENDPOINT : EDITS_ENDPOINT, requestInit);
-  checkOpenAIOutput(json);
+  checkOpenAIOutput(json, opts.apiKey);
 
   const result = resultFromJson(json);
   if (result) return result;

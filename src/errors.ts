@@ -20,7 +20,16 @@ export function errorMessage(error: any): string {
     : code !== undefined ? `${message} [Photoshop ${code}]` : message;
 }
 
-export function apiError(provider: string, value: any, status?: number): Error {
+export function providerError(provider: string, help: string, code: string, message?: unknown, apiKey?: string): Error {
+  const clean = (value: string) => (apiKey ? value.split(apiKey).join("[redacted]") : value)
+    .replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
+  // Redact before shortening so a key at the cutoff cannot leak partially.
+  const detail = typeof message === "string" ? clean(message) : "";
+  const shortened = detail.length > 500 ? `${detail.slice(0, 500)}…` : detail;
+  return new Error(`${clean(provider)}: ${clean(help)}${code ? ` (${clean(code)})` : ""}${shortened ? ` Server: ${shortened}` : ""}`);
+}
+
+export function apiError(provider: string, value: any, status?: number, apiKey?: string): Error {
   const details = Array.isArray(value?.details) ? value.details : [];
   const reason = details.find((detail: any) => typeof detail?.reason === "string")?.reason;
   const code = reason || value?.status || value?.code || value?.type;
@@ -28,7 +37,18 @@ export function apiError(provider: string, value: any, status?: number): Error {
     : status ? `HTTP ${status}` : typeof code === "number" ? `HTTP ${code}` : "";
   const key = String(code || "").toLowerCase();
   let help = "The request failed.";
-  if (/credit_balance|insufficient_quota|spend_limit|usage_limit|failed_precondition/.test(key)) {
+  if (provider === "OpenAI" && key === "moderation_blocked") {
+    const moderation = value?.moderation_details;
+    const stage = moderation?.moderation_stage;
+    const categories = Array.isArray(moderation?.categories)
+      ? [...new Set(moderation.categories.filter((category: unknown) => typeof category === "string" && category.trim()))].join(", ") : "";
+    help = stage === "input" ? "Input blocked" : stage === "output" ? "Generated image blocked" : "Request blocked";
+    help += categories ? ` — ${categories}.` : " by a safety check.";
+    if (stage === "input") help += " Exact text or image not identified.";
+    if (!categories && !(typeof value?.message === "string" && value.message.trim())) {
+      help += " The server provided no specific reason.";
+    }
+  } else if (/credit_balance|insufficient_quota|spend_limit|usage_limit|failed_precondition/.test(key)) {
     help = "Check API credits, billing and account limits before retrying.";
   } else if (/api_key|authentication/.test(key) || status === 401) {
     help = "Check your API key and account access in Settings, then save the key again.";
@@ -52,8 +72,7 @@ export function apiError(provider: string, value: any, status?: number): Error {
     || status === 400 || status === 422) {
     help = "The request or input format was rejected. Check the settings and images.";
   }
-  const error = new Error(`${provider}: ${help}${label ? ` (${label})` : ""}`);
-  return error;
+  return providerError(provider, help, label, value?.message, apiKey);
 }
 
 // Preserve AbortError identity so panel cancellation and budget handling still work.
@@ -73,7 +92,10 @@ async function requestJsonRaw(provider: string, url: string, init: any): Promise
     if (!response.ok) throw apiError(provider, null, response.status);
     throw new Error(`${provider}: The response was unreadable or interrupted. (HTTP ${response.status})`);
   }
-  if (!response.ok) throw apiError(provider, json?.error, response.status);
+  if (!response.ok) {
+    const key = init.headers?.["x-goog-api-key"] || init.headers?.Authorization?.replace(/^Bearer /, "");
+    throw apiError(provider, json?.error, response.status, key);
+  }
   if (!json || typeof json !== "object") throw new Error(`${provider}: The response contained no usable data.`);
   return json;
 }

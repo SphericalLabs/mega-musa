@@ -75,7 +75,7 @@ export async function describeWithGemini(opts: DescribeImagesOptions): Promise<D
     }
     : undefined;
   opts.onUsage?.(usage);
-  checkGeminiOutput(json);
+  checkGeminiOutput(json, opts.apiKey);
   const text = geminiOutputText(json);
   if (!text) {
     const reason = json?.promptFeedback?.blockReason || json?.candidates?.[0]?.finishReason;

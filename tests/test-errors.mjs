@@ -24,24 +24,77 @@ try {
   ];
   for (const call of calls) {
     globalThis.fetch = async () => reply({ error: { code: "credit_balance_exhausted", message: "No credit" } }, 429);
-    await assert.rejects(call, /credits.*\(CREDIT_BALANCE_EXHAUSTED\)$/);
+    await assert.rejects(call, /credits.*\(CREDIT_BALANCE_EXHAUSTED\) Server: No credit$/);
     const abort = new Error("aborted"); abort.name = "AbortError";
     globalThis.fetch = async () => { throw abort; };
     await assert.rejects(call, error => error === abort);
     globalThis.fetch = async () => reply({ error: { message: `Invalid ${opts.apiKey}` } }, 401);
-    await assert.rejects(call, error => error.message.endsWith("(HTTP 401)") && !error.message.includes(opts.apiKey));
+    await assert.rejects(call, error => error.message.includes("(HTTP 401) Server: Invalid [redacted]") && !error.message.includes(opts.apiKey));
     globalThis.fetch = async () => { throw new Error("Offline"); };
     await assert.rejects(call, /connection.*completion is unknown/);
   }
   assert.match(api.apiError("Gemini", { code: 400, status: "FAILED_PRECONDITION" }, 400).message, /billing/);
   assert.match(api.apiError("Gemini", { code: 400, status: "INVALID_ARGUMENT", details: [{ reason: "API_KEY_INVALID" }] }, 400).message, /API key.*API_KEY_INVALID/);
   assert.match(api.apiError("OpenAI", { code: "slow_down" }, 429).message, /Wait/);
-  assert.match(api.apiError("Gemini", { code: "NEW_REASON", message: "Provider detail" }).message, /^Gemini: The request failed\. \(NEW_REASON\)$/);
+  assert.equal(api.apiError("Gemini", { code: "NEW_REASON", message: "Provider detail" }).message,
+    "Gemini: The request failed. (NEW_REASON) Server: Provider detail");
   for (const code of ["IMAGE_SAFETY", "SPII", "IMAGE_RECITATION"]) {
     assert.throws(() => api.checkGeminiOutput({ candidates: [{ finishReason: code, content: { parts: [{ text: "partial" }] } }] }), /blocked/);
   }
   assert.throws(() => api.checkGeminiOutput({ promptFeedback: { blockReason: "SAFETY" } }), /blocked/);
   api.checkGeminiOutput({ candidates: [{ finishReason: "STOP" }] });
+  // A nonblocking category must never be presented as the reason for a block.
+  assert.throws(() => api.checkGeminiOutput({ promptFeedback: { blockReason: "SAFETY", safetyRatings: [
+    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", probability: "HIGH", blocked: true },
+    { category: "HARM_CATEGORY_HARASSMENT", probability: "LOW", blocked: false },
+    { category: "HARM_CATEGORY_HATE_SPEECH", probability: "HIGH" },
+  ] } }), error => error.message.includes("Input blocked — sexually explicit")
+    && error.message.includes("Exact text or image not identified")
+    && !/harassment|hate speech/.test(error.message));
+  assert.throws(() => api.checkGeminiOutput({ promptFeedback: { blockReason: "OTHER" } }), {
+    message: "Gemini: Input blocked. Exact text or image not identified. The server provided no specific reason. (OTHER)",
+  });
+  assert.throws(() => api.checkGeminiOutput({ candidates: [{ finishReason: "OTHER" }] }), {
+    message: "Gemini: Generation stopped for an unspecified reason. (OTHER)",
+  });
+  assert.throws(() => api.checkGeminiOutput({ candidates: [{ finishReason: "IMAGE_OTHER" }] }), error => !/blocked/.test(error.message));
+  assert.throws(() => api.checkGeminiOutput({ candidates: [{ finishReason: "IMAGE_SAFETY", finishMessage: "Image did not pass safety checks." }] }), {
+    message: "Gemini: Generated image blocked by an image safety check. (IMAGE_SAFETY) Server: Image did not pass safety checks.",
+  });
+  assert.throws(() => api.checkGeminiOutput({ candidates: [{ finishReason: "NO_IMAGE" }] }), /returned no image/);
+  for (const ratings of [null, {}, [{ category: null, blocked: true }]]) {
+    assert.throws(() => api.checkGeminiOutput({ promptFeedback: { blockReason: "SAFETY", safetyRatings: ratings } }), /Input blocked by a safety check/);
+  }
+  // OpenAI's optional details apply to HTTP errors and failed response bodies.
+  const moderation = { code: "moderation_blocked", type: "image_generation_user_error",
+    moderation_details: { moderation_stage: "input", categories: ["harassment"] } };
+  globalThis.fetch = async () => reply({ error: moderation }, 400);
+  await assert.rejects(() => api.generateOpenAIImage(opts), {
+    message: "OpenAI: Input blocked — harassment. Exact text or image not identified. (MODERATION_BLOCKED)",
+  });
+  assert.throws(() => api.checkOpenAIOutput({ error: { ...moderation,
+    moderation_details: { moderation_stage: "output", categories: ["violence"] } } }), {
+    message: "OpenAI: Generated image blocked — violence. (MODERATION_BLOCKED)",
+  });
+  assert.throws(() => api.checkOpenAIOutput({ status: "incomplete", incomplete_details: { reason: "content_filter" } }), {
+    message: "OpenAI: Generated output blocked by a safety check. The server provided no specific reason. (CONTENT_FILTER)",
+  });
+  for (const details of [undefined, { moderation_stage: "unknown" }, { categories: [null, 7, ""] }, { categories: "harassment" }]) {
+    assert.equal(api.apiError("OpenAI", { code: "moderation_blocked", moderation_details: details }, 400).message,
+      "OpenAI: Request blocked by a safety check. The server provided no specific reason. (MODERATION_BLOCKED)");
+  }
+  // Provider explanations are normalized and bounded, with secrets redacted before truncation.
+  const explanation = `First line.\n Second line. ${"x".repeat(465)} ${opts.apiKey} ${"tail".repeat(30)}`;
+  globalThis.fetch = async () => reply({ error: { code: "moderation_blocked", message: explanation } }, 400);
+  await assert.rejects(() => api.generateOpenAIImage(opts), error => error.message.includes("Server: First line. Second line.")
+    && !error.message.includes(opts.apiKey) && !error.message.includes("secret-test")
+    && error.message.split("Server: ")[1].length === 501 && error.message.endsWith("…"));
+  globalThis.fetch = async () => reply({ candidates: [{ finishReason: "OTHER", finishMessage: `Cannot process ${opts.apiKey}` }] });
+  await assert.rejects(() => api.generateEdit(opts), /Server: Cannot process \[redacted\]/);
+  globalThis.fetch = async () => reply({ output: [{ content: [{ type: "refusal", refusal: `Cannot describe ${opts.apiKey}` }] }] });
+  await assert.rejects(() => api.describeImages({ apiKey: opts.apiKey,
+    model: api.DESCRIPTION_MODELS.find(model => model.provider === "openai"),
+    images: [{ mimeType: "image/png", base64: "test" }] }), /\(REFUSAL\) Server: Cannot describe \[redacted\]/);
   // Usage must survive an incomplete response, and partial JSON must not be parsed.
   for (const provider of ["gemini", "openai"]) {
     let usageReported = false;

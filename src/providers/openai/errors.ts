@@ -4,11 +4,14 @@
  * Photoshop/UXP linking permission: see LICENSE-EXCEPTION.
  */
 
-import { apiError } from "../../errors";
+import { apiError, providerError } from "../../errors";
 
-export function checkOpenAIOutput(json: any): void {
-  if (json?.error) throw apiError("OpenAI", json.error);
+export function checkOpenAIOutput(json: any, apiKey?: string): void {
+  if (json?.error) throw apiError("OpenAI", json.error, undefined, apiKey);
   if (["failed", "incomplete", "cancelled", "queued", "in_progress"].includes(json?.status)) {
-    throw apiError("OpenAI", { code: json.incomplete_details?.reason || json.status });
+    if (json.incomplete_details?.reason === "content_filter") {
+      throw providerError("OpenAI", "Generated output blocked by a safety check. The server provided no specific reason.", "CONTENT_FILTER");
+    }
+    throw apiError("OpenAI", { code: json.incomplete_details?.reason || json.status }, undefined, apiKey);
   }
 }
