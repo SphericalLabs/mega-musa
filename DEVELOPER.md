@@ -41,6 +41,19 @@ After reloading the plugin, check the workflows affected by your change. For gen
 
 These host checks cover behavior that simulated responses cannot verify, such as actual layer transforms, UXP layout and network permissions. Tests that call a live provider incur its usual API charges.
 
+## Logo and theme icons
+
+The vector master is `public/icons/banana.svg`. It includes padding for the panel icon. Dark themes use a light gray banana and light themes use charcoal, both on transparent backgrounds. Panel icons are 23×23 logical pixels; plugin icons are 24×24. Each has 1× and 2× exports.
+
+After editing the SVG, regenerate the checked-in PNGs with ImageMagick installed:
+
+```sh
+npm run icons -- --regenerate
+npm run build
+```
+
+Normal builds use the checked-in exports and do not require ImageMagick. Reload the plugin in UXP Developer Tool and check the collapsed panel in Photoshop's four appearance themes after changing icons or their manifest entries.
+
 ## Reference previews
 
 Reference thumbnails open a native resizable UXP dialog. The [preview controller](src/panel/reference-preview.ts) owns image loading, input events and dialog cleanup; [preview geometry](src/panel/reference-preview-geometry.ts) owns zoom and position independently of the DOM. [Scroll normalization](src/panel/reference-preview-gestures.ts) converts pixel, line and page deltas into bounded zoom steps.

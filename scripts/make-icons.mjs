@@ -19,10 +19,32 @@
  */
 
 import { existsSync } from "fs";
+import { execFileSync } from "node:child_process";
+
+// ImageMagick is only needed when changing the vector master, not for builds.
+if (process.argv.includes("--regenerate")) {
+  for (const [name, size, color] of [
+    ["dark", 23, "#d6d6d6"],
+    ["light", 23, "#424242"],
+    ["icon-dark", 24, "#d6d6d6"],
+    ["icon", 24, "#424242"],
+  ]) {
+    for (const [suffix, scale] of [["", 1], ["@1x", 1], ["@2x", 2]]) {
+      execFileSync("magick", [
+        "-background", "none", "-density", "1152", "public/icons/banana.svg",
+        "-fill", color, "-colorize", "100",
+        "-resize", `${size * scale}x${size * scale}`,
+        "-depth", "8", "-strip", `PNG32:public/icons/${name}${suffix}.png`,
+      ], { stdio: "inherit" });
+    }
+  }
+}
 
 const requiredIcons = [
   "public/icons/icon.png",
   "public/icons/icon@2x.png",
+  "public/icons/icon-dark.png",
+  "public/icons/icon-dark@2x.png",
   "public/icons/dark.png",
   "public/icons/dark@2x.png",
   "public/icons/light.png",
