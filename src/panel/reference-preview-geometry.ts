@@ -27,7 +27,6 @@ export class ReferencePreviewGeometry {
     this.width = width;
     this.height = height;
     if (this.fitting) this.fit();
-    else this.clamp();
   }
 
   fit(): void {
@@ -36,25 +35,20 @@ export class ReferencePreviewGeometry {
     this.x = this.y = 0;
   }
 
-  zoomTo(zoom: number): void {
+  zoomTo(zoom: number, anchorX = this.width / 2, anchorY = this.height / 2): void {
     const next = Math.max(this.minZoom, Math.min(this.maxZoom, zoom));
-    this.x *= next / this.zoom;
-    this.y *= next / this.zoom;
+    const offsetX = anchorX - this.width / 2;
+    const offsetY = anchorY - this.height / 2;
+    this.x = offsetX + (this.x - offsetX) * next / this.zoom;
+    this.y = offsetY + (this.y - offsetY) * next / this.zoom;
     this.zoom = next;
     this.fitting = false;
-    this.clamp();
   }
 
   pan(dx: number, dy: number): void {
+    if (dx === 0 && dy === 0) return;
     this.x += dx;
     this.y += dy;
-    this.clamp();
-  }
-
-  private clamp(): void {
-    const limitX = Math.max(0, (this.imageWidth * this.zoom - this.width) / 2);
-    const limitY = Math.max(0, (this.imageHeight * this.zoom - this.height) / 2);
-    this.x = limitX ? Math.max(-limitX, Math.min(limitX, this.x)) : 0;
-    this.y = limitY ? Math.max(-limitY, Math.min(limitY, this.y)) : 0;
+    this.fitting = false;
   }
 }

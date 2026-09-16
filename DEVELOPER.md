@@ -41,7 +41,17 @@ After reloading the plugin, check the workflows affected by your change. For gen
 
 These host checks cover behavior that simulated responses cannot verify, such as actual layer transforms, UXP layout and network permissions. Tests that call a live provider incur its usual API charges.
 
-For reference previews, click a PNG, JPEG and WebP thumbnail. Check Fit, zoom buttons, drag-to-pan and resizing the dialog in both Fit and zoomed modes. Close with the button, Escape, Command-W on macOS and the window control, then reopen. Check Command-W with focus on the image area and a zoom button; the Photoshop document must stay open. Also close while WebP is loading and check a long filename and light/dark themes. Zoom until the image exceeds the viewport, then test trackpad click-drag in both axes, moving outside the image area and releasing over a toolbar button. Moving afterward must not continue panning, including after closing mid-drag and reopening. Trackpad dragging uses mouse events without pointer capture; two-finger scrolling and pinch-to-zoom are not implemented.
+## Reference previews
+
+Reference thumbnails open a native resizable UXP dialog. The [preview controller](src/panel/reference-preview.ts) owns image loading, input events and dialog cleanup; [preview geometry](src/panel/reference-preview-geometry.ts) owns zoom and position independently of the DOM. [Scroll normalization](src/panel/reference-preview-gestures.ts) converts pixel, line and page deltas into bounded zoom steps.
+
+Previews use the source image rather than the thumbnail. PNG and JPEG dimensions come from [image headers](src/images/dimensions.ts), avoiding reliance on UXP's image dimension properties. WebP is converted to PNG on demand through the reference processor without changing the stored reference. Async loading is scoped to each dialog opening so a late conversion cannot populate a closed or reopened preview.
+
+Image positions are offsets from the viewport center. Panning is unrestricted at every scale and leaves Fit mode. Manual zoom and offsets survive resizing; Fit resets the offsets and follows subsequent viewport changes. Scroll zoom preserves the image point under the cursor at the start of a gesture, using a gap of more than 180 ms to identify a new gesture. Zoom buttons use the viewport center. Pinch-to-zoom is not implemented.
+
+UXP window resizing does not reliably resize the dialog DOM element. The layout in [panel.css](public/panel.css) uses viewport units, while a ResizeObserver measures the image viewport. The controller's initial geometry dimensions must stay aligned with the CSS insets and toolbar space. Resize and scroll rendering are batched, and the existing image element is retained.
+
+Keyboard focus moves to the image viewport one frame after the dialog's load event. Command-W is captured at document level while the preview is open. Dragging uses mouse events with document-level movement and release listeners rather than pointer capture. Closing removes listeners, observers and timers, releases the image source and restores the previous focus.
 
 ## Add a provider
 

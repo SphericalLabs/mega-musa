@@ -29,17 +29,19 @@ view.zoomTo(2);
 assert.equal(view.x, 200, "zoom preserves the image point at the center");
 assert.equal(view.y, -60);
 view.pan(100000, -100000);
-assert.equal(view.x, 1300, "dragging cannot lose the image beyond its edge");
-assert.equal(view.y, -600);
+assert.equal(view.x, 100200, "dragging is not constrained by image edges");
+assert.equal(view.y, -100060);
 view.resize(4000, 3000);
-assert.equal(view.x, 0);
-assert.equal(view.y, 0, "images smaller than the viewport stay centered");
+assert.equal(view.x, 100200);
+assert.equal(view.y, -100060, "manual offsets survive a viewport larger than the image");
 view.zoomTo(10000);
 assert.equal(view.zoom, 8);
 view.zoomTo(0);
 assert.equal(view.zoom, 0.1);
 view.fit();
 assert.equal(view.zoom, 1, "Fit does not upscale small images");
+assert.equal(view.x, 0);
+assert.equal(view.y, 0, "Fit brings an offscreen image back to the center");
 const huge = new ReferencePreviewGeometry(100000, 100000);
 huge.resize(500, 500);
 huge.zoomTo(0);
@@ -48,8 +50,35 @@ const portrait = new ReferencePreviewGeometry(400, 1200);
 portrait.resize(600, 400);
 assert.equal(portrait.zoom, 1 / 3);
 portrait.pan(200, 200);
-assert.equal(portrait.x, 0);
-assert.equal(portrait.y, 0);
+assert.equal(portrait.x, 200);
+assert.equal(portrait.y, 200);
+assert.equal(portrait.fitting, false, "panning from Fit switches to manual positioning");
+portrait.resize(900, 700);
+assert.equal(portrait.zoom, 1 / 3);
+assert.equal(portrait.x, 200);
+assert.equal(portrait.y, 200, "resizing after a pan cannot recenter the image");
+portrait.fit();
+portrait.pan(0, 0);
+assert.equal(portrait.fitting, true, "zero mouse movement keeps Fit enabled");
+
+// Cursor anchoring must work when either or both image axes fit inside the
+// viewport, and while crossing 100% zoom. No position clamp may override it.
+for (const [imageWidth, imageHeight] of [[400, 300], [1600, 300], [400, 1600]]) {
+  const g = new ReferencePreviewGeometry(imageWidth, imageHeight);
+  g.resize(800, 600);
+  g.zoomTo(0.25);
+  g.pan(45, -30);
+  const point = () => [
+    (310 - g.width / 2 - g.x) / g.zoom,
+    (260 - g.height / 2 - g.y) / g.zoom
+  ];
+  const anchored = point();
+  for (const zoom of [0.5, 0.8, 1.2, 0.1]) {
+    g.zoomTo(zoom, 310, 260);
+    point().forEach((value, axis) => assert.ok(Math.abs(value - anchored[axis]) < 1e-9,
+      "the point under the mouse stays fixed at every scale"));
+  }
+}
 
 const pixels = new Uint8Array(16 * 8 * 4).fill(255);
 const png = encodePng({ width: 16, height: 8, data: pixels, channels: 4, depth: 8 });
@@ -84,11 +113,13 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   const timers = new Map();
   const timerDelays = new Map();
   let modal, timerId = 0;
+  let now = 1000;
   for (const id of ids.filter(id => id !== "referencePreviewDialog" && id !== "status")) dialog.appendChild(elements[id]);
   // Reproduce UXP's collapsed flex viewport. Sizing must come from the dialog,
   // including before the first ResizeObserver delivery, not these zero values.
   viewport.clientWidth = 0;
   viewport.clientHeight = 0;
+  viewport.getBoundingClientRect = () => ({ left: 10, top: 20 });
   viewport.setPointerCapture = viewport.releasePointerCapture = () => {
     throw new Error("Trackpad panning must work without pointer capture");
   };
@@ -105,6 +136,7 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   };
   const { createReferencePreview } = await loadModule("src/panel/reference-preview.ts", { globals: {
     document, window: { screen: { availWidth: 720, availHeight: 640 } }, Event,
+    Date: class extends Date { static now() { return now; } },
     setTimeout: (callback, delay) => { timers.set(++timerId, callback); timerDelays.set(timerId, delay); return timerId; },
     clearTimeout: id => { timers.delete(id); timerDelays.delete(id); },
     ResizeObserver: class {
@@ -138,6 +170,7 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   };
   const notifyViewport = (width, height) => observers.at(-1).callback([{ target: viewport, contentRect: { width, height } }]);
   return { controller, document, elements, dialog, viewport, observers, timers, dispatch, flushResize, flushFocus, notifyViewport,
+    advanceTime: ms => { now += ms; },
     resizeDialog: (width, height) => { notifyViewport(width - 24, height - 94); flushResize(); },
     click: id => dispatch(elements[id], "click"),
     image: () => viewport.children.find(child => child.tagName === "IMG"),
@@ -168,13 +201,13 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   assert.equal(h.elements.referencePreviewPercent.textContent, "125%");
   h.dispatch(h.viewport, "mousedown", { button: 0, clientX: 0, clientY: 0 });
   h.dispatch(h.document, "mousemove", { buttons: 1, clientX: 100, clientY: 100 });
-  assert.equal(image.style.left, "0px");
-  assert.equal(image.style.top, "0px");
+  assert.equal(image.style.left, "98px");
+  assert.equal(image.style.top, "100px");
   h.resizeDialog(36, 104);
   assert.equal(h.elements.referencePreviewPercent.textContent, "125%", "manual zoom survives host resize");
   h.dispatch(h.document, "mouseup");
   h.dispatch(h.viewport, "keydown", { key: "ArrowRight" });
-  assert.equal(image.style.left, "-8px");
+  assert.equal(image.style.left, "56px");
   h.click("referencePreviewZoomOut");
   assert.equal(h.elements.referencePreviewPercent.textContent, "100%");
   h.click("referencePreviewFit");
@@ -192,6 +225,34 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   h.rejectModal(new Error("User pressed Escape"));
   await reopened;
   assert.equal(h.image(), undefined);
+}
+
+// Images smaller than the viewport remain draggable below 100%. Fit is the
+// explicit recovery action, including after panning the image fully offscreen.
+{
+  const h = await harness();
+  const done = h.controller.open(reference);
+  const image = h.image();
+  h.dispatch(image, "load");
+  h.click("referencePreviewZoomOut");
+  assert.equal(h.elements.referencePreviewPercent.textContent, "80%");
+  assert.equal(h.viewport.style.cursor, "grab");
+  const left = parseFloat(image.style.left), top = parseFloat(image.style.top);
+  h.dispatch(h.viewport, "mousedown", { button: 0, clientX: 100, clientY: 100 });
+  h.dispatch(h.document, "mousemove", { buttons: 1, clientX: 2100, clientY: -900 });
+  h.dispatch(h.document, "mouseup");
+  assert.equal(parseFloat(image.style.left), left + 2000);
+  assert.equal(parseFloat(image.style.top), top - 1000);
+  h.resizeDialog(1000, 800);
+  assert.equal(h.elements.referencePreviewPercent.textContent, "80%");
+  assert.equal(parseFloat(image.style.left), (976 - 12.8) / 2 + 2000);
+  assert.equal(parseFloat(image.style.top), (706 - 6.4) / 2 - 1000);
+  h.click("referencePreviewFit");
+  assert.equal(image.style.left, "480px");
+  assert.equal(image.style.top, "349px");
+  assert.equal(h.elements.referencePreviewPercent.textContent, "100%");
+  h.click("referencePreviewClose");
+  await done;
 }
 
 // A pressed trackpad emits mouse events. Dragging must continue outside the
@@ -213,7 +274,7 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   assert.equal(h.viewport.style.cursor, "grabbing");
   h.dispatch(h.document, "mousemove", { buttons: 1, clientX: 11, clientY: 21 });
   assert.equal(image.style.left, "0px");
-  assert.equal(image.style.top, "0px", "mouse-only drag pans both axes");
+  assert.equal(image.style.top, "0.5px", "mouse-only drag pans both axes");
   const button = h.elements.referencePreviewZoomIn;
   button.addEventListener("mouseup", event => event.stopPropagation());
   h.dispatch(button, "mouseup", { button: 0 });
@@ -228,7 +289,7 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   // Some UXP versions omit buttons; movement still works while a drag is active.
   h.dispatch(h.document, "mousemove", { clientX: 9, clientY: 19 });
   assert.equal(image.style.left, "-1px");
-  assert.equal(image.style.top, "-1px");
+  assert.equal(image.style.top, "-0.5px");
   h.click("referencePreviewClose");
   await done;
   for (const type of ["mousemove", "mouseup"]) {
@@ -242,6 +303,73 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   assert.equal(h.image().style.left, "-1px", "reopening cannot resume an old drag");
   h.click("referencePreviewClose");
   await reopened;
+}
+
+// Trackpad scrolling preserves the image point under the initial cursor,
+// including after a drag, and picks a new anchor after a pause.
+// Native routing to the document/body works without zooming over toolbar controls.
+{
+  const h = await harness();
+  const done = h.controller.open(reference);
+  h.resizeDialog(32, 98); // 8x4 viewport
+  assert.equal(h.dispatch(h.viewport, "wheel", { deltaY: -44, deltaMode: 0 }).defaultPrevented, false,
+    "scrolling before image load is harmless");
+  const image = h.image();
+  h.dispatch(image, "load");
+  h.click("referencePreviewZoomIn");
+  h.click("referencePreviewZoomIn");
+  h.dispatch(h.viewport, "mousedown", { button: 0, clientX: 0, clientY: 0 });
+  h.dispatch(h.document, "mousemove", { buttons: 1, clientX: 0.5, clientY: 0.25 });
+  h.dispatch(h.document, "mouseup");
+  const width = parseFloat(image.style.width);
+  const imagePoint = (x, y) => [
+    (x - parseFloat(image.style.left)) / parseFloat(image.style.width),
+    (y - parseFloat(image.style.top)) / parseFloat(image.style.height)
+  ];
+  const anchoredPoint = imagePoint(2, 1);
+  for (const [deltaY, clientX, clientY] of [[-44, 12, 21], [-8, 17, 23]]) {
+    const event = h.dispatch(h.viewport, "wheel", { deltaY, deltaMode: 0, clientX, clientY });
+    assert.equal(event.defaultPrevented, true);
+  }
+  assert.equal(h.timers.size, 1, "rapid scroll events share a single render");
+  assert.equal(parseFloat(image.style.width), width, "render waits for the next frame");
+  h.flushResize(); // Flush the shared 16ms frame timers.
+  assert.ok(parseFloat(image.style.width) > width);
+  imagePoint(2, 1).forEach((value, index) => assert.ok(Math.abs(value - anchoredPoint[index]) < 1e-12,
+    "zoom anchors to the first cursor position even if the cursor moves during scrolling"));
+  assert.equal(h.document.activeElement, h.viewport, "scrolling preserves keyboard focus");
+  h.dispatch(h.document.body, "wheel", { deltaY: 52, deltaMode: 0 });
+  h.flushResize();
+  assert.ok(Math.abs(parseFloat(image.style.width) - width) < 1e-12, "opposite scroll reverses zoom");
+  h.advanceTime(200);
+  // Some native wheel events omit coordinates; retain real mousemove positions.
+  h.dispatch(h.viewport, "mousemove", { clientX: 16, clientY: 22.5 });
+  const nextPoint = imagePoint(6, 2.5);
+  h.dispatch(h.document.body, "wheel", { deltaY: -44, deltaMode: 0 });
+  h.flushResize();
+  imagePoint(6, 2.5).forEach((value, index) => assert.ok(Math.abs(value - nextPoint[index]) < 1e-12,
+    "a new scroll gesture uses the current mouse position and viewport offset"));
+  for (const target of [h.elements.referencePreviewClose, h.elements.status]) {
+    assert.equal(h.dispatch(target, "wheel", { deltaY: -44, deltaMode: 0 }).defaultPrevented, false);
+  }
+  for (const deltaY of [0, NaN, Infinity]) {
+    assert.equal(h.dispatch(h.viewport, "wheel", { deltaY, deltaX: 30 }).defaultPrevented, false);
+  }
+  assert.equal(h.timers.size, 0);
+  for (let i = 0; i < 80; i++) h.dispatch(h.document, "wheel", { deltaY: -1000, deltaMode: 0 });
+  h.flushResize();
+  assert.equal(h.elements.referencePreviewPercent.textContent, "800%", "scroll respects maximum zoom");
+  for (let i = 0; i < 80; i++) h.dispatch(h.dialog, "wheel", { deltaY: 1000, deltaMode: 0 });
+  h.flushResize();
+  assert.equal(h.elements.referencePreviewPercent.textContent, "10%", "scroll respects minimum zoom");
+  h.click("referencePreviewFit");
+  assert.equal(h.elements.referencePreviewPercent.textContent, "50%");
+  h.dispatch(h.viewport, "wheel", { deltaY: -44, deltaMode: 0 });
+  h.dispatch(h.viewport, "keydown", { key: "w", metaKey: true });
+  await done;
+  assert.equal(h.timers.size, 0, "closing cancels pending scroll renders");
+  assert.equal(h.document.listeners.get("wheel").length, 0);
+  assert.equal(h.dispatch(h.viewport, "wheel", { deltaY: -44 }).defaultPrevented, false);
 }
 
 // Until native activation completes, keyboard events may still target the

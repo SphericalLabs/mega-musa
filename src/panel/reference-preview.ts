@@ -10,6 +10,7 @@ import { type RefImage } from "../references";
 import { type ReferenceImageProcessor } from "../references/processor";
 import { $ } from "./controls";
 import { ReferencePreviewGeometry } from "./reference-preview-geometry";
+import { previewScrollZoomFactor } from "./reference-preview-gestures";
 import { setStatus } from "./status";
 
 export function createReferencePreview(processor: Pick<ReferenceImageProcessor, "resize">) {
@@ -33,9 +34,12 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
     let geometry: ReferencePreviewGeometry | null = null;
     let viewportWidth = 0, viewportHeight = 0;
     let drag: { x: number; y: number } | null = null;
+    let mouse: { x: number; y: number } | null = null;
+    let scrollAnchor: { x: number; y: number; at: number } | null = null;
     let imageTimer: ReturnType<typeof setTimeout> | undefined;
     let focusTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingSize: { width: number; height: number } | null = null;
     const removers: (() => void)[] = [];
     const listen = (element: any, type: string, handler: (event: any) => void, capture = false) => {
@@ -61,7 +65,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
       zoomOut.disabled = geometry.zoom <= geometry.minZoom;
       zoomIn.disabled = geometry.zoom >= geometry.maxZoom;
       fit.disabled = false;
-      viewport.style.cursor = drag ? "grabbing" : width > geometry.width || height > geometry.height ? "grab" : "default";
+      viewport.style.cursor = drag ? "grabbing" : "grab";
     }
 
     function layout(width: number, height: number): void {
@@ -69,6 +73,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
       if (width === viewportWidth && height === viewportHeight) return;
       viewportWidth = width;
       viewportHeight = height;
+      scrollAnchor = null;
       geometry?.resize(viewportWidth, viewportHeight);
       render();
     }
@@ -114,6 +119,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
       clearTimeout(imageTimer);
       clearTimeout(resizeTimer);
       clearTimeout(focusTimer);
+      clearTimeout(scrollTimer);
       pendingSize = null;
       observer.disconnect();
       removers.forEach(remove => remove());
@@ -161,19 +167,50 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
     }, true);
     // Keep panel-level paste and generation shortcuts out of this dialog.
     listen(dialog, "keydown", (event: KeyboardEvent) => event.stopPropagation());
-    listen(zoomIn, "click", () => { geometry?.zoomTo(geometry.zoom * 1.25); render(); });
-    listen(zoomOut, "click", () => { geometry?.zoomTo(geometry.zoom / 1.25); render(); });
-    listen(fit, "click", () => { geometry?.fit(); render(); });
+    listen(zoomIn, "click", () => { scrollAnchor = null; geometry?.zoomTo(geometry.zoom * 1.25); render(); });
+    listen(zoomOut, "click", () => { scrollAnchor = null; geometry?.zoomTo(geometry.zoom / 1.25); render(); });
+    listen(fit, "click", () => { scrollAnchor = null; geometry?.fit(); render(); });
+    // Native UXP may route wheel input to the dialog/body. Ignore controls and
+    // keep the cursor's initial image point fixed throughout a scroll gesture.
+    listen(document, "wheel", (event: WheelEvent) => {
+      if (!geometry) return;
+      const target = event.target as Node | null;
+      if (target !== document && target !== document.body && target !== dialog && !viewport.contains(target)) return;
+      const factor = previewScrollZoomFactor(event.deltaY, event.deltaMode, geometry.height);
+      if (factor === 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const now = Date.now();
+      if (!scrollAnchor || now - scrollAnchor.at > 180) {
+        const bounds = viewport.getBoundingClientRect();
+        const position = Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+          ? { x: event.clientX, y: event.clientY } : mouse;
+        scrollAnchor = {
+          x: position ? Math.max(0, Math.min(geometry.width, position.x - bounds.left)) : geometry.width / 2,
+          y: position ? Math.max(0, Math.min(geometry.height, position.y - bounds.top)) : geometry.height / 2,
+          at: now
+        };
+      }
+      scrollAnchor.at = now;
+      geometry.zoomTo(geometry.zoom * factor, scrollAnchor.x, scrollAnchor.y);
+      if (scrollTimer !== undefined) return;
+      scrollTimer = setTimeout(() => { scrollTimer = undefined; render(); }, 16);
+    }, true);
     // Use mouse events like the panel's resize handle: native UXP trackpad
     // dragging must not depend on pointer events or pointer capture.
     listen(viewport, "mousedown", (event: MouseEvent) => {
       if (!geometry || event.button !== 0) return;
       event.preventDefault();
       viewport.focus();
+      scrollAnchor = null;
+      mouse = { x: event.clientX, y: event.clientY };
       drag = { x: event.clientX, y: event.clientY };
       render();
     });
     listen(document, "mousemove", (event: MouseEvent) => {
+      if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+        mouse = { x: event.clientX, y: event.clientY };
+      }
       if (!geometry || !drag) return;
       // Recover if the button was released outside the native dialog.
       if (event.buttons === 0) { stopDrag(); return; }
@@ -193,6 +230,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
       const delta = directions[event.key];
       if (!delta) return;
       event.preventDefault();
+      scrollAnchor = null;
       geometry.pan(...delta);
       render();
     });
