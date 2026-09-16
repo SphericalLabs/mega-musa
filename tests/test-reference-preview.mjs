@@ -77,6 +77,9 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   const { document, elements } = panelDocument(ids);
   const dialog = elements.referencePreviewDialog;
   const viewport = elements.referencePreviewViewport;
+  elements.referencePreviewClose.blur = () => {
+    throw new Error("Blurring Close breaks native keyboard shortcut delivery");
+  };
   const observers = [];
   const timers = new Map();
   const timerDelays = new Map();
@@ -125,8 +128,16 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
       callback();
     }
   };
+  const flushFocus = () => {
+    for (const [id, callback] of [...timers]) {
+      if (timerDelays.get(id) !== 16) continue;
+      timers.delete(id);
+      timerDelays.delete(id);
+      callback();
+    }
+  };
   const notifyViewport = (width, height) => observers.at(-1).callback([{ target: viewport, contentRect: { width, height } }]);
-  return { controller, document, elements, dialog, viewport, observers, timers, dispatch, flushResize, notifyViewport,
+  return { controller, document, elements, dialog, viewport, observers, timers, dispatch, flushResize, flushFocus, notifyViewport,
     resizeDialog: (width, height) => { notifyViewport(width - 24, height - 94); flushResize(); },
     click: id => dispatch(elements[id], "click"),
     image: () => viewport.children.find(child => child.tagName === "IMG"),
@@ -233,6 +244,66 @@ async function harness(resize = async () => { throw new Error("PNG/JPEG previews
   await reopened;
 }
 
+// Until native activation completes, keyboard events may still target the
+// panel. Command-W must close the preview even without focus inside it.
+{
+  const h = await harness();
+  h.elements.status.focus();
+  const done = h.controller.open(reference);
+  assert.equal(h.document.activeElement, h.elements.status);
+  h.dispatch(h.dialog, "load");
+  const event = h.dispatch(h.document.activeElement, "keydown", { key: "w", metaKey: true });
+  await done;
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.document.activeElement, h.elements.status);
+  assert.equal(h.timers.size, 0, "immediate close cancels deferred focus");
+  h.flushFocus();
+  assert.equal(h.document.activeElement, h.elements.status);
+  const afterClose = h.dispatch(h.document.activeElement, "keydown", { key: "w", metaKey: true });
+  assert.equal(afterClose.defaultPrevented, false, "closed previews cannot intercept panel shortcuts");
+}
+
+// Reproduce UXP ignoring early focus: the image area becomes focusable
+// only after dialog load and a render frame, independently of image decoding.
+for (const selectedControl of [null, "referencePreviewZoomIn", "referencePreviewClose"]) {
+  const h = await harness();
+  h.elements.status.focus();
+  let ready = false, focusCalls = 0;
+  const focus = h.viewport.focus.bind(h.viewport);
+  h.viewport.focus = () => { focusCalls++; if (ready) focus(); };
+  const done = h.controller.open(reference);
+  h.flushFocus();
+  assert.equal(focusCalls, 0, "showModal returning does not mean the native window is ready");
+  // Image load bubbles in this harness; it must not be mistaken for dialog load.
+  h.dispatch(h.image(), "load");
+  h.flushFocus();
+  assert.equal(focusCalls, 0);
+  h.dispatch(h.dialog, "load");
+  assert.equal(focusCalls, 0, "wait one render frame after native load");
+  ready = true;
+  if (selectedControl) h.elements[selectedControl].focus();
+  h.flushFocus();
+  assert.equal(h.document.activeElement, selectedControl === "referencePreviewZoomIn" ? h.elements[selectedControl] : h.viewport,
+    "focus the image area instead of the default Close button, preserving another selected control");
+  const activationCalls = selectedControl === "referencePreviewZoomIn" ? 0 : 1;
+  assert.equal(focusCalls, activationCalls, "preserve focus chosen inside the dialog");
+  h.elements.referencePreviewZoomIn.focus();
+  h.resizeDialog(1000, 800);
+  assert.equal(h.document.activeElement, h.elements.referencePreviewZoomIn, "resizing does not move focus");
+  h.click("referencePreviewClose");
+  await done;
+  assert.equal(h.dialog.listeners.get("load").length, 0);
+  assert.equal(h.document.activeElement, h.elements.status);
+  const reopened = h.controller.open(reference);
+  h.dispatch(h.dialog, "load");
+  h.flushFocus();
+  assert.equal(focusCalls, activationCalls + 1, "reopening still focuses the image area");
+  assert.equal(h.document.activeElement, h.viewport, "reopening focuses the image area");
+  const shortcut = h.dispatch(h.document.activeElement, "keydown", { key: "w", metaKey: true });
+  await reopened;
+  assert.equal(shortcut.defaultPrevented, true, "Command-W closes with native focus intact");
+}
+
 // Cmd-W works from the image area or a focused Spectrum control, including
 // during loading, without forwarding Photoshop's document-close shortcut.
 for (const focused of ["referencePreviewViewport", "referencePreviewZoomIn"]) {
@@ -254,6 +325,8 @@ for (const focused of ["referencePreviewViewport", "referencePreviewZoomIn"]) {
   assert.equal(h.timers.size, 0);
   assert.equal(h.image(), undefined);
   assert.equal(h.dialog.listeners.get("keydown").length, 0, "closing removes shortcut listeners");
+  assert.equal(h.document.listeners.get("keydown").filter(entry => entry.capture).length, 0,
+    "closing removes document-level shortcut capture");
 }
 
 {
@@ -302,6 +375,7 @@ for (const focused of ["referencePreviewViewport", "referencePreviewZoomIn"]) {
   const h = await harness();
   const done = h.controller.open(reference);
   h.dialog.clientWidth = 640;
+  h.flushFocus();
   h.dialog.clientHeight = 540;
   const image = h.image();
   h.dispatch(image, "load");
@@ -378,6 +452,7 @@ for (const failure of ["conversion", "decode", "timeout", "dimensions"]) {
   const input = failure === "conversion" ? { ...reference, mimeType: "image/webp" }
     : failure === "dimensions" ? { ...reference, base64: "AAAA" } : reference;
   const done = h.controller.open(input);
+  h.flushFocus();
   await flush();
   if (failure === "decode") h.dispatch(h.image(), "error");
   if (failure === "timeout") [...h.timers.values()][0]();

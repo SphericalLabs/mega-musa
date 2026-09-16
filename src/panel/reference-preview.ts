@@ -34,6 +34,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
     let viewportWidth = 0, viewportHeight = 0;
     let drag: { x: number; y: number } | null = null;
     let imageTimer: ReturnType<typeof setTimeout> | undefined;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingSize: { width: number; height: number } | null = null;
     const removers: (() => void)[] = [];
@@ -112,6 +113,7 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
       stopDrag();
       clearTimeout(imageTimer);
       clearTimeout(resizeTimer);
+      clearTimeout(focusTimer);
       pendingSize = null;
       observer.disconnect();
       removers.forEach(remove => remove());
@@ -136,8 +138,22 @@ export function createReferencePreview(processor: Pick<ReferenceImageProcessor, 
     listen(close, "click", () => dialog.close());
     listen(dialog, "close", finish);
     listen(dialog, "cancel", finish);
-    // Capture before a focused Spectrum control can swallow the shortcut.
-    listen(dialog, "keydown", (event: KeyboardEvent) => {
+    // Wait for native dialog loading and a render frame before focusing the
+    // image area. Focusing it immediately after showModal is too early in UXP.
+    listen(dialog, "load", (event: Event) => {
+      if (event.target !== dialog) return;
+      clearTimeout(focusTimer);
+      focusTimer = setTimeout(() => {
+        focusTimer = undefined;
+        const focused = document.activeElement;
+        if (active && (!dialog.contains(focused) || focused === dialog || focused === viewport || focused === close)) {
+          viewport.focus();
+        }
+      }, 16);
+    });
+    // Capture also covers keys still routed to the panel during native window
+    // activation. This listener exists only while the preview is open.
+    listen(document, "keydown", (event: KeyboardEvent) => {
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "w") return;
       event.preventDefault();
       event.stopImmediatePropagation();
