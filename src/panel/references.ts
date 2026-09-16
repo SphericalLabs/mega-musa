@@ -7,17 +7,18 @@ import { errorMessage } from "../errors";
 import { bytesToBase64 } from "../images/base64";
 import { encodePng } from "../images/codec";
 import { readClipboardImage } from "../photoshop/clipboard";
-import { pickReferenceImages } from "../references";
+import { pickReferenceImages, type RefImage } from "../references";
 import { MAX_REFS, ReferenceCollection } from "../references/collection";
 import { ReferenceImageProcessor } from "../references/processor";
 import { $, clearChildren } from "./controls";
 import { showModalNotice } from "./notices";
 import { setStatus } from "./status";
 
-export function createReferencePanel({ references, processor, onChange }: {
+export function createReferencePanel({ references, processor, onChange, onPreview }: {
   references: ReferenceCollection;
   processor: ReferenceImageProcessor;
   onChange: () => void;
+  onPreview: (reference: RefImage) => Promise<void>;
 }) {
   function renderThumbs(): void {
     const wrap = $("thumbs");
@@ -27,7 +28,17 @@ export function createReferencePanel({ references, processor, onChange }: {
       cell.className = "thumb";
       const img = document.createElement("img");
       img.src = ref.thumbnailDataUrl || ref.dataUrl;
-      img.title = ref.name;
+      img.title = `Preview ${ref.name}`;
+      img.alt = ref.name;
+      img.setAttribute("role", "button");
+      img.setAttribute("tabindex", "0");
+      img.setAttribute("aria-label", `Preview ${ref.name}`);
+      img.addEventListener("click", () => { void onPreview(ref); });
+      img.addEventListener("keydown", (event: KeyboardEvent) => {
+        if (event.repeat || !["Enter", " ", "Spacebar"].includes(event.key)) return;
+        event.preventDefault();
+        void onPreview(ref);
+      });
       if (processor.ready && ref.mimeType === "image/webp" && !ref.thumbnailDataUrl) {
         void processor.thumbnail(ref)
           .then((dataUrl) => {

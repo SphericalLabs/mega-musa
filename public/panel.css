@@ -284,6 +284,11 @@ sp-divider {
   height: 100%;
   object-fit: cover;
   display: block;
+  cursor: pointer;
+}
+
+.thumb img:focus {
+  border: 2px solid rgb(80, 160, 255);
 }
 
 /* A fixed dark badge and white glyph stay legible over arbitrary thumbnails. */
@@ -533,6 +538,87 @@ sp-divider {
   margin-top: 16px;
 }
 
+.reference-preview-dialog {
+  padding: 0;
+  color: rgb(235, 235, 235);
+}
+
+/* In UXP the native window can resize without resizing the <dialog> element.
+   Viewport units follow that window (as in Adobe's ui-kitchen-sink sample).
+   Keep these explicit dimensions so an empty image area cannot collapse. */
+.reference-preview-content {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: calc(100vw - 24px);
+  height: calc(100vh - 24px);
+}
+
+.reference-preview-name {
+  flex: 0 0 auto;
+  height: 20px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reference-preview-viewport {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  width: calc(100vw - 24px);
+  height: calc(100vh - 94px);
+  overflow: hidden;
+  background: rgb(32, 32, 32);
+  user-select: none;
+}
+
+.reference-preview-viewport:focus {
+  outline: 1px solid rgb(80, 160, 255);
+}
+
+.reference-preview-image {
+  position: absolute;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+}
+
+.reference-preview-message {
+  padding: 16px;
+  color: rgb(235, 235, 235);
+}
+
+.reference-preview-toolbar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.reference-preview-percent {
+  width: 56px;
+  text-align: center;
+}
+
+#referencePreviewZoomOut,
+#referencePreviewZoomIn {
+  min-width: 32px;
+  width: 32px;
+}
+
+#referencePreviewFit {
+  margin-left: 8px;
+}
+
+#referencePreviewClose {
+  margin-left: auto;
+}
+
 /* --------------------------------------------------------------------------
    Theme detection and overrides
    -------------------------------------------------------------------------- */
@@ -580,7 +666,8 @@ sp-divider {
     color: rgb(0, 0, 0);
   }
 
-  .notice-dialog .dialog-copy {
+  .notice-dialog .dialog-copy,
+  .reference-preview-dialog {
     color: rgb(30, 30, 30);
   }
 

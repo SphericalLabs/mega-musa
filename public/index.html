@@ -264,6 +264,23 @@ along with Mega Musa. If not, see <https://www.gnu.org/licenses/>.
     </form>
   </dialog>
 
+  <dialog id="referencePreviewDialog" class="reference-preview-dialog" aria-labelledby="referencePreviewName">
+    <div id="referencePreviewContent" class="reference-preview-content">
+      <div id="referencePreviewName" class="reference-preview-name"></div>
+      <div id="referencePreviewViewport" class="reference-preview-viewport" tabindex="0"
+        role="region" aria-label="Image preview. Drag or use arrow keys to pan when zoomed in.">
+        <div id="referencePreviewMessage" class="reference-preview-message" role="status"></div>
+      </div>
+      <footer class="reference-preview-toolbar">
+        <sp-button id="referencePreviewZoomOut" variant="secondary" size="s" aria-label="Zoom out">−</sp-button>
+        <span id="referencePreviewPercent" class="reference-preview-percent" aria-live="polite"></span>
+        <sp-button id="referencePreviewZoomIn" variant="secondary" size="s" aria-label="Zoom in">+</sp-button>
+        <sp-button id="referencePreviewFit" variant="secondary" size="s">Fit</sp-button>
+        <sp-button id="referencePreviewClose" variant="primary" size="s">Close</sp-button>
+      </footer>
+    </div>
+  </dialog>
+
   <div id="themeProbe"></div>
 
   <script src="index.js"></script>

@@ -41,6 +41,8 @@ After reloading the plugin, check the workflows affected by your change. For gen
 
 These host checks cover behavior that simulated responses cannot verify, such as actual layer transforms, UXP layout and network permissions. Tests that call a live provider incur its usual API charges.
 
+For reference previews, click a PNG, JPEG and WebP thumbnail. Check Fit, zoom buttons, drag-to-pan and resizing the dialog in both Fit and zoomed modes. Close with the button, Escape, Command-W on macOS and the window control, then reopen. Check Command-W with focus on the image area and a zoom button; the Photoshop document must stay open. Also close while WebP is loading and check a long filename and light/dark themes. Zoom until the image exceeds the viewport, then test trackpad click-drag in both axes, moving outside the image area and releasing over a toolbar button. Moving afterward must not continue panning, including after closing mid-drag and reopening. Trackpad dragging uses mouse events without pointer capture; two-finger scrolling and pinch-to-zoom are not implemented.
+
 ## Add a provider
 
 The [example provider](tests/fixtures/example-provider.ts) and its [extension test](tests/test-provider-extension.mjs) provide a working starting point for a new integration. The fixture returns a local image and stays outside the plugin build, so you can use it to understand the extension contract without calling an API.

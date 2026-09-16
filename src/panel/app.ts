@@ -19,6 +19,7 @@ import { createPromptController } from "./prompt";
 import { renderGenerationQueue } from "./queue-view";
 import { createRecallController } from "./recall";
 import { createReferencePanel } from "./references";
+import { createReferencePreview } from "./reference-preview";
 import { setupCollapsibleSections, setupPromptResize } from "./sections";
 import { createSelectionControls } from "./selection";
 import { createSettingsController } from "./settings";
@@ -58,8 +59,9 @@ export function createPanel() {
     queue, references, processor, workflow, captureSettings: settings.captureSettings,
     descriptionBusy: () => description.busy
   });
+  const referencePreview = createReferencePreview(processor);
   const referencePanel = createReferencePanel({
-    references, processor, onChange: () => {
+    references, processor, onPreview: referencePreview.open, onChange: () => {
       drop.syncDropCapacity();
       description.updateDescriptionControls();
     }
@@ -149,6 +151,7 @@ export function createPanel() {
     unsubscribeQueue();
     prompt.dispose();
     recall.dispose();
+    referencePreview.dispose();
     drop.dispose();
     processor.dispose();
   }
