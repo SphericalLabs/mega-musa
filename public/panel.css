@@ -175,6 +175,7 @@ h3 {
 #fitSelection,
 #fitNearest,
 #includeSelection,
+#modelOptions sp-checkbox,
 #placeAsSmartObject,
 #copyRecallPrompt,
 #loadRecallSettings {
@@ -698,6 +699,7 @@ sp-divider {
   #fitSelection,
   #fitNearest,
   #includeSelection,
+  #modelOptions sp-checkbox,
   #placeAsSmartObject,
   #copyRecallPrompt,
   #loadRecallSettings {

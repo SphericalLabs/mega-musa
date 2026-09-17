@@ -16,7 +16,10 @@ export const openai: ProviderDefinition = {
   generate(request) {
     const { frame, settings, model } = request;
     if (!frame.width || !frame.height) throw new Error("The OpenAI output size is missing.");
-    return generateOpenAIImage({ ...request, model: model.apiModel, size: `${frame.width}x${frame.height}`, quality: settings.quality });
+    return generateOpenAIImage({
+      ...request, model: model.apiModel, size: `${frame.width}x${frame.height}`, quality: settings.quality,
+      background: settings.options.transparent === true ? "transparent" : "opaque",
+    });
   },
   describe: describeWithOpenAI,
 };

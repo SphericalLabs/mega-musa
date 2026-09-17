@@ -90,6 +90,10 @@ export const models: ModelSpec[] = definitions.map((model) => ({
   qualities: ["auto", "low", "medium", "high"], ...model,
   tokenRates: OPENAI_TOKEN_RATES[model.id],
   provider: "openai",
+  settings: [{
+    key: "transparent", label: "Transparent background", type: "boolean", default: false,
+    description: "Also request transparency in your prompt. Results may vary.",
+  }],
   defaults: { resolution: "2K", ratio: "1:1", quality: "low" },
   inputs: { canvas: true, references: 10, maxEdge: 4096 },
 }));

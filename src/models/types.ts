@@ -7,7 +7,7 @@ import { type ImageQuality, type ImageUsage } from "../providers/types";
 
 export type SettingValue = string | number | boolean;
 export type ModelOptions = Record<string, SettingValue>;
-export type SettingDefinition = { key: string; label: string } & (
+export type SettingDefinition = { key: string; label: string; description?: string } & (
   | { type: "select"; default: string; options: { value: string; label: string }[] }
   | { type: "number"; default: number; min?: number; max?: number; step?: number }
   | { type: "boolean"; default: boolean }

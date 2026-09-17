@@ -7,7 +7,7 @@ const { elements, document } = panelDocument([
   "displayCurrency", "currencyNote", "geminiApiKey", "openaiApiKey", "describeModel", "model", "quality", "qualityField",
   "selRatio", "resolution", "includeSelection", "placeAsSmartObject", "reduceDocumentSize", "prompt", "status",
   "recallSection", "recallLayerName", "recallDetails", "recallSource", "restoreRecallSelection", "recallSelectionNote",
-  "undoPrompt", "redoPrompt", "promptHistoryActions",
+  "undoPrompt", "redoPrompt", "promptHistoryActions", "modelOptions",
 ]);
 const values = new Map();
 const storage = memoryStorage(values);
@@ -126,4 +126,42 @@ for (const [model, resolution] of chosenResolutions) {
   elements.model.dispatchEvent(new Event("change"));
   assert.equal(elements.resolution.value, resolution, "resolution survives reload and switching models");
 }
-console.log("Panel settings: defaults, persistence and recall without changing global storage preferences passed.");
+// Transparency is a native labeled checkbox, saved and recalled independently per model.
+function selectModel(id) {
+  elements.model.value = id;
+  elements.model.dispatchEvent(new Event("change"));
+}
+const flare = "openai:gpt-image-2.5-flare";
+const sunburst = "openai:gpt-image-2.5-sunburst";
+selectModel(flare);
+let checkbox = elements.modelOptions.children[0].children[0];
+assert.equal(checkbox.tagName, "SP-CHECKBOX");
+assert.equal(checkbox.textContent, "Transparent background");
+const transparencyHelp = elements.modelOptions.children[0].children[1];
+assert.equal(transparencyHelp.textContent, "Also request transparency in your prompt. Results may vary.");
+assert.equal(checkbox.getAttribute("aria-describedby"), transparencyHelp.id);
+assert.equal(checkbox.checked, false);
+checkbox.checked = true;
+checkbox.dispatchEvent(new Event("change"));
+const transparentSettings = settings.captureSettings();
+assert.equal(transparentSettings.options.transparent, true);
+assert.equal(JSON.parse(values.get(`nbp.modelSettings.${flare}`)).options.transparent, true);
+selectModel(sunburst);
+assert.equal(settings.captureSettings().options.transparent, false);
+selectModel("gemini-3-pro-image");
+assert.equal(elements.modelOptions.children.length, 0);
+assert.equal(settings.captureSettings().options.transparent, undefined);
+selectModel(flare);
+assert.equal(elements.modelOptions.children[0].children[0].checked, true);
+await settings.restoreSettings();
+assert.equal(elements.modelOptions.children[0].children[0].checked, true);
+checkbox = elements.modelOptions.children[0].children[0];
+checkbox.checked = false;
+checkbox.dispatchEvent(new Event("change"));
+assert.equal(settings.captureSettings().options.transparent, false);
+assert.equal(transparentSettings.options.transparent, true, "queued settings remain unchanged");
+settings.applyModelCapabilities(flare, undefined, undefined, undefined, transparentSettings);
+assert.equal(elements.modelOptions.children[0].children[0].checked, true);
+settings.applyModelCapabilities(flare, "1:1", "1K", "low");
+assert.equal(elements.modelOptions.children[0].children[0].checked, false, "old archives restore the default");
+console.log("Panel settings: defaults, persistence, transparency and recall without changing global storage preferences passed.");

@@ -27,7 +27,7 @@ export function createModelOptions() {
     clearChildren(container);
     for (const field of spec.settings || []) {
       const wrapper = document.createElement("div");
-      wrapper.className = "field";
+      wrapper.className = field.type === "boolean" && !field.description ? "row" : "field";
       const label = document.createElement("span");
       label.className = "label"; label.textContent = field.label;
       const input: any = document.createElement(field.type === "boolean" ? "sp-checkbox" : field.type === "select" ? "sp-picker" : "sp-textfield");
@@ -43,10 +43,23 @@ export function createModelOptions() {
         }
         input.appendChild(menu);
       }
-      if (field.type === "boolean") setCheckedSafe(input, Boolean(options[field.key]));
+      if (field.type === "boolean") {
+        input.textContent = field.label;
+        setCheckedSafe(input, Boolean(options[field.key]));
+      }
       else setValueSafe(input, String(options[field.key] ?? field.default));
       input.addEventListener("change", onChange);
-      wrapper.appendChild(label); wrapper.appendChild(input); container.appendChild(wrapper);
+      if (field.type !== "boolean") wrapper.appendChild(label);
+      wrapper.appendChild(input);
+      if (field.description) {
+        const description = document.createElement("span");
+        description.id = `model-option-${field.key}-description`;
+        description.className = "muted";
+        description.textContent = field.description;
+        input.setAttribute("aria-describedby", description.id);
+        wrapper.appendChild(description);
+      }
+      container.appendChild(wrapper);
       controls.set(field.key, input);
     }
   }

@@ -4,7 +4,7 @@ import { runInThisContext } from "node:vm";
 
 const bundle = await build({
   stdin: {
-    contents: 'export * from "./src/models"; export { generateOpenAIImage } from "./src/openai";',
+    contents: 'export * from "./src/models"; export { generateOpenAIImage } from "./src/openai"; export { generateImage } from "./src/providers/images";',
     resolveDir: process.cwd(), loader: "ts",
   },
   bundle: true, format: "cjs", platform: "node", write: false, external: ["uxp"],
@@ -56,6 +56,34 @@ for (const name of ["sunburst", "flare"]) {
   }
 }
 const legacy = modelSpec("openai:gpt-image-2");
+
+// Exercise the real dispatcher so model options must reach both API endpoints.
+for (const model of ["openai:gpt-image-2.5-flare", "openai:gpt-image-2.5-sunburst", "openai:gpt-image-2"]) {
+  for (const transparent of [undefined, false, true]) {
+    for (const editing of [false, true]) {
+      const background = transparent ? "transparent" : "opaque";
+      globalThis.fetch = async (url, init) => {
+        assert.ok(url.endsWith(editing ? "/edits" : "/generations"));
+        if (editing) {
+          const body = new TextDecoder().decode(init.body);
+          assert.ok(body.includes(`name="background"\r\n\r\n${background}\r\n`));
+          assert.ok(body.includes('name="output_format"\r\n\r\npng\r\n'));
+        } else {
+          const body = JSON.parse(init.body);
+          assert.equal(body.background, background);
+          assert.equal(body.output_format, "png");
+        }
+        return { ok: true, json: async () => ({ data: [{ b64_json: "AQID" }] }) };
+      };
+      await module.exports.generateImage({
+        apiKey: "test", model, prompt: "a cutout", references: [],
+        frame: { width: 1024, height: 1024, ratio: 1, label: "1:1" }, resolution: "1K", quality: "low",
+        settings: { version: 1, resolution: "1K", ratio: "1:1", quality: "low", options: transparent === undefined ? {} : { transparent } },
+        ...(editing ? { baseImagePng: new Uint8Array([1, 2, 3]) } : {}),
+      });
+    }
+  }
+}
 assert.equal(legacy.outputQualityFactors.max, undefined);
 assert.ok(Math.abs(estimatedUSD(legacy, "1K", "1024x1024", "high") - 0.21072) < 1e-10);
 console.log("Image models: pricing, sizes, generation and edit requests passed.");

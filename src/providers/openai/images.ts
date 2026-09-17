@@ -23,6 +23,7 @@ export interface OpenAIGenerateOptions {
   references: RefImage[];
   size: string; // Exact pixel dimensions, e.g. "1456x1088".
   quality?: ImageQuality;
+  background?: "auto" | "transparent" | "opaque";
   signal?: AbortSignal;
   onDispatch?: () => void;
 }
@@ -125,6 +126,7 @@ function multipartBody(opts: OpenAIGenerateOptions, model: string): { body: Arra
   pushField(parts, boundary, "prompt", opts.prompt);
   pushField(parts, boundary, "n", "1");
   pushField(parts, boundary, "output_format", "png");
+  pushField(parts, boundary, "background", opts.background || "auto");
   pushField(parts, boundary, "quality", normalizeImageQuality(opts.quality || "auto"));
   pushField(parts, boundary, "size", opts.size);
   if (opts.baseImagePng) {
@@ -164,6 +166,7 @@ export async function generateOpenAIImage(opts: OpenAIGenerateOptions): Promise<
       prompt: opts.prompt,
       n: 1,
       output_format: "png",
+      background: opts.background || "auto",
       quality: normalizeImageQuality(opts.quality || "auto"),
       size: opts.size,
     });
