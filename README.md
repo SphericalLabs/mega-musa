@@ -6,11 +6,15 @@ Generate images and edit selections with Google Gemini (Nano Banana) and OpenAI 
 
 ## Features
 
+<img src="public/assets/mega-musa-panel.png" alt="Mega Musa panel in Photoshop showing model selection, prompt input and generation controls" align="right" width="280">
+
 - **Generate and edit:** work on a selection, the full document or the active artboard. Place results as Smart Objects or raster layers, with editable selection masks.
 - **Choose a model:** Nano Banana Pro, Nano Banana 2, OpenAI Sunburst, OpenAI Flare or OpenAI GPT Image 2. Resolution and quality settings are saved per model. For OpenAI models, enable **Transparent background** below Quality and also request transparency in your prompt. Results may vary. Leave it unchecked to request an opaque background. This setting is also saved per model.
 - **Use image references:** add up to 10 PNG, JPEG or WebP images by file picker, drag and drop or paste. **Describe Images** turns input images into a prompt.
 - **Generate variations:** queue jobs or expand one prompt into a batch of up to 10 images. Cancel jobs individually or with **Cancel All**.
 - **Reuse results:** recall prompts, settings and embedded references from generated layers. Track estimated API spending in your preferred currency.
+
+<br clear="both">
 
 ## Install
 
