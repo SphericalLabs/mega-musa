@@ -26,6 +26,12 @@ Generate images and edit selections with Google Gemini (Nano Banana) and OpenAI 
 
 To build from source, see [DEVELOPER.md](DEVELOPER.md#build-and-load).
 
+### Troubleshooting (macOS)
+
+**The downloaded plugin cannot be opened:** right-click the `.ccx` file, choose **Open With → Other…** and select **UnifiedPluginInstallerAgent**. You can find it at `/Library/Application Support/Adobe/Adobe Desktop Common/RemoteComponents/UPI/UnifiedPluginInstallerAgent/`.
+
+**Adobe Creative Cloud shows error code `2` or `-2`:** open **System Settings → Privacy & Security → Full Disk Access** and grant access to Adobe Creative Cloud and the Adobe component in `/Library/Application Support/Adobe/Adobe Desktop Common/ADS/`.
+
 ## Use
 
 1. Under **API Keys / Currency**, enter and save the Gemini or OpenAI API key for your selected model.
