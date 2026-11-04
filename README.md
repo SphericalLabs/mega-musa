@@ -97,3 +97,7 @@ See [DEVELOPER.md](DEVELOPER.md) for builds, checks and extensions. See [ARCHITE
 Licensed under [GPL version 3 only](LICENSE) with a [Photoshop/UXP linking exception](LICENSE-EXCEPTION).
 
 SPDX: `GPL-3.0-only WITH GPL-3.0-linking-exception`
+
+## Ports to other photo editors
+
+- [mega-musa-affinity](https://github.com/aliyss/mega-musa-affinity) (untested)
